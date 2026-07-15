@@ -5,6 +5,7 @@
  */
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 // types
 import type { TPageNavigationTabs } from "@plane/types";
 // helpers
@@ -34,9 +35,18 @@ const pageTabs: { key: TPageNavigationTabs; label: string }[] = [
 
 export function PageTabNavigation(props: TPageTabNavigation) {
   const { workspaceSlug, projectId, pageType } = props;
+  const searchParams = useSearchParams();
+  const folderId = searchParams.get("folder");
 
   const handleTabClick = (e: React.MouseEvent<HTMLAnchorElement>, tabKey: TPageNavigationTabs) => {
     if (tabKey === pageType) e.preventDefault();
+  };
+
+  const tabHref = (tabKey: TPageNavigationTabs) => {
+    const params = new URLSearchParams();
+    params.set("type", tabKey);
+    if (folderId) params.set("folder", folderId);
+    return `/${workspaceSlug}/projects/${projectId}/pages?${params.toString()}`;
   };
 
   return (
@@ -44,7 +54,7 @@ export function PageTabNavigation(props: TPageTabNavigation) {
       {pageTabs.map((tab) => (
         <Link
           key={tab.key}
-          href={`/${workspaceSlug}/projects/${projectId}/pages?type=${tab.key}`}
+          href={tabHref(tab.key)}
           onClick={(e) => handleTabClick(e, tab.key)}
           className="flex h-full flex-col"
         >

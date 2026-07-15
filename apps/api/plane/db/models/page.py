@@ -24,6 +24,9 @@ class Page(BaseModel):
     PRIVATE_ACCESS = 1
     PUBLIC_ACCESS = 0
     DEFAULT_SORT_ORDER = 65535
+    PAGE_NODE = "page"
+    FOLDER_NODE = "folder"
+    NODE_TYPE_CHOICES = ((PAGE_NODE, "Page"), (FOLDER_NODE, "Folder"))
 
     ACCESS_CHOICES = ((PRIVATE_ACCESS, "Private"), (PUBLIC_ACCESS, "Public"))
 
@@ -44,6 +47,7 @@ class Page(BaseModel):
         blank=True,
         related_name="child_page",
     )
+    node_type = models.CharField(max_length=10, choices=NODE_TYPE_CHOICES, default=PAGE_NODE)
     archived_at = models.DateField(null=True)
     is_locked = models.BooleanField(default=False)
     view_props = models.JSONField(default=get_view_props)

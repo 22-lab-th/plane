@@ -6,6 +6,8 @@
 
 import { useRef } from "react";
 import { observer } from "mobx-react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Folder } from "lucide-react";
 import { Logo } from "@plane/propel/emoji-icon-picker";
 import { PageIcon } from "@plane/propel/icons";
 // plane imports
@@ -34,16 +36,29 @@ export const PageListBlock = observer(function PageListBlock(props: TPageListBlo
     storeType,
   });
   const { isMobile } = usePlatformOS();
+  const { workspaceSlug, projectId } = useParams();
+  const searchParams = useSearchParams();
+  const pageType = searchParams.get("type") || "public";
   // handle page check
   if (!page) return null;
   // derived values
-  const { name, logo_props, getRedirectionLink } = page;
+  const { name, logo_props, getRedirectionLink, node_type } = page;
+  const isFolder = node_type === "folder";
+
+  const folderLink = (() => {
+    const params = new URLSearchParams();
+    params.set("type", pageType);
+    params.set("folder", pageId);
+    return `/${workspaceSlug}/projects/${projectId}/pages?${params.toString()}`;
+  })();
 
   return (
     <ListItem
       prependTitleElement={
         <>
-          {logo_props?.in_use ? (
+          {isFolder ? (
+            <Folder className="h-4 w-4 text-tertiary" />
+          ) : logo_props?.in_use ? (
             <Logo logo={logo_props} size={16} type="lucide" />
           ) : (
             <PageIcon className="h-4 w-4 text-tertiary" />
@@ -51,7 +66,7 @@ export const PageListBlock = observer(function PageListBlock(props: TPageListBlo
         </>
       }
       title={getPageName(name)}
-      itemLink={getRedirectionLink()}
+      itemLink={isFolder ? folderLink : getRedirectionLink()}
       actionableItems={<BlockItemAction page={page} parentRef={parentRef} storeType={storeType} />}
       isMobile={isMobile}
       parentRef={parentRef}

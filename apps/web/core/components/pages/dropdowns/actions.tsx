@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { observer } from "mobx-react";
 import { useParams } from "next/navigation";
-import { ArchiveRestoreIcon, FileOutput, LockKeyhole, LockKeyholeOpen } from "lucide-react";
+import { ArchiveRestoreIcon, FileOutput, FolderInput, LockKeyhole, LockKeyholeOpen } from "lucide-react";
 // constants
 import { EPageAccess } from "@plane/constants";
 // plane editor
@@ -15,6 +15,7 @@ import { LinkIcon, CopyIcon, LockIcon, NewTabIcon, ArchiveIcon, TrashIcon, Globe
 // plane ui
 import type { TContextMenuItem } from "@plane/ui";
 import { ContextMenu, CustomMenu } from "@plane/ui";
+import { getPageName } from "@plane/utils";
 // components
 import { cn } from "@plane/utils";
 import { DeletePageModal } from "@/components/pages/modals/delete-page-modal";
@@ -22,9 +23,11 @@ import { DeletePageModal } from "@/components/pages/modals/delete-page-modal";
 import { usePageOperations } from "@/hooks/use-page-operations";
 // plane web hooks
 import type { EPageStoreType } from "@/hooks/store";
+import { usePageStore } from "@/hooks/store";
 import { usePageFlag } from "@/hooks/use-page-flag";
 // store types
 import type { TPageInstance } from "@/store/pages/base-page";
+import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 
 export type TPageActions =
   | "full-screen"
@@ -39,7 +42,9 @@ export type TPageActions =
   | "delete"
   | "version-history"
   | "export"
-  | "move";
+  | "move"
+  | "move-to-folder"
+  | "rename-folder";
 
 type Props = {
   extraOptions?: (TContextMenuItem & { key: TPageActions })[];
@@ -55,11 +60,12 @@ export const PageActions = observer(function PageActions(props: Props) {
   const [deletePageModal, setDeletePageModal] = useState(false);
   const [movePageModal, setMovePageModal] = useState(false);
   // params
-  const { workspaceSlug } = useParams();
+  const { workspaceSlug, projectId } = useParams();
   // page flag
   const { isMovePageEnabled } = usePageFlag({
     workspaceSlug: workspaceSlug?.toString() ?? "",
   });
+  const { getMoveTargetFolders, moveToFolder } = usePageStore(storeType);
   // page operations
   const { pageOperations } = usePageOperations({
     page,
@@ -69,6 +75,9 @@ export const PageActions = observer(function PageActions(props: Props) {
     access,
     archived_at,
     is_locked,
+    id,
+    node_type,
+    parent,
     canCurrentUserArchivePage,
     canCurrentUserChangeAccess,
     canCurrentUserDeletePage,
@@ -76,6 +85,38 @@ export const PageActions = observer(function PageActions(props: Props) {
     canCurrentUserLockPage,
     canCurrentUserMovePage,
   } = page;
+  const isFolder = node_type === "folder";
+  const moveFolders = getMoveTargetFolders(projectId?.toString() || "", access, id);
+
+  const handleMoveToFolder = async (targetParentId: string | null) => {
+    if (!id) return;
+    try {
+      await moveToFolder(id, targetParentId);
+      setToast({
+        type: TOAST_TYPE.SUCCESS,
+        title: "Success!",
+        message: targetParentId ? "Moved into folder." : "Moved to root.",
+      });
+    } catch (err: unknown) {
+      const message =
+        typeof err === "object" && err && "error" in err
+          ? String((err as { error?: string }).error)
+          : "Could not move item.";
+      setToast({
+        type: TOAST_TYPE.ERROR,
+        title: "Error!",
+        message,
+      });
+    }
+  };
+
+  const handleRenameFolder = () => {
+    if (!isFolder) return;
+    const nextName = window.prompt("Rename folder", page.name || "");
+    if (!nextName?.trim() || nextName.trim() === page.name) return;
+    page.updateTitle(nextName.trim());
+  };
+
   // menu items
   const MENU_ITEMS = useMemo(
     function MENU_ITEMS() {
@@ -87,7 +128,7 @@ export const PageActions = observer(function PageActions(props: Props) {
           },
           title: is_locked ? "Unlock" : "Lock",
           icon: is_locked ? LockKeyholeOpen : LockKeyhole,
-          shouldRender: canCurrentUserLockPage,
+          shouldRender: canCurrentUserLockPage && !isFolder,
         },
         {
           key: "toggle-access",
@@ -103,14 +144,14 @@ export const PageActions = observer(function PageActions(props: Props) {
           action: pageOperations.openInNewTab,
           title: "Open in new tab",
           icon: NewTabIcon,
-          shouldRender: true,
+          shouldRender: !isFolder,
         },
         {
           key: "copy-link",
           action: pageOperations.copyLink,
           title: "Copy link",
           icon: LinkIcon,
-          shouldRender: true,
+          shouldRender: !isFolder,
         },
         {
           key: "make-a-copy",
@@ -119,7 +160,48 @@ export const PageActions = observer(function PageActions(props: Props) {
           },
           title: "Make a copy",
           icon: CopyIcon,
-          shouldRender: canCurrentUserDuplicatePage,
+          shouldRender: canCurrentUserDuplicatePage && !isFolder,
+        },
+        {
+          key: "rename-folder",
+          action: () => {
+            handleRenameFolder();
+          },
+          title: "Rename folder",
+          icon: FolderInput,
+          shouldRender: isFolder && canCurrentUserChangeAccess && !archived_at,
+        },
+        {
+          key: "move-to-folder",
+          action: () => undefined,
+          title: "Move to folder",
+          icon: FolderInput,
+          shouldRender: canCurrentUserMovePage && !archived_at,
+          customContent: (
+            <CustomMenu
+              customButton={
+                <span className="flex w-full items-center gap-2">
+                  <FolderInput className="size-3" />
+                  Move to folder
+                </span>
+              }
+              placement="left-start"
+              closeOnSelect
+            >
+              <CustomMenu.MenuItem onClick={() => void handleMoveToFolder(null)} disabled={!parent}>
+                Root
+              </CustomMenu.MenuItem>
+              {moveFolders.map((folder) => (
+                <CustomMenu.MenuItem
+                  key={folder.id}
+                  onClick={() => void handleMoveToFolder(folder.id || null)}
+                  disabled={folder.id === parent}
+                >
+                  {getPageName(folder.name)}
+                </CustomMenu.MenuItem>
+              ))}
+            </CustomMenu>
+          ),
         },
         {
           key: "archive-restore",
@@ -144,7 +226,7 @@ export const PageActions = observer(function PageActions(props: Props) {
           action: () => setMovePageModal(true),
           title: "Move",
           icon: FileOutput,
-          shouldRender: canCurrentUserMovePage && isMovePageEnabled,
+          shouldRender: canCurrentUserMovePage && isMovePageEnabled && !isFolder,
         },
       ];
       if (extraOptions) {
@@ -165,6 +247,9 @@ export const PageActions = observer(function PageActions(props: Props) {
       canCurrentUserMovePage,
       isMovePageEnabled,
       pageOperations,
+      isFolder,
+      moveFolders,
+      parent,
     ]
   );
   // arrange options
@@ -192,6 +277,7 @@ export const PageActions = observer(function PageActions(props: Props) {
             <CustomMenu.MenuItem
               key={item.key}
               onClick={() => {
+                if (item.key === "move-to-folder") return;
                 item.action?.();
               }}
               className={cn("flex items-center gap-2", item.className)}

@@ -21,8 +21,11 @@ export type TPage = {
   is_locked: boolean;
   label_ids: string[] | undefined;
   name: string | undefined;
+  node_type?: "page" | "folder";
   owned_by: string | undefined;
+  parent?: string | null;
   project_ids?: string[] | undefined;
+  sort_order?: number;
   updated_at: Date | undefined;
   updated_by: string | undefined;
   workspace: string | undefined;

@@ -7,7 +7,7 @@
 import { useState } from "react";
 import { observer } from "mobx-react";
 // plane imports
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { EUserPermissionsLevel, EPageAccess } from "@plane/constants";
 import { useTranslation } from "@plane/i18n";
 import { EmptyStateDetailed } from "@plane/propel/empty-state";
@@ -42,9 +42,11 @@ export const PagesListMainContent = observer(function PagesListMainContent(props
   // router
   const router = useRouter();
   const { workspaceSlug } = useParams();
+  const searchParams = useSearchParams();
+  const folderId = searchParams.get("folder");
   // derived values
-  const pageIds = getCurrentProjectPageIdsByTab(pageType);
-  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType);
+  const pageIds = getCurrentProjectPageIdsByTab(pageType, folderId);
+  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType, folderId);
   const canPerformEmptyStateActions = allowPermissions(
     [EUserProjectRoles.ADMIN, EUserProjectRoles.MEMBER],
     EUserPermissionsLevel.PROJECT
@@ -56,6 +58,8 @@ export const PagesListMainContent = observer(function PagesListMainContent(props
 
     const payload: Partial<TPage> = {
       access: pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC,
+      parent: folderId,
+      node_type: "page",
     };
 
     await createPage(payload)
@@ -67,7 +71,7 @@ export const PagesListMainContent = observer(function PagesListMainContent(props
         setToast({
           type: TOAST_TYPE.ERROR,
           title: "Error!",
-          message: err?.data?.error || "Page could not be created. Please try again.",
+          message: err?.error || err?.data?.error || "Page could not be created. Please try again.",
         });
       })
       .finally(() => setIsCreatingPage(false));
@@ -76,12 +80,14 @@ export const PagesListMainContent = observer(function PagesListMainContent(props
   if (loader === "init-loader") return <PageLoader />;
   // if no pages exist in the active page type
   if (!isAnyPageAvailable || pageIds?.length === 0) {
-    if (!isAnyPageAvailable) {
+    if (!isAnyPageAvailable || pageType === "public" || pageType === "private") {
       return (
         <EmptyStateDetailed
           assetKey="page"
-          title={t("project_empty_state.pages.title")}
-          description={t("project_empty_state.pages.description")}
+          title={folderId ? "This folder is empty" : t("project_empty_state.pages.title")}
+          description={
+            folderId ? "Create a page or folder inside this directory." : t("project_empty_state.pages.description")
+          }
           actions={[
             {
               label: t("project_empty_state.pages.cta_primary"),
@@ -95,42 +101,6 @@ export const PagesListMainContent = observer(function PagesListMainContent(props
         />
       );
     }
-    if (pageType === "public")
-      return (
-        <EmptyStateDetailed
-          assetKey="page"
-          title={t("project_empty_state.pages.title")}
-          description={t("project_empty_state.pages.description")}
-          actions={[
-            {
-              label: t("project_empty_state.pages.cta_primary"),
-              onClick: () => {
-                handleCreatePage();
-              },
-              variant: "primary",
-              disabled: !canPerformEmptyStateActions || isCreatingPage,
-            },
-          ]}
-        />
-      );
-    if (pageType === "private")
-      return (
-        <EmptyStateDetailed
-          assetKey="page"
-          title={t("project_empty_state.pages.title")}
-          description={t("project_empty_state.pages.description")}
-          actions={[
-            {
-              label: t("project_empty_state.pages.cta_primary"),
-              onClick: () => {
-                handleCreatePage();
-              },
-              variant: "primary",
-              disabled: !canPerformEmptyStateActions || isCreatingPage,
-            },
-          ]}
-        />
-      );
     if (pageType === "archived")
       return (
         <EmptyStateDetailed

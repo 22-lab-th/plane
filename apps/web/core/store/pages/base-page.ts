@@ -97,6 +97,9 @@ export class BasePage extends ExtendedBasePage implements TBasePage {
   archived_at: string | null | undefined;
   workspace: string | undefined;
   project_ids?: string[] | undefined;
+  parent: string | null | undefined;
+  node_type: "page" | "folder" | undefined;
+  sort_order: number | undefined;
   created_by: string | undefined;
   updated_by: string | undefined;
   created_at: Date | undefined;
@@ -134,6 +137,9 @@ export class BasePage extends ExtendedBasePage implements TBasePage {
     this.archived_at = page?.archived_at || undefined;
     this.workspace = page?.workspace || undefined;
     this.project_ids = page?.project_ids || undefined;
+    this.parent = page?.parent ?? null;
+    this.node_type = page?.node_type || "page";
+    this.sort_order = page?.sort_order;
     this.created_by = page?.created_by || undefined;
     this.updated_by = page?.updated_by || undefined;
     this.created_at = page?.created_at || undefined;
@@ -158,6 +164,9 @@ export class BasePage extends ExtendedBasePage implements TBasePage {
       is_locked: observable.ref,
       archived_at: observable.ref,
       workspace: observable.ref,
+      parent: observable.ref,
+      node_type: observable.ref,
+      sort_order: observable.ref,
       project_ids: observable,
       created_by: observable.ref,
       updated_by: observable.ref,
@@ -235,6 +244,9 @@ export class BasePage extends ExtendedBasePage implements TBasePage {
       archived_at: this.archived_at,
       workspace: this.workspace,
       project_ids: this.project_ids,
+      parent: this.parent,
+      node_type: this.node_type,
+      sort_order: this.sort_order,
       created_by: this.created_by,
       updated_by: this.updated_by,
       created_at: this.created_at,

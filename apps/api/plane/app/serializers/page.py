@@ -43,6 +43,8 @@ class PageSerializer(BaseSerializer):
             "color",
             "labels",
             "parent",
+            "node_type",
+            "sort_order",
             "is_favorite",
             "is_locked",
             "archived_at",

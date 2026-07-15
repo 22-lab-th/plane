@@ -5,6 +5,7 @@
  */
 
 import { observer } from "mobx-react";
+import { useSearchParams } from "next/navigation";
 // types
 import type { TPageNavigationTabs } from "@plane/types";
 // components
@@ -22,10 +23,12 @@ type TPagesListRoot = {
 
 export const PagesListRoot = observer(function PagesListRoot(props: TPagesListRoot) {
   const { pageType, storeType } = props;
+  const searchParams = useSearchParams();
+  const folderId = searchParams.get("folder");
   // store hooks
   const { getCurrentProjectFilteredPageIdsByTab } = usePageStore(storeType);
   // derived values
-  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType);
+  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType, folderId);
 
   if (!filteredPageIds) return <></>;
   return (

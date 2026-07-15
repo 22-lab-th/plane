@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { observer } from "mobx-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Folder, FolderPlus } from "lucide-react";
 // constants
 import { EPageAccess } from "@plane/constants";
 // plane types
@@ -16,6 +17,7 @@ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 import type { TPage } from "@plane/types";
 // plane ui
 import { Breadcrumbs, Header } from "@plane/ui";
+import { getPageName } from "@plane/utils";
 // helpers
 import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
 // hooks
@@ -27,20 +29,41 @@ import { EPageStoreType, usePageStore } from "@/hooks/store";
 export const PagesListHeader = observer(function PagesListHeader() {
   // states
   const [isCreatingPage, setIsCreatingPage] = useState(false);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   // router
   const router = useRouter();
   const { workspaceSlug, projectId } = useParams();
   const searchParams = useSearchParams();
-  const pageType = searchParams.get("type");
+  const pageType = searchParams.get("type") || "public";
+  const folderId = searchParams.get("folder");
   // store hooks
   const { currentProjectDetails, loader } = useProject();
-  const { canCurrentUserCreatePage, createPage } = usePageStore(EPageStoreType.PROJECT);
+  const { canCurrentUserCreatePage, createPage, createFolder, getFolderBreadcrumbs } = usePageStore(
+    EPageStoreType.PROJECT
+  );
+  const folderCrumbs = getFolderBreadcrumbs(folderId);
+
+  const pagesHref = (() => {
+    const params = new URLSearchParams();
+    params.set("type", pageType);
+    return `/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages?${params.toString()}`;
+  })();
+
+  const folderHref = (id: string) => {
+    const params = new URLSearchParams();
+    params.set("type", pageType);
+    params.set("folder", id);
+    return `/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages?${params.toString()}`;
+  };
+
   // handle page create
   const handleCreatePage = async () => {
     setIsCreatingPage(true);
 
     const payload: Partial<TPage> = {
       access: pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC,
+      parent: folderId,
+      node_type: "page",
     };
 
     await createPage(payload)
@@ -53,10 +76,40 @@ export const PagesListHeader = observer(function PagesListHeader() {
         setToast({
           type: TOAST_TYPE.ERROR,
           title: "Error!",
-          message: err?.data?.error || "Page could not be created. Please try again.",
+          message: err?.error || err?.data?.error || "Page could not be created. Please try again.",
         });
       })
       .finally(() => setIsCreatingPage(false));
+  };
+
+  const handleCreateFolder = async () => {
+    setIsCreatingFolder(true);
+    const name = window.prompt("Folder name");
+    if (!name?.trim()) {
+      setIsCreatingFolder(false);
+      return;
+    }
+
+    await createFolder({
+      name: name.trim(),
+      access: pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC,
+      parent: folderId,
+    })
+      .then(() => {
+        setToast({
+          type: TOAST_TYPE.SUCCESS,
+          title: "Success!",
+          message: "Folder created.",
+        });
+      })
+      .catch((err) => {
+        setToast({
+          type: TOAST_TYPE.ERROR,
+          title: "Error!",
+          message: err?.error || err?.data?.error || "Folder could not be created. Please try again.",
+        });
+      })
+      .finally(() => setIsCreatingFolder(false));
   };
 
   return (
@@ -68,17 +121,41 @@ export const PagesListHeader = observer(function PagesListHeader() {
             component={
               <BreadcrumbLink
                 label="Pages"
-                href={`/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages/`}
+                href={pagesHref}
                 icon={<PageIcon className="h-4 w-4 text-tertiary" />}
-                isLast
+                isLast={!folderCrumbs.length}
               />
             }
-            isLast
+            isLast={!folderCrumbs.length}
           />
+          {folderCrumbs.map((crumb, index) => (
+            <Breadcrumbs.Item
+              key={crumb.id}
+              component={
+                <BreadcrumbLink
+                  label={getPageName(crumb.name)}
+                  href={crumb.id ? folderHref(crumb.id) : pagesHref}
+                  icon={<Folder className="h-4 w-4 text-tertiary" />}
+                  isLast={index === folderCrumbs.length - 1}
+                />
+              }
+              isLast={index === folderCrumbs.length - 1}
+            />
+          ))}
         </Breadcrumbs>
       </Header.LeftItem>
-      {canCurrentUserCreatePage && (
+      {canCurrentUserCreatePage && pageType !== "archived" && (
         <Header.RightItem>
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={handleCreateFolder}
+            loading={isCreatingFolder}
+            className="flex items-center gap-1"
+          >
+            <FolderPlus className="h-4 w-4" />
+            {isCreatingFolder ? "Adding" : "Add folder"}
+          </Button>
           <Button variant="primary" size="lg" onClick={handleCreatePage} loading={isCreatingPage}>
             {isCreatingPage ? "Adding" : "Add page"}
           </Button>

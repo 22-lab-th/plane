@@ -5,6 +5,7 @@
  */
 
 import { observer } from "mobx-react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import type { TPageNavigationTabs } from "@plane/types";
 // hooks
@@ -24,12 +25,25 @@ type TPageView = {
 
 export const PagesListView = observer(function PagesListView(props: TPageView) {
   const { children, pageType, projectId, storeType, workspaceSlug } = props;
+  const searchParams = useSearchParams();
+  const folderId = searchParams.get("folder");
   // store hooks
-  const { isAnyPageAvailable, fetchPagesList } = usePageStore(storeType);
-  // fetching pages list
+  const { isAnyPageAvailable, fetchPagesList, fetchPageDetails, getPageById } = usePageStore(storeType);
+
+  // Ensure deep-linked folder exists in store for breadcrumbs.
   useSWR(
-    workspaceSlug && projectId && pageType ? `PROJECT_PAGES_${projectId}` : null,
-    workspaceSlug && projectId && pageType ? () => fetchPagesList(workspaceSlug, projectId, pageType) : null
+    workspaceSlug && projectId && folderId ? `PROJECT_PAGE_FOLDER_${folderId}` : null,
+    workspaceSlug && projectId && folderId && !getPageById(folderId)
+      ? () => fetchPageDetails(workspaceSlug, projectId, folderId, { trackVisit: false })
+      : null
+  );
+
+  // fetching pages list for current folder level
+  useSWR(
+    workspaceSlug && projectId && pageType ? `PROJECT_PAGES_${projectId}_${folderId || "root"}` : null,
+    workspaceSlug && projectId && pageType
+      ? () => fetchPagesList(workspaceSlug, projectId, pageType, folderId)
+      : null
   );
 
   // pages loader
