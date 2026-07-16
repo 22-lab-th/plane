@@ -20,6 +20,7 @@ import { Breadcrumbs, Header } from "@plane/ui";
 import { getPageName } from "@plane/utils";
 // helpers
 import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
+import { FolderNameModal } from "@/components/pages/modals/folder-name-modal";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
 // plane web imports
@@ -30,6 +31,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
   // states
   const [isCreatingPage, setIsCreatingPage] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [folderModalOpen, setFolderModalOpen] = useState(false);
   // router
   const router = useRouter();
   const { workspaceSlug, projectId } = useParams();
@@ -71,6 +73,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
       .then((res) => {
         const pageId = `/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages/${res?.id}`;
         router.push(pageId);
+        return;
       })
       .catch((err) => {
         setToast({
@@ -82,14 +85,8 @@ export const PagesListHeader = observer(function PagesListHeader() {
       .finally(() => setIsCreatingPage(false));
   };
 
-  const handleCreateFolder = async () => {
+  const handleCreateFolder = async (name: string) => {
     setIsCreatingFolder(true);
-    const name = window.prompt("Folder name");
-    if (!name?.trim()) {
-      setIsCreatingFolder(false);
-      return;
-    }
-
     await createFolder({
       name: name.trim(),
       access: pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC,
@@ -101,6 +98,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
           title: "Success!",
           message: "Folder created.",
         });
+        return;
       })
       .catch((err) => {
         setToast({
@@ -114,6 +112,14 @@ export const PagesListHeader = observer(function PagesListHeader() {
 
   return (
     <Header>
+      <FolderNameModal
+        isOpen={folderModalOpen}
+        onClose={() => setFolderModalOpen(false)}
+        onSubmit={handleCreateFolder}
+        title="Create folder"
+        submitLabel="Create"
+        submittingLabel="Creating"
+      />
       <Header.LeftItem>
         <Breadcrumbs isLoading={loader === "init-loader"}>
           <CommonProjectBreadcrumbs workspaceSlug={workspaceSlug?.toString()} projectId={projectId?.toString()} />
@@ -149,7 +155,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
           <Button
             variant="secondary"
             size="lg"
-            onClick={handleCreateFolder}
+            onClick={() => setFolderModalOpen(true)}
             loading={isCreatingFolder}
             className="flex items-center gap-1"
           >

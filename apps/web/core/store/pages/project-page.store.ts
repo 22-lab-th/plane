@@ -234,7 +234,7 @@ export class ProjectPageStore implements IProjectPageStore {
   getFolderBreadcrumbs = computedFn((folderId: string | null | undefined) => {
     if (!folderId) return [];
     const crumbs: TProjectPage[] = [];
-    let current = this.getPageById(folderId);
+    let current: TProjectPage | undefined = this.getPageById(folderId);
     const seen = new Set<string>();
     while (current?.id && !seen.has(current.id)) {
       seen.add(current.id);
@@ -254,7 +254,7 @@ export class ProjectPageStore implements IProjectPageStore {
           (access === undefined || page.access === access) &&
           page.id !== excludeId
       )
-      .sort((a, b) => getPageName(a.name).localeCompare(getPageName(b.name)));
+      .toSorted((a, b) => getPageName(a.name).localeCompare(getPageName(b.name)));
   });
 
   updateFilters = <T extends keyof TPageFilters>(filterKey: T, filterValue: TPageFilters[T]) => {
