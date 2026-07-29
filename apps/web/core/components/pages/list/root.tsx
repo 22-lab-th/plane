@@ -15,6 +15,7 @@ import type { EPageStoreType } from "@/hooks/store";
 import { usePageStore } from "@/hooks/store";
 // local imports
 import { PageListBlock } from "./block";
+import { PageMoveOutDropZone } from "./move-out-drop-zone";
 
 type TPagesListRoot = {
   pageType: TPageNavigationTabs;
@@ -29,10 +30,12 @@ export const PagesListRoot = observer(function PagesListRoot(props: TPagesListRo
   const { getCurrentProjectFilteredPageIdsByTab } = usePageStore(storeType);
   // derived values
   const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType, folderId);
+  const showMoveOutZone = !!folderId && pageType !== "archived";
 
   if (!filteredPageIds) return <></>;
   return (
     <ListLayout>
+      {showMoveOutZone && <PageMoveOutDropZone storeType={storeType} folderId={folderId} />}
       {filteredPageIds.map((pageId) => (
         <PageListBlock key={pageId} pageId={pageId} storeType={storeType} />
       ))}
