@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 import pytest
+from unittest.mock import patch
 from django.urls import reverse
 from rest_framework import status
 
@@ -12,6 +13,22 @@ from plane.db.models import User, Workspace, WorkspaceBookmark, WorkspaceBookmar
 @pytest.mark.contract
 @pytest.mark.django_db
 class TestWorkspaceBookmarks:
+    @patch("plane.app.views.workspace.bookmark.fetch_url_metadata")
+    def test_workspace_member_can_preview_url_metadata(self, fetch_metadata, session_client, workspace):
+        fetch_metadata.return_value = {
+            "url": "https://example.com/docs",
+            "title": "Example docs",
+            "description": "Documentation for the example service.",
+        }
+        response = session_client.post(
+            reverse("workspace-bookmark-metadata", kwargs={"slug": workspace.slug}),
+            {"url": "example.com/docs"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["title"] == "Example docs"
+        assert response.data["description"] == "Documentation for the example service."
+
     def test_bookmarks_are_shared_and_keep_remarks(self, session_client, workspace):
         groups_url = reverse("workspace-bookmark-groups", kwargs={"slug": workspace.slug})
         group_response = session_client.post(groups_url, {"name": "Engineering"}, format="json")

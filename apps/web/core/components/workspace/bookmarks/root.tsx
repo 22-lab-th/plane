@@ -326,6 +326,7 @@ export function WorkspaceBookmarksRoot() {
           setSelectedBookmark(null);
         }}
         onSubmit={handleBookmarkSubmit}
+        onFetchMetadata={(url) => workspaceService.fetchWorkspaceBookmarkMetadata(slug, url)}
       />
       <WorkspaceBookmarkGroupModal
         isOpen={groupModalOpen}

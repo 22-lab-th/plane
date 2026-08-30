@@ -244,6 +244,11 @@ urlpatterns = [
         name="workspace-bookmarks",
     ),
     path(
+        "workspaces/<str:slug>/bookmarks/metadata/",
+        WorkspaceBookmarkViewSet.as_view({"post": "metadata"}),
+        name="workspace-bookmark-metadata",
+    ),
+    path(
         "workspaces/<str:slug>/bookmarks/<uuid:pk>/",
         WorkspaceBookmarkViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
         name="workspace-bookmarks",

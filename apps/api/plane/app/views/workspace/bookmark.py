@@ -4,12 +4,14 @@
 
 from django.db import transaction
 from django.db.models import Q
+import requests
 from rest_framework import status
 from rest_framework.response import Response
 
 from plane.app.permissions import ROLE, allow_permission
 from plane.app.serializers import WorkspaceBookmarkGroupSerializer, WorkspaceBookmarkSerializer
 from plane.db.models import Workspace, WorkspaceBookmark, WorkspaceBookmarkGroup
+from plane.utils.url_metadata import URLMetadataError, fetch_url_metadata
 
 from ..base import BaseViewSet
 
@@ -78,6 +80,26 @@ class WorkspaceBookmarkViewSet(BaseViewSet):
 
     def get_serializer_class(self):
         return WorkspaceBookmarkSerializer
+
+    @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST], level="WORKSPACE")
+    def metadata(self, request, slug):
+        url = request.data.get("url", "").strip()
+        if not url:
+            return Response({"detail": "URL is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            return Response(fetch_url_metadata(url))
+        except URLMetadataError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        except ValueError:
+            return Response(
+                {"detail": "This URL cannot be accessed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except requests.RequestException:
+            return Response(
+                {"detail": "The page could not be reached."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST], level="WORKSPACE")
     def list(self, request, slug):

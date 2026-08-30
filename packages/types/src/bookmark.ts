@@ -28,3 +28,9 @@ export type TWorkspaceBookmark = {
   created_by: string | null;
   updated_by: string | null;
 };
+
+export type TWorkspaceBookmarkMetadata = {
+  url: string;
+  title: string | null;
+  description: string | null;
+};

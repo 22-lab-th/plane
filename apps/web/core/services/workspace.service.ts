@@ -28,6 +28,7 @@ import type {
   IWorkspaceUserPropertiesResponse,
   TWorkspaceBookmark,
   TWorkspaceBookmarkGroup,
+  TWorkspaceBookmarkMetadata,
 } from "@plane/types";
 // services
 import { APIService } from "@/services/api.service";
@@ -371,6 +372,14 @@ export class WorkspaceService extends APIService {
 
   async fetchWorkspaceBookmarks(workspaceSlug: string): Promise<TWorkspaceBookmark[]> {
     return this.get(`/api/workspaces/${workspaceSlug}/bookmarks/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async fetchWorkspaceBookmarkMetadata(workspaceSlug: string, url: string): Promise<TWorkspaceBookmarkMetadata> {
+    return this.post(`/api/workspaces/${workspaceSlug}/bookmarks/metadata/`, { url })
       .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data;

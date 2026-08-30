@@ -4,10 +4,11 @@
  * See the LICENSE file for details.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { Button } from "@plane/propel/button";
-import type { TWorkspaceBookmark, TWorkspaceBookmarkGroup } from "@plane/types";
+import type { TWorkspaceBookmark, TWorkspaceBookmarkGroup, TWorkspaceBookmarkMetadata } from "@plane/types";
 import { CustomSelect, Input, ModalCore, TextArea } from "@plane/ui";
 
 type TBookmarkForm = {
@@ -23,6 +24,7 @@ type Props = {
   groups: TWorkspaceBookmarkGroup[];
   onClose: () => void;
   onSubmit: (data: Partial<TWorkspaceBookmark>) => Promise<void>;
+  onFetchMetadata: (url: string) => Promise<TWorkspaceBookmarkMetadata>;
 };
 
 const defaultValues: TBookmarkForm = {
@@ -32,12 +34,17 @@ const defaultValues: TBookmarkForm = {
   group: "ungrouped",
 };
 
-export function WorkspaceBookmarkModal({ isOpen, bookmark, groups, onClose, onSubmit }: Props) {
+export function WorkspaceBookmarkModal({ isOpen, bookmark, groups, onClose, onSubmit, onFetchMetadata }: Props) {
+  const [isFetchingMetadata, setIsFetchingMetadata] = useState(false);
+  const [metadataMessage, setMetadataMessage] = useState<string | null>(null);
+  const lastFetchedUrl = useRef<string | null>(null);
   const {
     control,
     formState: { errors, isSubmitting },
     handleSubmit,
+    getValues,
     reset,
+    setValue,
   } = useForm<TBookmarkForm>({ defaultValues });
   const selectedGroupId = useWatch({ control, name: "group" });
 
@@ -49,6 +56,8 @@ export function WorkspaceBookmarkModal({ isOpen, bookmark, groups, onClose, onSu
         remark: bookmark?.remark ?? "",
         group: bookmark?.group ?? "ungrouped",
       });
+      lastFetchedUrl.current = null;
+      setMetadataMessage(null);
     }
   }, [bookmark, isOpen, reset]);
 
@@ -59,6 +68,36 @@ export function WorkspaceBookmarkModal({ isOpen, bookmark, groups, onClose, onSu
       remark: data.remark,
       group: data.group === "ungrouped" ? null : data.group,
     });
+  };
+
+  const fetchMetadata = async (force = false) => {
+    const url = getValues("url").trim();
+    if (!url || isFetchingMetadata || (!force && lastFetchedUrl.current === url)) return;
+
+    setIsFetchingMetadata(true);
+    setMetadataMessage("Reading page details...");
+    lastFetchedUrl.current = url;
+    try {
+      const metadata = await onFetchMetadata(url);
+      let filledFields = 0;
+      if (!getValues("title").trim() && metadata.title) {
+        setValue("title", metadata.title, { shouldValidate: true });
+        filledFields += 1;
+      }
+      if (!getValues("remark").trim() && metadata.description) {
+        setValue("remark", metadata.description);
+        filledFields += 1;
+      }
+      setMetadataMessage(
+        filledFields > 0
+          ? "Title and description were filled from the page."
+          : "Page details found. Existing text was left unchanged."
+      );
+    } catch {
+      setMetadataMessage("Page details could not be read. You can still enter them manually.");
+    } finally {
+      setIsFetchingMetadata(false);
+    }
   };
 
   const selectedGroupName = groups.find((group) => group.id === selectedGroupId)?.name ?? "Ungrouped";
@@ -100,17 +139,36 @@ export function WorkspaceBookmarkModal({ isOpen, bookmark, groups, onClose, onSu
                 control={control}
                 name="url"
                 rules={{ required: "URL is required." }}
-                render={({ field }) => (
+                render={({ field: { onBlur, ...field } }) => (
                   <Input
                     {...field}
                     id="bookmark-url"
                     placeholder="https://example.com"
                     className="w-full"
                     hasError={Boolean(errors.url)}
+                    onBlur={() => {
+                      onBlur();
+                      void fetchMetadata();
+                    }}
                   />
                 )}
               />
               {errors.url && <p className="mt-1 text-11 text-danger-primary">{errors.url.message}</p>}
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-11 text-placeholder">
+                  {metadataMessage ?? "Title and description can be filled automatically."}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  prependIcon={<Sparkles className="size-3.5" />}
+                  loading={isFetchingMetadata}
+                  onClick={() => void fetchMetadata(true)}
+                >
+                  Fetch details
+                </Button>
+              </div>
             </div>
             <div>
               <p className="mb-1 block text-13 font-medium text-secondary">Group</p>
