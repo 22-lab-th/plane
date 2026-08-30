@@ -258,8 +258,8 @@ export class ProjectPageStore implements IProjectPageStore {
       return false;
     };
 
-    return Object.values(this.data)
-      .filter(
+    return orderPages(
+      Object.values(this.data).filter(
         (page) =>
           page.node_type === "folder" &&
           page.project_ids?.includes(projectId) &&
@@ -267,8 +267,10 @@ export class ProjectPageStore implements IProjectPageStore {
           (access === undefined || page.access === access) &&
           page.id !== excludeId &&
           !isDescendantOfExcludedNode(page)
-      )
-      .toSorted((a, b) => getPageName(a.name).localeCompare(getPageName(b.name)));
+      ),
+      "name",
+      "asc"
+    ) as TProjectPage[];
   });
 
   updateFilters = <T extends keyof TPageFilters>(filterKey: T, filterValue: TPageFilters[T]) => {
