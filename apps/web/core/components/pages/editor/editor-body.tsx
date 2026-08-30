@@ -196,10 +196,11 @@ export const PageEditorBody = observer(function PageEditorBody(props: Props) {
     // Construct the WebSocket Collaboration URL
     try {
       const LIVE_SERVER_BASE_URL = LIVE_BASE_URL?.trim() || window.location.origin;
+      const LIVE_SERVER_BASE_PATH = LIVE_BASE_PATH?.trim() || "/live";
       const WS_LIVE_URL = new URL(LIVE_SERVER_BASE_URL);
       const isSecureEnvironment = window.location.protocol === "https:";
       WS_LIVE_URL.protocol = isSecureEnvironment ? "wss" : "ws";
-      WS_LIVE_URL.pathname = `${LIVE_BASE_PATH}/collaboration`;
+      WS_LIVE_URL.pathname = `${LIVE_SERVER_BASE_PATH.replace(/\/$/, "")}/collaboration`;
 
       // Append query parameters to the URL
       Object.entries(webhookConnectionParams)
