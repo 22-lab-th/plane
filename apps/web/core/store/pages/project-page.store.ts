@@ -245,6 +245,19 @@ export class ProjectPageStore implements IProjectPageStore {
   });
 
   getMoveTargetFolders = computedFn((projectId: string, access: number | undefined, excludeId?: string) => {
+    const isDescendantOfExcludedNode = (candidate: TProjectPage) => {
+      if (!excludeId) return false;
+
+      let parentId = candidate.parent;
+      const seen = new Set<string>();
+      while (parentId && !seen.has(parentId)) {
+        if (parentId === excludeId) return true;
+        seen.add(parentId);
+        parentId = this.getPageById(parentId)?.parent;
+      }
+      return false;
+    };
+
     return Object.values(this.data)
       .filter(
         (page) =>
@@ -252,7 +265,8 @@ export class ProjectPageStore implements IProjectPageStore {
           page.project_ids?.includes(projectId) &&
           !page.archived_at &&
           (access === undefined || page.access === access) &&
-          page.id !== excludeId
+          page.id !== excludeId &&
+          !isDescendantOfExcludedNode(page)
       )
       .toSorted((a, b) => getPageName(a.name).localeCompare(getPageName(b.name)));
   });

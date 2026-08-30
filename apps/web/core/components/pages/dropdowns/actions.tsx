@@ -6,8 +6,7 @@
 
 import { useMemo, useState } from "react";
 import { observer } from "mobx-react";
-import { useParams } from "next/navigation";
-import { ArchiveRestoreIcon, FileOutput, FolderInput, FolderPen, LockKeyhole, LockKeyholeOpen } from "lucide-react";
+import { ArchiveRestoreIcon, FolderInput, FolderPen, LockKeyhole, LockKeyholeOpen } from "lucide-react";
 // constants
 import { EPageAccess } from "@plane/constants";
 // plane editor
@@ -22,11 +21,8 @@ import { FolderNameModal } from "@/components/pages/modals/folder-name-modal";
 import { MoveToFolderModal } from "@/components/pages/modals/move-to-folder-modal";
 // hooks
 import { usePageOperations } from "@/hooks/use-page-operations";
-// plane web components
-import { MovePageModal } from "@/plane-web/components/pages";
 // plane web hooks
 import type { EPageStoreType } from "@/hooks/store";
-import { usePageFlag } from "@/hooks/use-page-flag";
 // store types
 import type { TPageInstance } from "@/store/pages/base-page";
 
@@ -59,15 +55,8 @@ export const PageActions = observer(function PageActions(props: Props) {
   const { extraOptions, optionsOrder, page, parentRef, storeType } = props;
   // states
   const [deletePageModal, setDeletePageModal] = useState(false);
-  const [movePageModal, setMovePageModal] = useState(false);
   const [moveToFolderModal, setMoveToFolderModal] = useState(false);
   const [renameFolderModal, setRenameFolderModal] = useState(false);
-  // params
-  const { workspaceSlug } = useParams();
-  // page flag
-  const { isMovePageEnabled } = usePageFlag({
-    workspaceSlug: workspaceSlug?.toString() ?? "",
-  });
   // page operations
   const { pageOperations } = usePageOperations({
     page,
@@ -164,13 +153,6 @@ export const PageActions = observer(function PageActions(props: Props) {
           icon: TrashIcon,
           shouldRender: canCurrentUserDeletePage && !!archived_at,
         },
-        {
-          key: "move",
-          action: () => setMovePageModal(true),
-          title: "Move",
-          icon: FileOutput,
-          shouldRender: canCurrentUserMovePage && isMovePageEnabled && !isFolder,
-        },
       ];
       if (extraOptions) {
         menuItems.push(...extraOptions);
@@ -188,7 +170,6 @@ export const PageActions = observer(function PageActions(props: Props) {
       canCurrentUserArchivePage,
       canCurrentUserDeletePage,
       canCurrentUserMovePage,
-      isMovePageEnabled,
       pageOperations,
       isFolder,
     ]
@@ -204,7 +185,6 @@ export const PageActions = observer(function PageActions(props: Props) {
 
   return (
     <>
-      <MovePageModal isOpen={movePageModal} onClose={() => setMovePageModal(false)} page={page} />
       <MoveToFolderModal
         isOpen={moveToFolderModal}
         onClose={() => setMoveToFolderModal(false)}

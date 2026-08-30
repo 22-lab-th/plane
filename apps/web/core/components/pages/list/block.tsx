@@ -59,7 +59,7 @@ export const PageListBlock = observer(function PageListBlock(props: TPageListBlo
     pageId,
     storeType,
   });
-  const { moveToFolder } = usePageStore(storeType);
+  const { getMoveTargetFolders, getPageById, moveToFolder } = usePageStore(storeType);
   const { isMobile } = usePlatformOS();
   const { workspaceSlug, projectId } = useParams();
   const searchParams = useSearchParams();
@@ -99,7 +99,11 @@ export const PageListBlock = observer(function PageListBlock(props: TPageListBlo
           canDrop: ({ source }) => {
             if (!isPageListDragData(source.data)) return false;
             if (source.data.pageId === pageId) return false;
-            return true;
+            const sourcePage = getPageById(source.data.pageId);
+            if (!sourcePage) return false;
+            return getMoveTargetFolders(projectId?.toString() || "", sourcePage.access, source.data.pageId).some(
+              (folder) => folder.id === pageId
+            );
           },
           getData: () => dragData,
           onDragEnter: () => setIsDropTarget(true),
@@ -132,7 +136,7 @@ export const PageListBlock = observer(function PageListBlock(props: TPageListBlo
 
     if (!behaviors.length) return;
     return combine(...behaviors);
-  }, [canDrag, isArchivedView, isFolder, moveToFolder, page, pageId]);
+  }, [canDrag, getMoveTargetFolders, getPageById, isArchivedView, isFolder, moveToFolder, page, pageId, projectId]);
 
   // handle page check
   if (!page) return null;

@@ -104,7 +104,7 @@ def get_project_page(slug, project_id, page_id):
     )
 
 
-def validate_page_parent(slug, project_id, parent_id, page_id=None, access=None):
+def validate_page_parent(slug, project_id, parent_id, page_id=None, access=None, user=None):
     """Validate parent folder constraints for create/update. Returns (parent, error_response)."""
     if parent_id in (None, "", "null"):
         return None, None
@@ -112,6 +112,12 @@ def validate_page_parent(slug, project_id, parent_id, page_id=None, access=None)
     try:
         parent = get_project_page(slug, project_id, parent_id)
     except Page.DoesNotExist:
+        return None, Response({"error": "Parent folder not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Private pages are visible only to their owner in Plane CE. Apply the same
+    # rule while resolving parents so a caller cannot infer or move content into
+    # another user's private folder by guessing its UUID.
+    if user is not None and parent.access == Page.PRIVATE_ACCESS and parent.owned_by_id != user.id:
         return None, Response({"error": "Parent folder not found"}, status=status.HTTP_400_BAD_REQUEST)
 
     if parent.node_type != Page.FOLDER_NODE:
@@ -224,7 +230,7 @@ class PageViewSet(BaseViewSet):
 
         access = request.data.get("access", Page.PUBLIC_ACCESS)
         parent_id = request.data.get("parent", None)
-        parent, parent_error = validate_page_parent(slug, project_id, parent_id, access=access)
+        parent, parent_error = validate_page_parent(slug, project_id, parent_id, access=access, user=request.user)
         if parent_error:
             return parent_error
 
@@ -235,14 +241,18 @@ class PageViewSet(BaseViewSet):
             if name_error:
                 return name_error
 
-        description_html = "<p></p>" if node_type == Page.FOLDER_NODE else request.data.get("description_html", "<p></p>")
+        description_html = (
+            "<p></p>" if node_type == Page.FOLDER_NODE else request.data.get("description_html", "<p></p>")
+        )
         serializer = PageSerializer(
             data=request.data,
             context={
                 "project_id": project_id,
                 "owned_by_id": request.user.id,
                 "description_json": {} if node_type == Page.FOLDER_NODE else request.data.get("description_json", {}),
-                "description_binary": None if node_type == Page.FOLDER_NODE else request.data.get("description_binary", None),
+                "description_binary": (
+                    None if node_type == Page.FOLDER_NODE else request.data.get("description_binary", None)
+                ),
                 "description_html": description_html,
             },
         )
@@ -270,6 +280,14 @@ class PageViewSet(BaseViewSet):
 
             data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
 
+            if page.node_type == Page.FOLDER_NODE and any(
+                field in data for field in ("description_html", "description_json", "description_binary")
+            ):
+                return Response(
+                    {"error": "Folders cannot contain document content"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             # Folders cannot become pages (or vice versa) once created.
             if "node_type" in data and data.get("node_type") != page.node_type:
                 return Response({"error": "node_type cannot be changed"}, status=status.HTTP_400_BAD_REQUEST)
@@ -279,7 +297,12 @@ class PageViewSet(BaseViewSet):
             parent_id = data.get("parent") if parent_provided else page.parent_id
             if parent_provided:
                 parent, parent_error = validate_page_parent(
-                    slug, project_id, parent_id, page_id=page_id, access=access
+                    slug,
+                    project_id,
+                    parent_id,
+                    page_id=page_id,
+                    access=access,
+                    user=request.user,
                 )
                 if parent_error:
                     return parent_error
@@ -287,7 +310,12 @@ class PageViewSet(BaseViewSet):
             elif page.parent_id and access != page.access:
                 # Access change while nested must stay aligned with parent folder.
                 parent, parent_error = validate_page_parent(
-                    slug, project_id, page.parent_id, page_id=page_id, access=access
+                    slug,
+                    project_id,
+                    page.parent_id,
+                    page_id=page_id,
+                    access=access,
+                    user=request.user,
                 )
                 if parent_error:
                     return parent_error
@@ -336,6 +364,9 @@ class PageViewSet(BaseViewSet):
         project = Project.objects.get(pk=project_id)
         track_visit = request.query_params.get("track_visit", "true").lower() == "true"
 
+        if page is None:
+            return Response({"error": "Page not found"}, status=status.HTTP_404_NOT_FOUND)
+
         """
         if the role is guest and guest_view_all_features is false and owned by is not
         the requesting user then dont show the page
@@ -357,23 +388,20 @@ class PageViewSet(BaseViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if page is None:
-            return Response({"error": "Page not found"}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            issue_ids = PageLog.objects.filter(page_id=page_id, entity_name="issue").values_list(
-                "entity_identifier", flat=True
+        issue_ids = PageLog.objects.filter(page_id=page_id, entity_name="issue").values_list(
+            "entity_identifier", flat=True
+        )
+        data = PageDetailSerializer(page).data
+        data["issue_ids"] = issue_ids
+        if track_visit:
+            recent_visited_task.delay(
+                slug=slug,
+                entity_name="page",
+                entity_identifier=page_id,
+                user_id=request.user.id,
+                project_id=project_id,
             )
-            data = PageDetailSerializer(page).data
-            data["issue_ids"] = issue_ids
-            if track_visit:
-                recent_visited_task.delay(
-                    slug=slug,
-                    entity_name="page",
-                    entity_identifier=page_id,
-                    user_id=request.user.id,
-                    project_id=project_id,
-                )
-            return Response(data, status=status.HTTP_200_OK)
+        return Response(data, status=status.HTTP_200_OK)
 
     def lock(self, request, slug, project_id, page_id):
         page = Page.objects.get(
@@ -416,6 +444,22 @@ class PageViewSet(BaseViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if access != page.access and page.parent_id and page.parent.access != access:
+            return Response(
+                {"error": "Page access must match parent folder access"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            access != page.access
+            and page.node_type == Page.FOLDER_NODE
+            and page.child_page.filter(deleted_at__isnull=True).exclude(access=access).exists()
+        ):
+            return Response(
+                {"error": "Move or update folder children before changing access"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         page.access = access
         page.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -430,7 +474,7 @@ class PageViewSet(BaseViewSet):
         elif parent_param in (None, "", "null", "root"):
             queryset = queryset.filter(parent__isnull=True)
         else:
-            parent, parent_error = validate_page_parent(slug, project_id, parent_param)
+            parent, parent_error = validate_page_parent(slug, project_id, parent_param, user=request.user)
             if parent_error:
                 return parent_error
             queryset = queryset.filter(parent_id=parent.id)
@@ -458,6 +502,7 @@ class PageViewSet(BaseViewSet):
             "name",
             "-is_favorite",
             "-created_at",
+            "id",
         )
         pages = PageSerializer(queryset, many=True).data
         return Response(pages, status=status.HTTP_200_OK)
@@ -690,6 +735,12 @@ class PagesDescriptionViewSet(BaseViewSet):
                     "error_code": ERROR_CODES["PAGE_ARCHIVED"],
                     "error_message": "PAGE_ARCHIVED",
                 },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if page.node_type == Page.FOLDER_NODE:
+            return Response(
+                {"error": "Folders cannot contain document content"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

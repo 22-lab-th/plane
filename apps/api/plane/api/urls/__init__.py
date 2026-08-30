@@ -8,9 +8,13 @@ from .intake import urlpatterns as intake_patterns
 from .label import urlpatterns as label_patterns
 from .member import urlpatterns as member_patterns
 from .module import urlpatterns as module_patterns
+from .page import urlpatterns as page_patterns
+from .page_asset import urlpatterns as page_asset_patterns
 from .project import urlpatterns as project_patterns
+from .project_feature import urlpatterns as project_feature_patterns
 from .state import urlpatterns as state_patterns
 from .user import urlpatterns as user_patterns
+from .view import urlpatterns as view_patterns
 from .work_item import urlpatterns as work_item_patterns
 from .invite import urlpatterns as invite_patterns
 from .sticky import urlpatterns as sticky_patterns
@@ -22,9 +26,13 @@ urlpatterns = [
     *label_patterns,
     *member_patterns,
     *module_patterns,
+    *page_patterns,
+    *page_asset_patterns,
     *project_patterns,
+    *project_feature_patterns,
     *state_patterns,
     *user_patterns,
+    *view_patterns,
     *work_item_patterns,
     *invite_patterns,
     *sticky_patterns,

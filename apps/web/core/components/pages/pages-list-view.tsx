@@ -41,9 +41,7 @@ export const PagesListView = observer(function PagesListView(props: TPageView) {
   // fetching pages list for current folder level
   useSWR(
     workspaceSlug && projectId && pageType ? `PROJECT_PAGES_${projectId}_${folderId || "root"}` : null,
-    workspaceSlug && projectId && pageType
-      ? () => fetchPagesList(workspaceSlug, projectId, pageType, folderId)
-      : null
+    workspaceSlug && projectId && pageType ? () => fetchPagesList(workspaceSlug, projectId, pageType, folderId) : null
   );
 
   // pages loader
