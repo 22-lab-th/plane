@@ -357,7 +357,7 @@ export function WorkspaceBookmarksRoot() {
                   >
                     <button
                       type="button"
-                      className="focus-visible:ring-accent-primary absolute inset-0 z-0 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-inset"
+                      className="focus-visible:ring-accent-primary absolute inset-0 z-0 cursor-pointer border-0 bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-inset"
                       onClick={() => setActiveBookmark(bookmark)}
                       aria-label={`Show details for ${bookmark.title}`}
                     />
