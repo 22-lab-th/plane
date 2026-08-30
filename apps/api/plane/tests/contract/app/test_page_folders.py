@@ -55,9 +55,92 @@ def description_url(slug, project_id, page_id):
     return f"/api/workspaces/{slug}/projects/{project_id}/pages/{page_id}/description/"
 
 
+def move_url(slug, project_id, page_id):
+    return f"/api/workspaces/{slug}/projects/{project_id}/pages/{page_id}/move/"
+
+
 @pytest.mark.contract
 @pytest.mark.django_db
 class TestPageFolders:
+    def test_move_document_to_another_project(self, session_client, workspace, project, create_user):
+        target = Project.objects.create(
+            name="Target Project",
+            identifier="TGT",
+            workspace=workspace,
+            created_by=create_user,
+        )
+        ProjectMember.objects.create(project=target, member=create_user, role=20, is_active=True)
+        folder = session_client.post(
+            pages_url(workspace.slug, project.id),
+            {"name": "Folder", "node_type": "folder", "access": 0},
+            format="json",
+        )
+        page = session_client.post(
+            pages_url(workspace.slug, project.id),
+            {"name": "Document", "node_type": "page", "access": 0, "parent": folder.data["id"]},
+            format="json",
+        )
+
+        response = session_client.post(
+            move_url(workspace.slug, project.id, page.data["id"]),
+            {"new_project_id": str(target.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["new_project_id"] == str(target.id)
+        assert not ProjectPage.objects.filter(project=project, page_id=page.data["id"]).exists()
+        assert ProjectPage.objects.filter(project=target, page_id=page.data["id"]).exists()
+        moved_page = Page.objects.get(pk=page.data["id"])
+        assert moved_page.parent_id is None
+
+    def test_move_rejects_folders(self, session_client, workspace, project, create_user):
+        target = Project.objects.create(
+            name="Target Project",
+            identifier="TGT",
+            workspace=workspace,
+            created_by=create_user,
+        )
+        ProjectMember.objects.create(project=target, member=create_user, role=20, is_active=True)
+        folder = session_client.post(
+            pages_url(workspace.slug, project.id),
+            {"name": "Folder", "node_type": "folder", "access": 0},
+            format="json",
+        )
+
+        response = session_client.post(
+            move_url(workspace.slug, project.id, folder.data["id"]),
+            {"new_project_id": str(target.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert ProjectPage.objects.filter(project=project, page_id=folder.data["id"]).exists()
+        assert not ProjectPage.objects.filter(project=target, page_id=folder.data["id"]).exists()
+
+    def test_move_requires_target_project_membership(self, session_client, workspace, project, create_user):
+        target = Project.objects.create(
+            name="Restricted Project",
+            identifier="RST",
+            workspace=workspace,
+            created_by=create_user,
+        )
+        page = session_client.post(
+            pages_url(workspace.slug, project.id),
+            {"name": "Document", "node_type": "page", "access": 0},
+            format="json",
+        )
+
+        response = session_client.post(
+            move_url(workspace.slug, project.id, page.data["id"]),
+            {"new_project_id": str(target.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert ProjectPage.objects.filter(project=project, page_id=page.data["id"]).exists()
+        assert not ProjectPage.objects.filter(project=target, page_id=page.data["id"]).exists()
+
     def test_missing_page_returns_404(self, session_client, workspace, project):
         response = session_client.get(pages_url(workspace.slug, project.id, uuid4()))
         # Object-level permission deliberately hides an unknown UUID before the

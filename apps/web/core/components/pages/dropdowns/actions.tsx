@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from "react";
 import { observer } from "mobx-react";
-import { ArchiveRestoreIcon, FolderInput, FolderPen, LockKeyhole, LockKeyholeOpen } from "lucide-react";
+import { ArchiveRestoreIcon, FolderInput, FolderOutput, FolderPen, LockKeyhole, LockKeyholeOpen } from "lucide-react";
 // constants
 import { EPageAccess } from "@plane/constants";
 // plane editor
@@ -19,10 +19,11 @@ import { cn } from "@plane/utils";
 import { DeletePageModal } from "@/components/pages/modals/delete-page-modal";
 import { FolderNameModal } from "@/components/pages/modals/folder-name-modal";
 import { MoveToFolderModal } from "@/components/pages/modals/move-to-folder-modal";
+import { MoveToProjectModal } from "@/components/pages/modals/move-to-project-modal";
 // hooks
 import { usePageOperations } from "@/hooks/use-page-operations";
 // plane web hooks
-import type { EPageStoreType } from "@/hooks/store";
+import { EPageStoreType } from "@/hooks/store";
 // store types
 import type { TPageInstance } from "@/store/pages/base-page";
 
@@ -56,6 +57,7 @@ export const PageActions = observer(function PageActions(props: Props) {
   // states
   const [deletePageModal, setDeletePageModal] = useState(false);
   const [moveToFolderModal, setMoveToFolderModal] = useState(false);
+  const [moveToProjectModal, setMoveToProjectModal] = useState(false);
   const [renameFolderModal, setRenameFolderModal] = useState(false);
   // page operations
   const { pageOperations } = usePageOperations({
@@ -136,6 +138,13 @@ export const PageActions = observer(function PageActions(props: Props) {
           shouldRender: canCurrentUserMovePage && !archived_at,
         },
         {
+          key: "move",
+          action: () => setMoveToProjectModal(true),
+          title: "Move to project",
+          icon: FolderOutput,
+          shouldRender: storeType === EPageStoreType.PROJECT && canCurrentUserMovePage && !archived_at && !isFolder,
+        },
+        {
           key: "archive-restore",
           action: () => {
             pageOperations.toggleArchive();
@@ -172,6 +181,7 @@ export const PageActions = observer(function PageActions(props: Props) {
       canCurrentUserMovePage,
       pageOperations,
       isFolder,
+      storeType,
     ]
   );
   // arrange options
@@ -191,6 +201,7 @@ export const PageActions = observer(function PageActions(props: Props) {
         page={page}
         storeType={storeType}
       />
+      <MoveToProjectModal isOpen={moveToProjectModal} onClose={() => setMoveToProjectModal(false)} page={page} />
       <FolderNameModal
         isOpen={renameFolderModal}
         onClose={() => setRenameFolderModal(false)}

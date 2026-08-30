@@ -54,6 +54,11 @@ urlpatterns = [
         name="project-pages-access",
     ),
     path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/pages/<uuid:page_id>/move/",
+        PageViewSet.as_view({"post": "move"}),
+        name="project-page-move",
+    ),
+    path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/pages/<uuid:page_id>/description/",
         PagesDescriptionViewSet.as_view({"get": "retrieve", "patch": "partial_update"}),
         name="page-description",

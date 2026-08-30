@@ -82,6 +82,7 @@ export const BlockItemAction = observer(function BlockItemAction(props: Props) {
           "make-a-copy",
           "rename-folder",
           "move-to-folder",
+          "move",
           "toggle-lock",
           "toggle-access",
           "archive-restore",

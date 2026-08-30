@@ -8,7 +8,7 @@ from datetime import datetime
 from django.core.serializers.json import DjangoJSONEncoder
 
 # Django imports
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import (
     Exists,
     OuterRef,
@@ -463,6 +463,124 @@ class PageViewSet(BaseViewSet):
         page.access = access
         page.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @transaction.atomic
+    def move(self, request, slug, project_id, page_id):
+        """Move a document from one project to another in the same workspace."""
+        new_project_id = request.data.get("new_project_id")
+        if not new_project_id:
+            return Response(
+                {"error": "new_project_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if str(new_project_id) == str(project_id):
+            return Response(
+                {"error": "The page is already in this project"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            page = Page.objects.select_for_update().get(
+                pk=page_id,
+                workspace__slug=slug,
+                project_pages__project_id=project_id,
+                project_pages__deleted_at__isnull=True,
+            )
+        except Page.DoesNotExist:
+            return Response({"error": "Page not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if page.node_type != Page.PAGE_NODE:
+            return Response(
+                {"error": "Only documents can be moved between projects"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if page.archived_at is not None:
+            return Response(
+                {"error": "Restore the page before moving it"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_source_admin = ProjectMember.objects.filter(
+            workspace__slug=slug,
+            project_id=project_id,
+            member=request.user,
+            role=ROLE.ADMIN.value,
+            is_active=True,
+        ).exists()
+        if page.owned_by_id != request.user.id and not is_source_admin:
+            return Response(
+                {"error": "Only the owner or a project admin can move the page"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        target_project = Project.objects.filter(
+            pk=new_project_id,
+            workspace__slug=slug,
+            archived_at__isnull=True,
+        ).first()
+        if target_project is None:
+            return Response(
+                {"error": "Target project not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        can_create_in_target = ProjectMember.objects.filter(
+            workspace__slug=slug,
+            project=target_project,
+            member=request.user,
+            role__in=[ROLE.ADMIN.value, ROLE.MEMBER.value],
+            is_active=True,
+        ).exists()
+        if not can_create_in_target:
+            return Response(
+                {"error": "You cannot create pages in the target project"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if ProjectPage.objects.filter(project=target_project, page=page).exists():
+            return Response(
+                {"error": "The page already belongs to the target project"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ProjectPage.objects.create(
+            project=target_project,
+            page=page,
+            workspace=page.workspace,
+            created_by=request.user,
+        )
+        ProjectPage.objects.filter(project_id=project_id, page=page).delete()
+
+        # Folder relationships are project-local. Keep the document itself (and
+        # therefore its content, versions, and assets), but place it at the root
+        # of the target project.
+        if page.parent_id is not None:
+            page.parent = None
+            page.save(update_fields=["parent", "updated_at"])
+
+        UserFavorite.objects.filter(
+            entity_type="page",
+            entity_identifier=page_id,
+            project_id=project_id,
+            workspace__slug=slug,
+        ).delete()
+        UserRecentVisit.objects.filter(
+            entity_name="page",
+            entity_identifier=page_id,
+            project_id=project_id,
+            workspace__slug=slug,
+        ).delete()
+
+        return Response(
+            {
+                "page_id": str(page.id),
+                "old_project_id": str(project_id),
+                "new_project_id": str(target_project.id),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def list(self, request, slug, project_id):
         parent_param = request.query_params.get("parent", None)
