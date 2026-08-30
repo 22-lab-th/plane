@@ -77,6 +77,8 @@ from .workspace import (
     WorkspaceUserPreference,
 )
 
+from .bookmark import WorkspaceBookmark, WorkspaceBookmarkGroup
+
 from .favorite import UserFavorite
 
 from .issue_type import IssueType

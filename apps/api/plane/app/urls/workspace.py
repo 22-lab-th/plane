@@ -32,6 +32,8 @@ from plane.app.views import (
     WorkspaceFavoriteGroupEndpoint,
     WorkspaceDraftIssueViewSet,
     QuickLinkViewSet,
+    WorkspaceBookmarkGroupViewSet,
+    WorkspaceBookmarkViewSet,
     UserRecentVisitViewSet,
     WorkspaceHomePreferenceViewSet,
     WorkspaceStickyViewSet,
@@ -224,6 +226,27 @@ urlpatterns = [
         "workspaces/<str:slug>/quick-links/<uuid:pk>/",
         QuickLinkViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
         name="workspace-quick-links",
+    ),
+    # workspace bookmarks
+    path(
+        "workspaces/<str:slug>/bookmark-groups/",
+        WorkspaceBookmarkGroupViewSet.as_view({"get": "list", "post": "create"}),
+        name="workspace-bookmark-groups",
+    ),
+    path(
+        "workspaces/<str:slug>/bookmark-groups/<uuid:pk>/",
+        WorkspaceBookmarkGroupViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
+        name="workspace-bookmark-groups",
+    ),
+    path(
+        "workspaces/<str:slug>/bookmarks/",
+        WorkspaceBookmarkViewSet.as_view({"get": "list", "post": "create"}),
+        name="workspace-bookmarks",
+    ),
+    path(
+        "workspaces/<str:slug>/bookmarks/<uuid:pk>/",
+        WorkspaceBookmarkViewSet.as_view({"get": "retrieve", "patch": "partial_update", "delete": "destroy"}),
+        name="workspace-bookmarks",
     ),
     # Widgets
     path(

@@ -26,6 +26,8 @@ import type {
   IWorkspaceSidebarNavigationItem,
   IWorkspaceSidebarNavigation,
   IWorkspaceUserPropertiesResponse,
+  TWorkspaceBookmark,
+  TWorkspaceBookmarkGroup,
 } from "@plane/types";
 // services
 import { APIService } from "@/services/api.service";
@@ -321,6 +323,82 @@ export class WorkspaceService extends APIService {
 
   async deleteWorkspaceLink(workspaceSlug: string, linkId: string): Promise<void> {
     return this.delete(`/api/workspaces/${workspaceSlug}/quick-links/${linkId}/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  // shared workspace bookmarks
+  async fetchWorkspaceBookmarkGroups(workspaceSlug: string): Promise<TWorkspaceBookmarkGroup[]> {
+    return this.get(`/api/workspaces/${workspaceSlug}/bookmark-groups/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async createWorkspaceBookmarkGroup(
+    workspaceSlug: string,
+    data: Partial<TWorkspaceBookmarkGroup>
+  ): Promise<TWorkspaceBookmarkGroup> {
+    return this.post(`/api/workspaces/${workspaceSlug}/bookmark-groups/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateWorkspaceBookmarkGroup(
+    workspaceSlug: string,
+    groupId: string,
+    data: Partial<TWorkspaceBookmarkGroup>
+  ): Promise<TWorkspaceBookmarkGroup> {
+    return this.patch(`/api/workspaces/${workspaceSlug}/bookmark-groups/${groupId}/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async deleteWorkspaceBookmarkGroup(workspaceSlug: string, groupId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/bookmark-groups/${groupId}/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async fetchWorkspaceBookmarks(workspaceSlug: string): Promise<TWorkspaceBookmark[]> {
+    return this.get(`/api/workspaces/${workspaceSlug}/bookmarks/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async createWorkspaceBookmark(workspaceSlug: string, data: Partial<TWorkspaceBookmark>): Promise<TWorkspaceBookmark> {
+    return this.post(`/api/workspaces/${workspaceSlug}/bookmarks/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateWorkspaceBookmark(
+    workspaceSlug: string,
+    bookmarkId: string,
+    data: Partial<TWorkspaceBookmark>
+  ): Promise<TWorkspaceBookmark> {
+    return this.patch(`/api/workspaces/${workspaceSlug}/bookmarks/${bookmarkId}/`, data)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async deleteWorkspaceBookmark(workspaceSlug: string, bookmarkId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/bookmarks/${bookmarkId}/`)
       .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data;
