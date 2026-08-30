@@ -44,6 +44,7 @@ export function WorkspaceBookmarksRoot() {
     slug
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const [groupSearchQuery, setGroupSearchQuery] = useState("");
   const [activeGroupId, setActiveGroupId] = useState(ALL_BOOKMARKS);
   const [activeBookmark, setActiveBookmark] = useState<TWorkspaceBookmark | null>(null);
   const [bookmarkModalOpen, setBookmarkModalOpen] = useState(false);
@@ -197,25 +198,39 @@ export function WorkspaceBookmarksRoot() {
       count: bookmarks?.filter((bookmark) => bookmark.group === null).length ?? 0,
     },
   ];
+  const filteredGroupItems = groupItems.filter(
+    (item) => item.id === ALL_BOOKMARKS || item.name.toLocaleLowerCase().includes(groupSearchQuery.toLocaleLowerCase())
+  );
 
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden bg-surface-1">
       <aside className="hidden w-52 flex-shrink-0 flex-col border-r border-subtle bg-surface-1 md:flex xl:w-56">
-        <div className="flex items-center justify-between border-b border-subtle px-3 py-3">
-          <span className="text-12 font-medium text-placeholder">Groups</span>
-          {canManage && (
-            <button
-              type="button"
-              className="grid size-7 place-items-center rounded text-placeholder hover:bg-layer-1 hover:text-secondary"
-              onClick={() => openGroupModal()}
-              aria-label="Add group"
-            >
-              <Plus className="size-4" />
-            </button>
-          )}
+        <div className="space-y-2 border-b border-subtle p-2.5">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-12 font-medium text-placeholder">Groups</span>
+            {canManage && (
+              <button
+                type="button"
+                className="grid size-7 place-items-center rounded text-placeholder hover:bg-layer-1 hover:text-secondary"
+                onClick={() => openGroupModal()}
+                aria-label="Add group"
+              >
+                <Plus className="size-4" />
+              </button>
+            )}
+          </div>
+          <div className="relative">
+            <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-placeholder" />
+            <Input
+              value={groupSearchQuery}
+              onChange={(event) => setGroupSearchQuery(event.target.value)}
+              placeholder="Search groups..."
+              className="w-full pl-8"
+            />
+          </div>
         </div>
         <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2" aria-label="Bookmark groups">
-          {groupItems.map((item) => {
+          {filteredGroupItems.map((item) => {
             const isActive = activeGroupId === item.id;
             const isEditableGroup = "group" in item && item.group;
             return (
