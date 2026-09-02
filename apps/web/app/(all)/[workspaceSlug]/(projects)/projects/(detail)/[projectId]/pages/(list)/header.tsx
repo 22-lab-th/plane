@@ -7,7 +7,7 @@
 import { useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { FileUp, Folder, FolderPlus } from "lucide-react";
+import { FileUp, Folder, FolderInput, FolderPlus } from "lucide-react";
 // constants
 import { EPageAccess } from "@plane/constants";
 // plane types
@@ -21,12 +21,8 @@ import { getPageName } from "@plane/utils";
 // helpers
 import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
 import { FolderNameModal } from "@/components/pages/modals/folder-name-modal";
-import {
-  getMarkdownPageName,
-  isMarkdownFile,
-  markdownToPageHtml,
-  MAX_MARKDOWN_IMPORT_SIZE,
-} from "@/helpers/markdown-import";
+import { MarkdownImportReportModal } from "@/components/pages/modals/markdown-import-report-modal";
+import { importMarkdownPages, type TMarkdownPageImportReport } from "@/helpers/markdown-page-import";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
 // plane web imports
@@ -39,7 +35,9 @@ export const PagesListHeader = observer(function PagesListHeader() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isImportingMarkdown, setIsImportingMarkdown] = useState(false);
   const [folderModalOpen, setFolderModalOpen] = useState(false);
+  const [importReport, setImportReport] = useState<TMarkdownPageImportReport | null>(null);
   const markdownInputRef = useRef<HTMLInputElement>(null);
+  const markdownFolderInputRef = useRef<HTMLInputElement>(null);
   // router
   const router = useRouter();
   const { workspaceSlug, projectId } = useParams();
@@ -118,42 +116,26 @@ export const PagesListHeader = observer(function PagesListHeader() {
       .finally(() => setIsCreatingFolder(false));
   };
 
-  const handleMarkdownImport = async (file: File) => {
-    if (!isMarkdownFile(file)) {
-      setToast({
-        type: TOAST_TYPE.ERROR,
-        title: "Unsupported file",
-        message: "Choose a Markdown file with a .md or .markdown extension.",
-      });
-      return;
-    }
-    if (file.size > MAX_MARKDOWN_IMPORT_SIZE) {
-      setToast({
-        type: TOAST_TYPE.ERROR,
-        title: "File is too large",
-        message: "Markdown files must be 5 MB or smaller.",
-      });
-      return;
-    }
-
+  const handleMarkdownImport = async (files: File[]) => {
+    if (!files.length || !currentProjectDetails?.id) return;
     setIsImportingMarkdown(true);
     try {
-      const markdown = await file.text();
-      const page = await createPage({
+      const report = await importMarkdownPages({
         access: pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC,
-        description_html: markdownToPageHtml(markdown),
-        name: getMarkdownPageName(file.name),
-        node_type: "page",
-        parent: folderId,
+        createFolder,
+        createPage,
+        files,
+        parentId: folderId,
+        projectId: currentProjectDetails.id,
+        workspaceSlug: workspaceSlug.toString(),
       });
-      if (!page?.id) throw new Error("Page could not be created.");
 
       setToast({
         type: TOAST_TYPE.SUCCESS,
         title: "Markdown imported",
-        message: `${getMarkdownPageName(file.name)} was added as a page.`,
+        message: `${report.pagesImported} page${report.pagesImported === 1 ? "" : "s"} and ${report.assetsUploaded} image${report.assetsUploaded === 1 ? "" : "s"} imported${report.warnings.length ? ` with ${report.warnings.length} warning${report.warnings.length === 1 ? "" : "s"}` : ""}.`,
       });
-      router.push(`/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages/${page.id}`);
+      setImportReport(report);
     } catch (err: any) {
       setToast({
         type: TOAST_TYPE.ERROR,
@@ -166,9 +148,9 @@ export const PagesListHeader = observer(function PagesListHeader() {
   };
 
   const handleMarkdownFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = [...(event.target.files || [])];
     event.target.value = "";
-    if (file) void handleMarkdownImport(file);
+    if (files.length) void handleMarkdownImport(files);
   };
 
   return (
@@ -180,6 +162,14 @@ export const PagesListHeader = observer(function PagesListHeader() {
         title="Create folder"
         submitLabel="Create"
         submittingLabel="Creating"
+      />
+      <MarkdownImportReportModal
+        report={importReport}
+        onClose={() => setImportReport(null)}
+        onOpenPage={(pageId) => {
+          setImportReport(null);
+          router.push(`/${workspaceSlug}/projects/${currentProjectDetails?.id}/pages/${pageId}`);
+        }}
       />
       <Header.LeftItem>
         <Breadcrumbs isLoading={loader === "init-loader"}>
@@ -216,9 +206,18 @@ export const PagesListHeader = observer(function PagesListHeader() {
           <input
             ref={markdownInputRef}
             type="file"
-            accept=".md,.markdown,text/markdown"
+            accept=".md,.markdown,.zip,text/markdown,application/zip"
+            multiple
             className="hidden"
             onChange={handleMarkdownFileChange}
+          />
+          <input
+            ref={markdownFolderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleMarkdownFileChange}
+            {...({ directory: "", webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
           />
           <Button
             variant="secondary"
@@ -240,6 +239,17 @@ export const PagesListHeader = observer(function PagesListHeader() {
           >
             <FileUp className="h-4 w-4" />
             {isImportingMarkdown ? "Importing" : "Import Markdown"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => markdownFolderInputRef.current?.click()}
+            loading={isImportingMarkdown}
+            disabled={isCreatingPage || isCreatingFolder}
+            className="flex items-center gap-1"
+          >
+            <FolderInput className="h-4 w-4" />
+            Import folder
           </Button>
           <Button variant="primary" size="lg" onClick={handleCreatePage} loading={isCreatingPage}>
             {isCreatingPage ? "Adding" : "Add page"}
