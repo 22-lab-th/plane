@@ -6,7 +6,10 @@
 
 import { observer } from "mobx-react";
 import { useParams } from "next/navigation";
+import { Folder } from "lucide-react";
+import useSWR from "swr";
 // plane imports
+import { EPageAccess } from "@plane/constants";
 import { PageIcon } from "@plane/propel/icons";
 import type { ICustomSearchSelectOption } from "@plane/types";
 import { Breadcrumbs, Header, BreadcrumbNavigationSearchDropdown } from "@plane/ui";
@@ -35,13 +38,37 @@ export const PageDetailsHeader = observer(function PageDetailsHeader() {
   const { workspaceSlug, pageId, projectId } = useParams();
   // store hooks
   const { loader } = useProject();
-  const { getPageById, getCurrentProjectPageIds } = usePageStore(storeType);
+  const { getPageById, getCurrentProjectPageIds, getFolderBreadcrumbs, fetchPageDetails } = usePageStore(storeType);
   const page = usePage({
     pageId: pageId?.toString() ?? "",
     storeType,
   });
   // derived values
   const projectPageIds = getCurrentProjectPageIds(projectId?.toString());
+
+  // ensure ancestor folders are loaded so breadcrumbs can render the full path
+  const parentId = page?.parent;
+  useSWR(
+    workspaceSlug && projectId && parentId ? `PAGE_FOLDER_ANCESTORS_${pageId}_${parentId}` : null,
+    workspaceSlug && projectId && parentId
+      ? async () => {
+          // walk up the parent chain, fetching each ancestor not yet in the store
+          const loadAncestor = async (id: string | null | undefined): Promise<void> => {
+            if (!id || getPageById(id)) return;
+            const ancestor = await fetchPageDetails(workspaceSlug.toString(), projectId.toString(), id, {
+              trackVisit: false,
+            });
+            await loadAncestor(ancestor?.parent ?? null);
+          };
+          await loadAncestor(parentId);
+        }
+      : null
+  );
+
+  const folderCrumbs = getFolderBreadcrumbs(page?.parent);
+  const pageAccessType = page?.access === EPageAccess.PRIVATE ? "private" : "public";
+  const folderHref = (id: string) =>
+    `/${workspaceSlug}/projects/${projectId}/pages?type=${pageAccessType}&folder=${id}`;
 
   const switcherOptions = projectPageIds
     .map((id) => {
@@ -77,6 +104,19 @@ export const PageDetailsHeader = observer(function PageDetailsHeader() {
                 />
               }
             />
+
+            {folderCrumbs.map((crumb) => (
+              <Breadcrumbs.Item
+                key={crumb.id}
+                component={
+                  <BreadcrumbLink
+                    label={getPageName(crumb.name)}
+                    href={crumb.id ? folderHref(crumb.id) : `/${workspaceSlug}/projects/${projectId}/pages/`}
+                    icon={<Folder className="h-4 w-4 text-tertiary" />}
+                  />
+                }
+              />
+            ))}
 
             <Breadcrumbs.Item
               component={

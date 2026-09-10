@@ -79,6 +79,7 @@ export enum EAuthenticationErrorCodes {
   GOOGLE_OAUTH_PROVIDER_ERROR = "5115",
   GITHUB_OAUTH_PROVIDER_ERROR = "5120",
   GITLAB_OAUTH_PROVIDER_ERROR = "5121",
+  SSO_AUTHENTICATION_FAILED = "5126",
   // Reset Password
   INVALID_PASSWORD_TOKEN = "5125",
   EXPIRED_PASSWORD_TOKEN = "5130",
@@ -286,6 +287,10 @@ const errorCodeMessages: {
   [EAuthenticationErrorCodes.GITLAB_OAUTH_PROVIDER_ERROR]: {
     title: `GitLab OAuth provider error`,
     message: () => `GitLab OAuth provider error. Please try again.`,
+  },
+  [EAuthenticationErrorCodes.SSO_AUTHENTICATION_FAILED]: {
+    title: `Single sign-on failed`,
+    message: () => `Single sign-on could not be completed. Please try again or contact your administrator.`,
   },
 
   // Reset Password

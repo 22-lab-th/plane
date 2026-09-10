@@ -13,6 +13,9 @@ import type {
   IInstanceConfiguration,
   IInstanceInfo,
   TPage,
+  TSSOProvider,
+  TSSOProviderPayload,
+  TSSOTestResult,
 } from "@plane/types";
 // api service
 import { APIService } from "../api.service";
@@ -137,6 +140,38 @@ export class InstanceService extends APIService {
   async disableEmail(): Promise<void> {
     return this.delete("/api/instances/configurations/disable-email-feature/")
       .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async ssoProviders(): Promise<TSSOProvider[]> {
+    return this.get("/api/instances/sso/providers/")
+      .then((response) => response.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async createSSOProvider(data: TSSOProviderPayload): Promise<TSSOProvider> {
+    return this.post("/api/instances/sso/providers/", data)
+      .then((response) => response.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async updateSSOProvider(id: string, data: Partial<TSSOProviderPayload>): Promise<TSSOProvider> {
+    return this.patch(`/api/instances/sso/providers/${id}/`, data)
+      .then((response) => response.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async testSSOProvider(id: string): Promise<TSSOTestResult> {
+    return this.post(`/api/instances/sso/providers/${id}/test/`)
+      .then((response) => response.data)
       .catch((error) => {
         throw error?.response?.data;
       });

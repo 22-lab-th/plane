@@ -135,3 +135,5 @@ from .draft import (
     DraftIssueSerializer,
     DraftIssueDetailSerializer,
 )
+
+from .bookmark import WorkspaceBookmarkGroupSerializer, WorkspaceBookmarkSerializer

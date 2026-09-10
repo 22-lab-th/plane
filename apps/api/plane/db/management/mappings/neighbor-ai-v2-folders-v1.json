@@ -1,0 +1,32 @@
+{
+  "version": "neighbor-ai-v2-folders-v1",
+  "project_id": "f08af78d-6d09-4715-9b08-5467d37eaff8",
+  "folders": [
+    { "key": "root", "name": "Neighbor AI v2", "parent": null, "sort_order": 0 },
+    { "key": "product", "name": "Product & Delivery", "parent": "root", "sort_order": 10 },
+    { "key": "business", "name": "Business", "parent": "root", "sort_order": 20 },
+    { "key": "hardware", "name": "Hardware Decisions", "parent": "root", "sort_order": 30 },
+    { "key": "presentations", "name": "Presentations", "parent": "root", "sort_order": 40 }
+  ],
+  "assignments": [
+    { "page_id": "ef8818a6-006f-4d33-a8a9-9789b3ae58cb", "folder": "root", "sort_order": 0 },
+    { "page_id": "12d9cf41-fd1d-419b-bdc8-5ff4c8f0bad5", "folder": "product", "sort_order": 10 },
+    { "page_id": "575d2d56-b720-4085-8755-a3d243aa63d0", "folder": "product", "sort_order": 20 },
+    { "page_id": "f0ef73bf-dabc-4c68-9f61-3702edd4c329", "folder": "product", "sort_order": 30 },
+    { "page_id": "d12f686a-fa9a-49d9-ba8a-be62bad367b7", "folder": "product", "sort_order": 40 },
+    { "page_id": "ca0cb04a-3a08-40bd-9bad-e57600896678", "folder": "product", "sort_order": 50 },
+    { "page_id": "3ef5c881-72fb-4889-97c7-a954af3948ab", "folder": "business", "sort_order": 10 },
+    { "page_id": "f8916f2e-dd98-416d-b3b1-d77f6f593618", "folder": "business", "sort_order": 20 },
+    { "page_id": "f84c582b-cac0-44fa-9693-1f7f131d8db7", "folder": "business", "sort_order": 30 },
+    { "page_id": "82ebc4f9-5757-4490-94b2-d19c7e823e9d", "folder": "business", "sort_order": 40 },
+    { "page_id": "a4d93f52-64a4-4bcf-a60b-dd6fc473364c", "folder": "business", "sort_order": 50 },
+    { "page_id": "41195bb3-5e84-4bda-bdda-dabebd07f433", "folder": "business", "sort_order": 60 },
+    { "page_id": "ad582812-4652-4590-be22-9d9ae4a1fb8f", "folder": "hardware", "sort_order": 10 },
+    { "page_id": "8ef24f92-743b-4d21-8231-721ab0a0e3e1", "folder": "hardware", "sort_order": 20 },
+    { "page_id": "10c26235-f417-45bf-9f0f-34f2cf97037b", "folder": "presentations", "sort_order": 10 },
+    { "page_id": "b0725d6c-792e-4bd1-86e2-f7caac7e6177", "folder": "presentations", "sort_order": 20 },
+    { "page_id": "19ba4998-d17a-412b-927f-099dda2af26e", "folder": "presentations", "sort_order": 30 },
+    { "page_id": "cf129a59-b24c-469d-ba88-fbe61dbbdd3f", "folder": "presentations", "sort_order": 40 },
+    { "page_id": "f9e8009b-1d2a-4e91-8464-7c283fc3888d", "folder": "presentations", "sort_order": 50 }
+  ]
+}

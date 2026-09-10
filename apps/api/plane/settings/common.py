@@ -44,7 +44,7 @@ if SECRET_KEY in _INSECURE_SECRET_KEYS:
         "This makes your installation vulnerable to session forgery, CSRF bypass, and "
         "password-reset token forging. Set a unique SECRET_KEY before deploying to production. "
         "Generate one with: "
-        "python3 -c \"from django.utils.crypto import get_random_secret_key; print(get_random_secret_key())\""
+        'python3 -c "from django.utils.crypto import get_random_secret_key; print(get_random_secret_key())"'
     )
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -74,10 +74,22 @@ for _cidr in _webhook_allowed_ips_raw.split(","):
 # Example: "silo,silo.namespace.svc.cluster.local,internal-api.lan"
 _webhook_allowed_hosts_raw = os.environ.get("WEBHOOK_ALLOWED_HOSTS", "")
 WEBHOOK_ALLOWED_HOSTS = [
-    _host.strip().rstrip(".").lower()
-    for _host in _webhook_allowed_hosts_raw.split(",")
-    if _host.strip()
+    _host.strip().rstrip(".").lower() for _host in _webhook_allowed_hosts_raw.split(",") if _host.strip()
 ]
+
+# OIDC IP allowlist — comma-separated IPs or CIDR ranges for explicitly trusted
+# private identity providers. Empty by default so OIDC endpoints remain public-only.
+_oidc_allowed_ips_raw = os.environ.get("OIDC_ALLOWED_IPS", "")
+OIDC_ALLOWED_IPS = []
+for _cidr in _oidc_allowed_ips_raw.split(","):
+    _cidr = _cidr.strip()
+    if not _cidr:
+        continue
+    try:
+        OIDC_ALLOWED_IPS.append(ipaddress.ip_network(_cidr, strict=False))
+    except ValueError:
+        _logger.warning("OIDC_ALLOWED_IPS: skipping invalid entry %r", _cidr)
+OIDC_CA_BUNDLE = os.environ.get("OIDC_CA_BUNDLE") or None
 
 # Webhook disallowed domains — comma-separated hostnames. Webhooks targeting
 # these domains or any of their subdomains are rejected (the request host is
@@ -85,9 +97,7 @@ WEBHOOK_ALLOWED_HOSTS = [
 # for self-hosted deployments; set to e.g. "plane.so" to block specific domains.
 _webhook_disallowed_domains_raw = os.environ.get("WEBHOOK_DISALLOWED_DOMAINS", "")
 WEBHOOK_DISALLOWED_DOMAINS = [
-    _d.strip().rstrip(".").lower()
-    for _d in _webhook_disallowed_domains_raw.split(",")
-    if _d.strip()
+    _d.strip().rstrip(".").lower() for _d in _webhook_disallowed_domains_raw.split(",") if _d.strip()
 ]
 
 # Allowed Hosts
@@ -126,6 +136,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "plane.authentication.middleware.sso.SSOEnforcementMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "crum.CurrentRequestUserMiddleware",
     "django.middleware.gzip.GZipMiddleware",
@@ -155,6 +166,11 @@ API_KEY_RATE_LIMIT = os.environ.get("API_KEY_RATE_LIMIT", "60/minute")
 
 # Django Auth Backend
 AUTHENTICATION_BACKENDS = ("django.contrib.auth.backends.ModelBackend",)  # default
+
+SSO_BREAK_GLASS_ADMIN_EMAILS = {
+    email.strip().lower() for email in os.environ.get("SSO_BREAK_GLASS_ADMIN_EMAILS", "").split(",") if email.strip()
+}
+SSO_BREAK_GLASS_SESSION_AGE = int(os.environ.get("SSO_BREAK_GLASS_SESSION_AGE", "900"))
 
 # Root Urls
 ROOT_URLCONF = "plane.urls"

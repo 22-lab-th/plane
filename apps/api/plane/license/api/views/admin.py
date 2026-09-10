@@ -8,6 +8,7 @@ import uuid
 from zxcvbn import zxcvbn
 
 # Django imports
+from django.conf import settings
 from django.http import HttpResponseRedirect
 from django.views import View
 from django.core.validators import validate_email
@@ -40,6 +41,8 @@ from plane.authentication.adapter.error import (
 )
 from plane.utils.ip_address import get_client_ip
 from plane.utils.path_validator import get_safe_redirect_url
+from plane.authentication.rate_limit import authentication_throttle_allows
+from plane.authentication.services import get_enforced_sso_provider, is_break_glass_email, record_sso_event
 
 
 class InstanceAdminEndpoint(BaseAPIView):
@@ -247,7 +250,7 @@ class InstanceAdminSignUpEndpoint(View):
                 user.last_active = timezone.now()
                 user.last_login_time = timezone.now()
                 user.last_login_ip = get_client_ip(request=request)
-                user.last_login_uagent = request.META.get("HTTP_USER_AGENT")
+                user.last_login_uagent = request.META.get("HTTP_USER_AGENT", "")
                 user.token_updated_at = timezone.now()
                 user.save()
 
@@ -271,6 +274,14 @@ class InstanceAdminSignInEndpoint(View):
 
     @invalidate_cache(path="/api/instances/", user=False)
     def post(self, request):
+        if not authentication_throttle_allows(request):
+            exc = AuthenticationException(
+                error_code=AUTHENTICATION_ERROR_CODES["RATE_LIMIT_EXCEEDED"],
+                error_message="RATE_LIMIT_EXCEEDED",
+            )
+            return HttpResponseRedirect(
+                urljoin(base_host(request=request, is_admin=True), "?" + urlencode(exc.get_error_dict()))
+            )
         # Check instance first
         instance = Instance.objects.first()
         if instance is None:
@@ -315,6 +326,16 @@ class InstanceAdminSignInEndpoint(View):
                 base_host(request=request, is_admin=True),
                 "?" + urlencode(exc.get_error_dict()),
             )
+            return HttpResponseRedirect(url)
+
+        enforced_provider = get_enforced_sso_provider()
+        if enforced_provider is not None and not is_break_glass_email(email):
+            record_sso_event(request, "break_glass_login", "denied", provider=enforced_provider)
+            exc = AuthenticationException(
+                error_code=AUTHENTICATION_ERROR_CODES["ADMIN_AUTHENTICATION_FAILED"],
+                error_message="ADMIN_AUTHENTICATION_FAILED",
+            )
+            url = urljoin(base_host(request=request, is_admin=True), "?" + urlencode(exc.get_error_dict()))
             return HttpResponseRedirect(url)
 
         # Fetch the user
@@ -366,6 +387,8 @@ class InstanceAdminSignInEndpoint(View):
 
         # Check password of the user
         if not user.check_password(password):
+            if enforced_provider is not None:
+                record_sso_event(request, "break_glass_login", "failed", provider=enforced_provider)
             exc = AuthenticationException(
                 error_code=AUTHENTICATION_ERROR_CODES["ADMIN_AUTHENTICATION_FAILED"],
                 error_message="ADMIN_AUTHENTICATION_FAILED",
@@ -379,6 +402,8 @@ class InstanceAdminSignInEndpoint(View):
 
         # Check if the user is an instance admin
         if not InstanceAdmin.objects.filter(instance=instance, user=user):
+            if enforced_provider is not None:
+                record_sso_event(request, "break_glass_login", "failed", provider=enforced_provider)
             exc = AuthenticationException(
                 error_code=AUTHENTICATION_ERROR_CODES["ADMIN_AUTHENTICATION_FAILED"],
                 error_message="ADMIN_AUTHENTICATION_FAILED",
@@ -394,12 +419,15 @@ class InstanceAdminSignInEndpoint(View):
         user.last_active = timezone.now()
         user.last_login_time = timezone.now()
         user.last_login_ip = get_client_ip(request=request)
-        user.last_login_uagent = request.META.get("HTTP_USER_AGENT")
+        user.last_login_uagent = request.META.get("HTTP_USER_AGENT", "")
         user.token_updated_at = timezone.now()
         user.save()
 
         # get tokens for user
         user_login(request=request, user=user, is_admin=True)
+        if enforced_provider is not None:
+            request.session.set_expiry(settings.SSO_BREAK_GLASS_SESSION_AGE)
+            record_sso_event(request, "break_glass_login", "success", provider=enforced_provider, actor=user)
         url = urljoin(base_host(request=request, is_admin=True), "general/")
         return HttpResponseRedirect(url)
 

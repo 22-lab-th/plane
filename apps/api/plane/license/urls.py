@@ -18,6 +18,9 @@ from plane.license.api.views import (
     InstanceAdminUserSessionEndpoint,
     InstanceWorkSpaceAvailabilityCheckEndpoint,
     InstanceWorkSpaceEndpoint,
+    SSOProviderDetailEndpoint,
+    SSOProviderEndpoint,
+    SSOProviderTestEndpoint,
 )
 
 urlpatterns = [
@@ -71,4 +74,7 @@ urlpatterns = [
         name="instance-workspace-availability",
     ),
     path("workspaces/", InstanceWorkSpaceEndpoint.as_view(), name="instance-workspace"),
+    path("sso/providers/", SSOProviderEndpoint.as_view(), name="sso-providers"),
+    path("sso/providers/<uuid:pk>/", SSOProviderDetailEndpoint.as_view(), name="sso-provider-detail"),
+    path("sso/providers/<uuid:pk>/test/", SSOProviderTestEndpoint.as_view(), name="sso-provider-test"),
 ]

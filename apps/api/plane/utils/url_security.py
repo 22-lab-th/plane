@@ -67,9 +67,7 @@ class PinnedIPAdapter(HTTPAdapter):
     def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
         # requests >= 2.32 calls this (it replaced get_connection() as part of
         # the CVE-2024-35195 fix). requests is pinned to 2.33 in base.txt.
-        host_params, pool_kwargs = self.build_connection_pool_key_attributes(
-            request, verify, cert
-        )
+        host_params, pool_kwargs = self.build_connection_pool_key_attributes(request, verify, cert)
         # server_hostname is a recognised urllib3 SSL pool-key field, so pools
         # for different hostnames don't collide.
         pool_kwargs["server_hostname"] = self._server_hostname
@@ -100,7 +98,7 @@ def _split_target(url):
     return scheme, hostname, port, path, auth
 
 
-def _request_to_ip(method, scheme, hostname, ip, port, path, *, headers, timeout, auth=None, **kwargs):
+def _request_to_ip(method, scheme, hostname, ip, port, path, *, headers, timeout, verify=True, auth=None, **kwargs):
     """Issue a single request whose socket is pinned to ``ip``.
 
     With ``stream=True`` the session is kept open until the caller closes the
@@ -130,7 +128,7 @@ def _request_to_ip(method, scheme, hostname, ip, port, path, *, headers, timeout
             headers=request_headers,
             timeout=timeout,
             allow_redirects=False,
-            verify=True,
+            verify=verify,
             proxies=_NO_PROXIES,
             auth=auth,
             **kwargs,
@@ -157,7 +155,7 @@ def _request_to_ip(method, scheme, hostname, ip, port, path, *, headers, timeout
     return response
 
 
-def _fetch_validated_hop(method, url, *, allowed_ips, allowed_hosts, headers, timeout, **kwargs):
+def _fetch_validated_hop(method, url, *, allowed_ips, allowed_hosts, headers, timeout, verify=True, **kwargs):
     """
     Resolve ``url``'s host, validate it, then issue a single (non-redirecting)
     request pinned to a resolved IP. Returns ``(response, normalized_host)``.
@@ -170,9 +168,7 @@ def _fetch_validated_hop(method, url, *, allowed_ips, allowed_hosts, headers, ti
     scheme, hostname, port, path, auth = _split_target(url)
 
     normalized_host = hostname.rstrip(".").lower()
-    trusted = bool(allowed_hosts) and normalized_host in {
-        (h or "").rstrip(".").lower() for h in allowed_hosts if h
-    }
+    trusted = bool(allowed_hosts) and normalized_host in {(h or "").rstrip(".").lower() for h in allowed_hosts if h}
 
     # Resolve once (and validate unless the host is operator-trusted), then pin
     # the connection to a resolved IP literal — urllib3 performs no second DNS
@@ -183,8 +179,17 @@ def _fetch_validated_hop(method, url, *, allowed_ips, allowed_hosts, headers, ti
     for ip in ips:
         try:
             response = _request_to_ip(
-                method, scheme, hostname, ip, port, path,
-                headers=headers, timeout=timeout, auth=auth, **kwargs,
+                method,
+                scheme,
+                hostname,
+                ip,
+                port,
+                path,
+                headers=headers,
+                timeout=timeout,
+                verify=verify,
+                auth=auth,
+                **kwargs,
             )
             return response, normalized_host
         except requests.RequestException as exc:
@@ -203,6 +208,7 @@ def pinned_fetch(
     allowed_hosts=None,
     headers=None,
     timeout=30,
+    verify=True,
     **kwargs,
 ):
     """
@@ -215,9 +221,14 @@ def pinned_fetch(
         requests.RequestException: on network/transport errors.
     """
     response, _ = _fetch_validated_hop(
-        method, url,
-        allowed_ips=allowed_ips, allowed_hosts=allowed_hosts,
-        headers=headers, timeout=timeout, **kwargs,
+        method,
+        url,
+        allowed_ips=allowed_ips,
+        allowed_hosts=allowed_hosts,
+        headers=headers,
+        timeout=timeout,
+        verify=verify,
+        **kwargs,
     )
     return response
 
@@ -230,6 +241,7 @@ def pinned_fetch_following_redirects(
     allowed_hosts=None,
     headers=None,
     timeout=30,
+    verify=True,
     max_redirects=5,
     **kwargs,
 ):
@@ -247,9 +259,14 @@ def pinned_fetch_following_redirects(
     redirects = 0
     while True:
         response, _ = _fetch_validated_hop(
-            method, current_url,
-            allowed_ips=allowed_ips, allowed_hosts=allowed_hosts,
-            headers=headers, timeout=timeout, **kwargs,
+            method,
+            current_url,
+            allowed_ips=allowed_ips,
+            allowed_hosts=allowed_hosts,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            **kwargs,
         )
 
         if response.status_code not in _REDIRECT_STATUSES:
@@ -261,9 +278,7 @@ def pinned_fetch_following_redirects(
 
         if redirects >= max_redirects:
             response.close()
-            raise requests.TooManyRedirects(
-                f"Exceeded {max_redirects} redirects for URL: {url}"
-            )
+            raise requests.TooManyRedirects(f"Exceeded {max_redirects} redirects for URL: {url}")
         redirects += 1
         # Release the intermediate hop's connection/session before following.
         response.close()

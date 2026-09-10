@@ -34,3 +34,14 @@ Prereq (once): `./setup.sh` — generates `apps/api/.env` from `.env.example`.
 - Teardown: `docker compose -f docker-compose-test.yml down -v`
 
 See `apps/api/tests/RUNNING_TESTS.md` for the full walkthrough and troubleshooting; see `apps/api/tests/TESTING_GUIDE.md` for test conventions and fixtures.
+
+## BMAD Auto
+
+- Project configuration: `bmad-auto/project.yaml`
+- Workflow state: `bmad-auto/state.yaml`
+- Generated artifacts: `docs/auto/`
+- Supported intents: `bmad-auto:status`, `bmad-auto:next`, `bmad-auto:plan`, `bmad-auto:adopt`, `bmad-auto:dev`
+- Resume from `bmad-auto/state.yaml`; state on disk is authoritative.
+- `bmad-orchestrator` owns evidence-based planning, architecture, story, review, and delivery approvals through completion.
+- It may reopen incomplete work but may not waive required security controls, tests, traceability, or unresolved critical/high findings.
+- Production deployment, real credentials or payments, spending, destructive external actions, external communications, and material contract conflicts remain human decisions.

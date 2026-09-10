@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plane SSO — Enforcement mockup</title>
+    <style>
+      :root {
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        color: #171717;
+        background: #ececef;
+        --panel: #fff;
+        --muted: #737373;
+        --line: #e5e5e5;
+        --accent: #5b5bd6;
+        --warn: #9a6700;
+        --warnbg: #fff8c5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      main {
+        width: min(100%, 620px);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: 0 24px 80px #0002;
+      }
+      header {
+        padding: 22px 24px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      h1 {
+        margin: 0 0 7px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .body {
+        padding: 22px 24px;
+      }
+      .provider {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin-bottom: 18px;
+      }
+      .provider strong,
+      .provider span {
+        display: block;
+      }
+      .provider span {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 3px;
+      }
+      .good {
+        color: #16803c;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .warning {
+        background: var(--warnbg);
+        color: #5f4500;
+        border: 1px solid #e6d36a;
+        border-radius: 8px;
+        padding: 14px;
+        margin: 16px 0;
+        line-height: 1.5;
+        font-size: 13px;
+      }
+      ul {
+        margin: 12px 0 20px;
+        padding-left: 20px;
+        line-height: 1.7;
+        font-size: 13px;
+      }
+      .confirm {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px;
+        background: #f7f7f8;
+        border-radius: 8px;
+        font-size: 13px;
+      }
+      .confirm input {
+        margin-top: 2px;
+      }
+      footer {
+        padding: 16px 24px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        justify-content: flex-end;
+        gap: 9px;
+      }
+      button {
+        height: 40px;
+        padding: 0 16px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: white;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .danger {
+        background: #c9372c;
+        border-color: #c9372c;
+        color: white;
+      }
+      button:focus-visible,
+      input:focus-visible {
+        outline: 3px solid #5b5bd655;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main role="dialog" aria-modal="true" aria-labelledby="title">
+      <header>
+        <h1 id="title">Enforce SSO for this instance?</h1>
+        <p>Members will be required to authenticate with Acme SSO.</p>
+      </header>
+      <div class="body">
+        <div class="provider">
+          <div><strong>Acme SSO</strong><span>OpenID Connect · login.example.com</span></div>
+          <div class="good">✓ Tested</div>
+        </div>
+        <div class="warning">
+          <strong>Review recovery access first.</strong> If your identity provider is unavailable, only approved
+          break-glass administrators can access God Mode.
+        </div>
+        <ul>
+          <li>Password, magic-code, Google, GitHub, GitLab, and Gitea sign-in will be blocked by the API.</li>
+          <li>Existing sessions remain active until they expire or are revoked.</li>
+          <li>Break-glass access is rate-limited and recorded in the audit log.</li>
+          <li>You can disable enforcement without deleting provider or identity records.</li>
+        </ul>
+        <label class="confirm"
+          ><input type="checkbox" />
+          <span>I tested SSO in this browser and verified the documented break-glass administrator access.</span></label
+        >
+      </div>
+      <footer><button type="button">Cancel</button><button class="danger" type="button">Enforce SSO</button></footer>
+    </main>
+  </body>
+</html>

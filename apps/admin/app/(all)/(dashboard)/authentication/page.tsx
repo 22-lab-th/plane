@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { useTheme } from "next-themes";
+import Link from "next/link";
+import { KeyRound } from "lucide-react";
 import useSWR from "swr";
 // plane internal packages
 import { Switch } from "@makeplane/propel/components/switch";
@@ -158,6 +160,18 @@ const InstanceAuthenticationPage = observer(function InstanceAuthenticationPage(
               unavailable={method.unavailable}
             />
           ))}
+          <Link
+            href="/authentication/sso"
+            className="flex w-full items-center gap-4 rounded-lg border border-subtle bg-layer-2 px-4 py-3"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-layer-1">
+              <KeyRound aria-hidden="true" className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-13 font-medium text-primary">OpenID Connect SSO</span>
+              <span className="block text-11 text-tertiary">Configure, test, and enforce your identity provider.</span>
+            </span>
+          </Link>
         </div>
       ) : (
         <Skeleton className="space-y-10">

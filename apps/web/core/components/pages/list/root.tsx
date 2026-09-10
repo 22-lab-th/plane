@@ -5,6 +5,7 @@
  */
 
 import { observer } from "mobx-react";
+import { useSearchParams } from "next/navigation";
 // types
 import type { TPageNavigationTabs } from "@plane/types";
 // components
@@ -14,6 +15,7 @@ import type { EPageStoreType } from "@/hooks/store";
 import { usePageStore } from "@/hooks/store";
 // local imports
 import { PageListBlock } from "./block";
+import { PageMoveOutDropZone } from "./move-out-drop-zone";
 
 type TPagesListRoot = {
   pageType: TPageNavigationTabs;
@@ -22,14 +24,18 @@ type TPagesListRoot = {
 
 export const PagesListRoot = observer(function PagesListRoot(props: TPagesListRoot) {
   const { pageType, storeType } = props;
+  const searchParams = useSearchParams();
+  const folderId = searchParams.get("folder");
   // store hooks
   const { getCurrentProjectFilteredPageIdsByTab } = usePageStore(storeType);
   // derived values
-  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType);
+  const filteredPageIds = getCurrentProjectFilteredPageIdsByTab(pageType, folderId);
+  const showMoveOutZone = !!folderId && pageType !== "archived";
 
   if (!filteredPageIds) return <></>;
   return (
     <ListLayout>
+      {showMoveOutZone && <PageMoveOutDropZone storeType={storeType} folderId={folderId} />}
       {filteredPageIds.map((pageId) => (
         <PageListBlock key={pageId} pageId={pageId} storeType={storeType} />
       ))}
