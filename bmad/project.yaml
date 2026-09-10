@@ -1,0 +1,56 @@
+# BMAD Project Configuration
+
+project:
+  name: "Plane SSO Authentication"
+  type: "web-app"  # web-app, mobile-app, api, game, library, cli, other
+  level: 3    # 0-4
+  description: "Add secure instance-wide generic OIDC SSO with administration, enforcement, recovery, and tests"
+
+paths:
+  output_folder: "docs"
+  stories_folder: "docs/stories"
+  status_file: "bmad/workflow-status.yaml"
+  sprint_file: "bmad/sprint-status.yaml"
+
+language:
+  communication_language: "Thai"
+  document_output_language: "English"
+
+workflow:
+  phase_1_analysis:
+    product_brief: "required"  # required, recommended, optional
+    research: "optional"
+    brainstorm: "optional"
+
+  phase_2_planning:
+    prd: "required"
+    tech_spec: "optional"
+    ux_design: "recommended"
+
+  phase_3_solutioning:
+    architecture: "required"
+    gate_check: "recommended"
+
+  phase_4_implementation:
+    sprint_planning: "required"
+    stories: "required"
+
+metadata:
+  created: "2026-09-10T07:22:27Z"
+  bmad_version: "6.0.0"
+  last_updated: "2026-09-10T07:22:27Z"
+
+governance:
+  approval_owner: "bmad-orchestrator"
+  delegated_by_user_at: "2026-09-10T14:22:20+07:00"
+  approval_mode: "evidence-based-autonomous"
+  development_contract: "docs/auto/plan.md"
+  architecture_contract: "docs/auto/architecture.md"
+  decision_log: "docs/auto/decisions.md"
+  mandatory_human_escalations:
+    - production deploys
+    - spending money
+    - deleting user data
+    - external communications
+    - credentials or payment handling
+    - material contract conflicts

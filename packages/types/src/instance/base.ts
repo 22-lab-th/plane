@@ -53,6 +53,12 @@ export interface IInstanceConfig {
   is_gitea_enabled: boolean;
   is_magic_login_enabled: boolean;
   is_email_password_enabled: boolean;
+  sso_providers: Array<{
+    name: string;
+    slug: string;
+    is_enforced: boolean;
+  }>;
+  is_sso_enforced: boolean;
   github_app_name: string | undefined;
   slack_client_id: string | undefined;
   posthog_api_key: string | undefined;

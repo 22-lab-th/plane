@@ -1,0 +1,65 @@
+# BMAD Sprint Status
+# Tracks sprint progress and story completion
+
+project:
+  name: "Plane SSO Authentication"
+  level: 3
+
+sprint:
+  number: 1
+  start_date: "2026-09-10"
+  end_date: "2026-09-24"
+  goal: "Deliver secure generic OIDC SSO end to end"
+  capacity_points: 63
+  committed_points: 63
+
+velocity:
+  current_sprint: 63
+  rolling_average: 63
+  history: []
+
+epics:
+  - id: E1
+    title: "Authentication foundation"
+    story_ids: [STORY-001, STORY-002]
+  - id: E2
+    title: "OIDC protocol and identity policy"
+    story_ids: [STORY-003, STORY-004, STORY-005]
+  - id: E3
+    title: "Product integration and access policy"
+    story_ids: [STORY-006, STORY-007, STORY-008]
+  - id: E4
+    title: "Operations and delivery"
+    story_ids: [STORY-009, STORY-010]
+
+stories:
+  - { id: STORY-001, title: "Stabilize the existing OAuth baseline", points: 3, status: done, depends_on: [] }
+  - { id: STORY-002, title: "Manage structured SSO providers and protected secrets", points: 8, status: done, depends_on: [] }
+  - { id: STORY-003, title: "Discover and test an OIDC provider safely", points: 5, status: done, depends_on: [STORY-002] }
+  - { id: STORY-004, title: "Sign in a pre-linked user through validated OIDC", points: 8, status: done, depends_on: [STORY-002, STORY-003] }
+  - { id: STORY-005, title: "Link and provision SSO identities safely", points: 8, status: done, depends_on: [STORY-004] }
+  - { id: STORY-006, title: "Offer OIDC SSO on the Plane sign-in screen", points: 5, status: done, depends_on: [STORY-004, STORY-005] }
+  - { id: STORY-007, title: "Configure and test OIDC from God Mode", points: 8, status: done, depends_on: [STORY-002, STORY-003] }
+  - { id: STORY-008, title: "Enforce SSO with protected administrator recovery", points: 8, status: done, depends_on: [STORY-006, STORY-007] }
+  - { id: STORY-009, title: "Complete logout, audit, and operational visibility", points: 5, status: done, depends_on: [STORY-008] }
+  - { id: STORY-010, title: "Prove compatibility and release readiness", points: 5, status: done, depends_on: [STORY-001, STORY-002, STORY-003, STORY-004, STORY-005, STORY-006, STORY-007, STORY-008, STORY-009] }
+
+release_backlog:
+  sprint_2:
+    goal: "Integrate SSO into Plane and complete enforcement, recovery, operations, and delivery evidence"
+    points: 31
+    story_ids: [STORY-006, STORY-007, STORY-008, STORY-009, STORY-010]
+    status: completed
+
+burndown: []
+
+metrics:
+  total_stories: 10
+  completed_stories: 10
+  in_progress_stories: 0
+  blocked_stories: 0
+  total_points: 63
+  completed_points: 63
+  completion_percentage: 100
+
+last_updated: "2026-09-10T16:30:00+07:00"

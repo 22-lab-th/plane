@@ -61,7 +61,7 @@ class SessionMiddleware(MiddlewareMixin):
                 else:
                     # Use different max_age based on whether it's an admin cookie
                     if is_admin_path:
-                        max_age = settings.ADMIN_SESSION_COOKIE_AGE
+                        max_age = min(settings.ADMIN_SESSION_COOKIE_AGE, request.session.get_expiry_age())
                     else:
                         max_age = request.session.get_expiry_age()
 

@@ -44,9 +44,13 @@ from .views import (
     GiteaOauthInitiateEndpoint,
     GiteaCallbackSpaceEndpoint,
     GiteaOauthInitiateSpaceEndpoint,
+    SSOCallbackEndpoint,
+    SSOInitiateEndpoint,
 )
 
 urlpatterns = [
+    path("sso/callback/", SSOCallbackEndpoint.as_view(), name="sso-callback"),
+    path("sso/<slug:provider_slug>/", SSOInitiateEndpoint.as_view(), name="sso-initiate"),
     # credentials
     path("sign-in/", SignInAuthEndpoint.as_view(), name="sign-in"),
     path("sign-up/", SignUpAuthEndpoint.as_view(), name="sign-up"),

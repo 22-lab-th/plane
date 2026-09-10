@@ -1,0 +1,50 @@
+project:
+  name: "Plane SSO Authentication"
+  type: "web-app"
+  created: "2026-09-10"
+  existing_codebase: true
+
+complexity:
+  tier: "complex"
+  rationale: "Cross-cutting authentication feature spanning Django models and endpoints, three frontend packages, data migrations, an external OIDC integration, and security-critical tests."
+
+engine: "graph"
+
+runtime: "codex"
+
+language:
+  communication_language: "Thai"
+  document_output_language: "English"
+
+stack:
+  decided_by: "human"
+  summary: "Django 5.2 + Django REST Framework API, PostgreSQL, Redis, React Router 7, React 18, TypeScript 5.8, MobX, pnpm and Turborepo"
+
+paths:
+  state: "bmad-auto/state.yaml"
+  artifacts: "docs/auto"
+  stories: "docs/stories"
+  research: "docs/auto/research"
+  mockups: "docs/auto/ux/mockups"
+
+escalation:
+  always_ask:
+    - production deploys
+    - spending money
+    - deleting user data
+    - external communications
+    - credentials or payment handling
+  extra: []
+
+governance:
+  approval_owner: "bmad-orchestrator"
+  delegated_by_user_at: "2026-09-10T14:22:20+07:00"
+  mode: "evidence-based-autonomous"
+  approval_record: "docs/auto/decisions.md#d-002--delegate-workflow-gate-approval-to-bmad-orchestrator"
+  human_escalations:
+    - production deploys
+    - spending money
+    - deleting user data
+    - external communications
+    - credentials or payment handling
+    - material conflicts with the development contract

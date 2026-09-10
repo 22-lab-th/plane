@@ -29,6 +29,7 @@ catalog:
   "@hocuspocus/server": "2.15.2"
   "@hocuspocus/transformer": "2.15.2"
   "@hypermod/utils": "^0.7.1"
+  "@playwright/test": "^1.63.0"
   "@popperjs/core": "^2.11.8"
   "@radix-ui/react-scroll-area": "^1.2.3"
   "@react-pdf/renderer": "^4.3.0"
@@ -253,10 +254,10 @@ allowBuilds:
   sharp: false
 
 minimumReleaseAgeExclude:
-  - '@storybook/addon-docs@10.4.6'
-  - '@storybook/builder-vite@10.4.6'
-  - '@storybook/csf-plugin@10.4.6'
-  - '@storybook/react-dom-shim@10.4.6'
-  - '@storybook/react-vite@10.4.6'
-  - '@storybook/react@10.4.6'
+  - "@storybook/addon-docs@10.4.6"
+  - "@storybook/builder-vite@10.4.6"
+  - "@storybook/csf-plugin@10.4.6"
+  - "@storybook/react-dom-shim@10.4.6"
+  - "@storybook/react-vite@10.4.6"
+  - "@storybook/react@10.4.6"
   - storybook@10.4.6

@@ -84,3 +84,39 @@ export type TOAuthConfigs = {
 };
 
 export type TCoreLoginMediums = "email" | "magic-code" | "github" | "gitlab" | "google" | "gitea";
+
+export type TSSOProvider = {
+  id: string;
+  name: string;
+  slug: string;
+  protocol: "oidc";
+  issuer_url: string;
+  client_id: string;
+  client_secret_configured: boolean;
+  scopes: string[];
+  claim_mappings: Record<string, string>;
+  allowed_email_domains: string[];
+  allowed_groups: string[];
+  jit_provisioning_enabled: boolean;
+  allow_verified_email_auto_link: boolean;
+  is_enabled: boolean;
+  is_enforced: boolean;
+  configuration_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TSSOProviderPayload = Omit<
+  TSSOProvider,
+  "id" | "client_secret_configured" | "configuration_tested_at" | "created_at" | "updated_at"
+> & {
+  client_secret?: string;
+};
+
+export type TSSOTestResult = {
+  status: "passed" | "failed";
+  issuer?: string;
+  configuration_tested_at?: string;
+  code?: string;
+  error?: string;
+};

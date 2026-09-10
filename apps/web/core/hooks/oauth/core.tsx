@@ -7,6 +7,7 @@
 // plane imports
 import { useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
+import { KeyRound } from "lucide-react";
 import { API_BASE_URL } from "@plane/constants";
 import type { TOAuthConfigs, TOAuthOption } from "@plane/types";
 // assets
@@ -33,9 +34,20 @@ export const useCoreOAuthConfig = (oauthActionText: string): TOAuthConfigs => {
       (config?.is_google_enabled ||
         config?.is_github_enabled ||
         config?.is_gitlab_enabled ||
-        config?.is_gitea_enabled)) ||
+        config?.is_gitea_enabled ||
+        config?.sso_providers?.length > 0)) ||
     false;
-  const oAuthOptions: TOAuthOption[] = [
+  const nextPathQuery = next_path ? `?${new URLSearchParams({ next_path }).toString()}` : "";
+  const ssoOptions: TOAuthOption[] = (config?.sso_providers ?? []).map((provider) => ({
+    id: `sso-${provider.slug}`,
+    text: `${oauthActionText} with ${provider.name}`,
+    icon: <KeyRound aria-hidden="true" height={18} width={18} />,
+    onClick: () => {
+      window.location.assign(`${API_BASE_URL}/auth/sso/${encodeURIComponent(provider.slug)}/${nextPathQuery}`);
+    },
+    enabled: true,
+  }));
+  const coreOAuthOptions: TOAuthOption[] = [
     {
       id: "google",
       text: `${oauthActionText} with Google`,
@@ -80,6 +92,7 @@ export const useCoreOAuthConfig = (oauthActionText: string): TOAuthConfigs => {
       enabled: config?.is_gitea_enabled,
     },
   ];
+  const oAuthOptions = config?.is_sso_enforced ? ssoOptions : [...ssoOptions, ...coreOAuthOptions];
 
   return {
     isOAuthEnabled,
