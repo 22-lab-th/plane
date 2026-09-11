@@ -1,0 +1,11 @@
+[
+  "backend-page-folder-contract-tests",
+  "backend-page-folder-implementation",
+  "frontend-page-folder-ui",
+  "public-api-page-folder-support",
+  "mcp-page-folder-support",
+  "local-verification",
+  "production-backup",
+  "production-deploy",
+  "production-data-migration-and-smoke-test"
+]
