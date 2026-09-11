@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 
+from django.conf import settings
+
 from plane.license.utils.instance_value import get_configuration_value
 
 
@@ -39,6 +41,16 @@ def has_normal_authentication_method():
         github,
         gitlab,
         gitea,
+        google_client_id,
+        google_client_secret,
+        github_client_id,
+        github_client_secret,
+        gitlab_client_id,
+        gitlab_client_secret,
+        gitlab_host,
+        gitea_client_id,
+        gitea_client_secret,
+        gitea_host,
     ) = get_configuration_value(
         [
             {"key": "ENABLE_EMAIL_PASSWORD", "default": os.environ.get("ENABLE_EMAIL_PASSWORD", "1")},
@@ -48,10 +60,45 @@ def has_normal_authentication_method():
             {"key": "IS_GITHUB_ENABLED", "default": os.environ.get("IS_GITHUB_ENABLED", "0")},
             {"key": "IS_GITLAB_ENABLED", "default": os.environ.get("IS_GITLAB_ENABLED", "0")},
             {"key": "IS_GITEA_ENABLED", "default": os.environ.get("IS_GITEA_ENABLED", "0")},
+            {"key": "GOOGLE_CLIENT_ID", "default": os.environ.get("GOOGLE_CLIENT_ID")},
+            {"key": "GOOGLE_CLIENT_SECRET", "default": os.environ.get("GOOGLE_CLIENT_SECRET")},
+            {"key": "GITHUB_CLIENT_ID", "default": os.environ.get("GITHUB_CLIENT_ID")},
+            {"key": "GITHUB_CLIENT_SECRET", "default": os.environ.get("GITHUB_CLIENT_SECRET")},
+            {"key": "GITLAB_CLIENT_ID", "default": os.environ.get("GITLAB_CLIENT_ID")},
+            {"key": "GITLAB_CLIENT_SECRET", "default": os.environ.get("GITLAB_CLIENT_SECRET")},
+            {"key": "GITLAB_HOST", "default": os.environ.get("GITLAB_HOST", "https://gitlab.com")},
+            {"key": "GITEA_CLIENT_ID", "default": os.environ.get("GITEA_CLIENT_ID")},
+            {"key": "GITEA_CLIENT_SECRET", "default": os.environ.get("GITEA_CLIENT_SECRET")},
+            {"key": "GITEA_HOST", "default": os.environ.get("GITEA_HOST")},
         ]
     )
-    return (
-        email_password == "1"
-        or (magic_link == "1" and bool(email_host))
-        or any(value == "1" for value in (google, github, gitlab, gitea))
+    oauth_ready = any(
+        enabled == "1" and bool(client_id) and bool(client_secret) and (host is None or bool(host))
+        for enabled, client_id, client_secret, host in (
+            (google, google_client_id, google_client_secret, None),
+            (github, github_client_id, github_client_secret, None),
+            (gitlab, gitlab_client_id, gitlab_client_secret, gitlab_host),
+            (gitea, gitea_client_id, gitea_client_secret, gitea_host),
+        )
+    )
+    return email_password == "1" or (magic_link == "1" and bool(email_host)) or oauth_ready
+
+
+def has_usable_sso_authentication():
+    if not settings.ENABLE_OIDC_SSO:
+        return False
+    from plane.license.models import SSOProvider
+
+    return any(
+        is_sso_configuration_ready(provider)
+        for provider in SSOProvider.objects.filter(is_enabled=True).only(
+            "protocol",
+            "issuer_url",
+            "client_id",
+            "client_secret_encrypted",
+            "scopes",
+            "claim_mappings",
+            "configuration_tested_at",
+            "configuration_fingerprint",
+        )
     )

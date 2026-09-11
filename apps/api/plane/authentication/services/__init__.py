@@ -4,6 +4,7 @@ from .sso_audit import record_sso_event
 from .sso_readiness import (
     get_sso_configuration_fingerprint,
     has_normal_authentication_method,
+    has_usable_sso_authentication,
     is_sso_configuration_ready,
 )
 
@@ -16,5 +17,6 @@ __all__ = [
     "record_sso_event",
     "get_sso_configuration_fingerprint",
     "has_normal_authentication_method",
+    "has_usable_sso_authentication",
     "is_sso_configuration_ready",
 ]

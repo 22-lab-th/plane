@@ -170,7 +170,7 @@ export class InstanceService extends APIService {
       });
   }
 
-  async testSSOProvider(id: string): Promise<TSSOTestResult> {
+  async testSSOMetadata(id: string): Promise<TSSOTestResult> {
     return this.post(`/api/instances/sso/providers/${id}/test/`)
       .then((response) => response.data)
       .catch((error) => {

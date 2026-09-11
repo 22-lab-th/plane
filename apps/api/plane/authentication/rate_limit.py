@@ -107,3 +107,8 @@ class EmailVerificationThrottle(UserRateThrottle):
             )
         except AuthenticationException as e:
             return Response(e.get_error_dict(), status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class SSORecoveryTestThrottle(UserRateThrottle):
+    rate = os.environ.get("SSO_RECOVERY_TEST_RATE_LIMIT", "5/minute")
+    scope = "sso_recovery_test"

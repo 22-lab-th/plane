@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from plane.license.api.serializers import SSOProviderSerializer
 from plane.license.models import Instance, InstanceAdmin, SSOProvider
 from plane.authentication.provider.oidc import OIDCConfigurationError, OIDCProviderClient
+from plane.authentication.rate_limit import SSORecoveryTestThrottle
 from plane.authentication.services import (
     get_sso_configuration_fingerprint,
     is_break_glass_email,
@@ -55,6 +56,8 @@ class SSOProviderEndpoint(BaseAPIView):
 
     @invalidate_cache(path="/api/instances/", user=False)
     def post(self, request):
+        if not settings.ENABLE_OIDC_SSO:
+            return Response({"error": "OIDC SSO is disabled for this deployment."}, status=status.HTTP_409_CONFLICT)
         instance = Instance.objects.first()
         if instance is None:
             return Response({"error": "Instance is not configured"}, status=status.HTTP_400_BAD_REQUEST)
@@ -74,6 +77,8 @@ class SSOProviderDetailEndpoint(BaseAPIView):
 
     @invalidate_cache(path="/api/instances/", user=False)
     def patch(self, request, pk):
+        if not settings.ENABLE_OIDC_SSO:
+            return Response({"error": "OIDC SSO is disabled for this deployment."}, status=status.HTTP_409_CONFLICT)
         with transaction.atomic():
             provider = SSOProvider.objects.select_for_update().get(pk=pk)
             was_enabled = provider.is_enabled
@@ -90,23 +95,26 @@ class SSOProviderDetailEndpoint(BaseAPIView):
                 )
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             serializer.save()
-        event = "provider_updated"
+        events = []
         if was_enforced != serializer.instance.is_enforced:
-            event = "provider_enforced" if serializer.instance.is_enforced else "provider_unenforced"
+            events.append("provider_enforced" if serializer.instance.is_enforced else "provider_unenforced")
         if was_enabled != serializer.instance.is_enabled:
-            event = "provider_enabled" if serializer.instance.is_enabled else "provider_disabled"
-        record_sso_event(
-            request,
-            event,
-            "success",
-            provider=serializer.instance,
-            actor=request.user,
-            metadata={"is_enforced": serializer.instance.is_enforced},
-        )
+            events.append("provider_enabled" if serializer.instance.is_enabled else "provider_disabled")
+        for event in events or ["provider_updated"]:
+            record_sso_event(
+                request,
+                event,
+                "success",
+                provider=serializer.instance,
+                actor=request.user,
+                metadata={"is_enforced": serializer.instance.is_enforced},
+            )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @invalidate_cache(path="/api/instances/", user=False)
     def delete(self, request, pk):
+        if not settings.ENABLE_OIDC_SSO:
+            return Response({"error": "OIDC SSO is disabled for this deployment."}, status=status.HTTP_409_CONFLICT)
         provider = self.get_object(pk)
         if provider.is_enabled or provider.is_enforced:
             record_sso_event(request, "provider_delete", "denied", provider=provider, actor=request.user)
@@ -259,6 +267,8 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
 
 
 class SSOProviderRecoveryTestEndpoint(BaseAPIView):
+    throttle_classes = [SSORecoveryTestThrottle]
+
     @invalidate_cache(path="/api/instances/", user=False)
     def post(self, request, pk):
         if not settings.ENABLE_OIDC_SSO:

@@ -15,6 +15,8 @@ from rest_framework.response import Response
 
 def generate_cache_key(custom_path, auth_header=None):
     """Generate a cache key with the given params"""
+    if custom_path == "/api/instances/":
+        custom_path = f"{custom_path}:oidc:{int(getattr(settings, 'ENABLE_OIDC_SSO', False))}"
     if auth_header:
         key_data = f"{custom_path}:{auth_header}"
     else:

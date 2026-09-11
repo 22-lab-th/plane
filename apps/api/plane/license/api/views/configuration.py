@@ -13,6 +13,7 @@ from smtplib import (
 
 # Django imports
 from django.core.mail import BadHeaderError, EmailMultiAlternatives, get_connection
+from django.db import transaction
 from django.db.models import Q, Case, When, Value
 
 # Third party imports
@@ -27,6 +28,15 @@ from plane.license.api.serializers import InstanceConfigurationSerializer
 from plane.license.utils.encryption import encrypt_data
 from plane.utils.cache import cache_response, invalidate_cache
 from plane.license.utils.instance_value import get_email_configuration
+from plane.authentication.services import (
+    has_normal_authentication_method,
+    has_usable_sso_authentication,
+    record_sso_event,
+)
+
+
+def _authentication_remains_available():
+    return has_normal_authentication_method() or has_usable_sso_authentication()
 
 
 class InstanceConfigurationEndpoint(BaseAPIView):
@@ -41,19 +51,41 @@ class InstanceConfigurationEndpoint(BaseAPIView):
     @invalidate_cache(path="/api/instances/configurations/", user=False)
     @invalidate_cache(path="/api/instances/", user=False)
     def patch(self, request):
-        configurations = InstanceConfiguration.objects.filter(key__in=request.data.keys())
+        denied = False
+        with transaction.atomic():
+            configurations = InstanceConfiguration.objects.select_for_update().filter(key__in=request.data.keys())
 
-        bulk_configurations = []
-        for configuration in configurations:
-            raw_value = request.data.get(configuration.key, configuration.value)
-            value = "" if raw_value is None else str(raw_value).strip()
-            if configuration.is_encrypted:
-                configuration.value = encrypt_data(value)
-            else:
-                configuration.value = value
-            bulk_configurations.append(configuration)
+            bulk_configurations = []
+            for configuration in configurations:
+                raw_value = request.data.get(configuration.key, configuration.value)
+                value = "" if raw_value is None else str(raw_value).strip()
+                if configuration.is_encrypted:
+                    configuration.value = encrypt_data(value)
+                else:
+                    configuration.value = value
+                bulk_configurations.append(configuration)
 
-        InstanceConfiguration.objects.bulk_update(bulk_configurations, ["value"], batch_size=100)
+            InstanceConfiguration.objects.bulk_update(bulk_configurations, ["value"], batch_size=100)
+            if not _authentication_remains_available():
+                transaction.set_rollback(True)
+                denied = True
+        if denied:
+            record_sso_event(
+                request,
+                "authentication_configuration",
+                "denied",
+                actor=request.user,
+                metadata={"reason": "no_usable_authentication_method"},
+            )
+            return Response(
+                {
+                    "error": (
+                        "Keep email/password enabled, configure magic link or social OAuth, "
+                        "or enable a tested OIDC provider."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         serializer = InstanceConfigurationSerializer(configurations, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -65,18 +97,25 @@ class DisableEmailFeatureEndpoint(BaseAPIView):
     @invalidate_cache(path="/api/instances/", user=False)
     def delete(self, request):
         try:
-            InstanceConfiguration.objects.filter(
-                Q(
-                    key__in=[
-                        "EMAIL_HOST",
-                        "EMAIL_HOST_USER",
-                        "EMAIL_HOST_PASSWORD",
-                        "ENABLE_SMTP",
-                        "EMAIL_PORT",
-                        "EMAIL_FROM",
-                    ]
-                )
-            ).update(value=Case(When(key="ENABLE_SMTP", then=Value("0")), default=Value("")))
+            with transaction.atomic():
+                InstanceConfiguration.objects.select_for_update().filter(
+                    Q(
+                        key__in=[
+                            "EMAIL_HOST",
+                            "EMAIL_HOST_USER",
+                            "EMAIL_HOST_PASSWORD",
+                            "ENABLE_SMTP",
+                            "EMAIL_PORT",
+                            "EMAIL_FROM",
+                        ]
+                    )
+                ).update(value=Case(When(key="ENABLE_SMTP", then=Value("0")), default=Value("")))
+                if not _authentication_remains_available():
+                    transaction.set_rollback(True)
+                    return Response(
+                        {"error": "Enable email/password, social OAuth, or a tested OIDC provider first."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
             return Response(status=status.HTTP_200_OK)
         except Exception:
             return Response(

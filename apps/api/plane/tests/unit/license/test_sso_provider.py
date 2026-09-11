@@ -158,6 +158,62 @@ def test_admin_interactive_test_uses_distinct_callback_and_pkce(
 
 
 @pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
+@patch("plane.license.api.views.sso.OIDCProviderClient.validate_id_token")
+@patch("plane.license.api.views.sso.OIDCProviderClient.exchange_code")
+def test_admin_interactive_callback_marks_current_configuration_ready(
+    mock_exchange, mock_validate, api_client, create_user, instance, provider
+):
+    InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
+    api_client.force_authenticate(user=create_user)
+    mock_exchange.return_value = ({"id_token": "signed-token"}, {"issuer": provider.issuer_url})
+    mock_validate.return_value = {"sub": "admin-test-subject"}
+    session = api_client.session
+    session["oidc_admin_test_transaction"] = {
+        "provider_id": str(provider.id),
+        "state": "expected-state",
+        "nonce": "expected-nonce",
+        "code_verifier": "verifier",
+        "created_at": int(timezone.now().timestamp()),
+    }
+    session.save()
+
+    response = api_client.get("/api/instances/sso/providers/test-callback/?code=valid-code&state=expected-state")
+
+    assert response.status_code == 302
+    assert "oidc_test=success" in response.url
+    provider.refresh_from_db()
+    assert provider.configuration_tested_at is not None
+    assert provider.configuration_fingerprint == get_sso_configuration_fingerprint(provider)
+    assert not SSOIdentity.objects.filter(provider=provider).exists()
+
+
+@pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
+@patch("plane.license.api.views.sso.OIDCProviderClient.exchange_code")
+def test_admin_interactive_callback_rejects_invalid_state(mock_exchange, api_client, create_user, instance, provider):
+    InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
+    api_client.force_authenticate(user=create_user)
+    session = api_client.session
+    session["oidc_admin_test_transaction"] = {
+        "provider_id": str(provider.id),
+        "state": "expected-state",
+        "nonce": "expected-nonce",
+        "code_verifier": "verifier",
+        "created_at": int(timezone.now().timestamp()),
+    }
+    session.save()
+
+    response = api_client.get("/api/instances/sso/providers/test-callback/?code=valid-code&state=wrong-state")
+
+    assert response.status_code == 302
+    assert "oidc_test=failed" in response.url
+    mock_exchange.assert_not_called()
+    provider.refresh_from_db()
+    assert provider.configuration_tested_at is None
+
+
+@pytest.mark.django_db
 @override_settings(
     ENABLE_OIDC_SSO=True,
     SSO_BREAK_GLASS_ADMIN_EMAILS={"recovery@example.com"},
