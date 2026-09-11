@@ -56,6 +56,7 @@ const defaultFromData: TFormData = {
   email: "",
   company_name: "",
   password: "",
+  confirm_password: "",
   is_telemetry_enabled: true,
 };
 
@@ -74,7 +75,7 @@ export function InstanceSetupForm() {
     password: false,
     retypePassword: false,
   });
-  const [csrfToken, setCsrfToken] = useState<string | undefined>(undefined);
+  const [csrfToken, setCsrfToken] = useState("");
   const [formData, setFormData] = useState<TFormData>(defaultFromData);
   const [isPasswordInputFocused, setIsPasswordInputFocused] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -87,8 +88,7 @@ export function InstanceSetupForm() {
     setFormData((prev) => ({ ...prev, [key]: value }));
 
   useEffect(() => {
-    if (csrfToken === undefined)
-      authService.requestCSRFToken().then((data) => data?.csrf_token && setCsrfToken(data.csrf_token));
+    if (!csrfToken) authService.requestCSRFToken().then((data) => data?.csrf_token && setCsrfToken(data.csrf_token));
   }, [csrfToken]);
 
   useEffect(() => {
@@ -124,6 +124,7 @@ export function InstanceSetupForm() {
   const isButtonDisabled = useMemo(
     () =>
       !isSubmitting &&
+      csrfToken &&
       formData.first_name &&
       formData.email &&
       formData.password &&
@@ -131,7 +132,7 @@ export function InstanceSetupForm() {
       formData.password === formData.confirm_password
         ? false
         : true,
-    [formData.confirm_password, formData.email, formData.first_name, formData.password, isSubmitting]
+    [csrfToken, formData.confirm_password, formData.email, formData.first_name, formData.password, isSubmitting]
   );
 
   const password = formData?.password ?? "";
