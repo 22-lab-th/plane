@@ -9,6 +9,45 @@ from plane.settings.storage import S3Storage
 
 
 @pytest.mark.unit
+class TestS3StorageMinioEndpoint:
+    @patch.dict(
+        os.environ,
+        {
+            "USE_MINIO": "1",
+            "AWS_S3_ENDPOINT_URL": "http://plane-minio:9000",
+            "MINIO_PUBLIC_ENDPOINT_URL": "http://127.0.0.1:9000",
+        },
+        clear=True,
+    )
+    @patch("plane.settings.storage.boto3")
+    def test_public_endpoint_overrides_request_host_for_presigned_urls(self, mock_boto3):
+        request = Mock(scheme="http")
+        request.get_host.return_value = "127.0.0.1:8000"
+
+        S3Storage(request=request)
+
+        assert mock_boto3.client.call_args_list[0].kwargs["endpoint_url"] == "http://plane-minio:9000"
+        assert mock_boto3.client.call_args.kwargs["endpoint_url"] == "http://127.0.0.1:9000"
+
+    @patch.dict(
+        os.environ,
+        {
+            "USE_MINIO": "1",
+            "AWS_S3_ENDPOINT_URL": "http://plane-minio:9000",
+        },
+        clear=True,
+    )
+    @patch("plane.settings.storage.boto3")
+    def test_request_host_remains_default_public_endpoint(self, mock_boto3):
+        request = Mock(scheme="http")
+        request.get_host.return_value = "plane.example.com"
+
+        S3Storage(request=request)
+
+        assert mock_boto3.client.call_args.kwargs["endpoint_url"] == "http://plane.example.com"
+
+
+@pytest.mark.unit
 class TestS3StorageSignedURLExpiration:
     """Test the configurable signed URL expiration in S3Storage"""
 
