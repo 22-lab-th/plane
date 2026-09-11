@@ -16,8 +16,13 @@ from django.views import View
 from plane.authentication.adapter.error import AUTHENTICATION_ERROR_CODES, AuthenticationException
 from plane.authentication.provider.oidc import OIDCConfigurationError, OIDCProviderClient
 from plane.authentication.rate_limit import authentication_throttle_allows
-from plane.authentication.services import SSOIdentityError, SSOIdentityResolver, is_sso_configuration_ready
-from plane.authentication.services import record_sso_event
+from plane.authentication.services import (
+    SSOIdentityError,
+    SSOIdentityResolver,
+    get_sso_correlation_id,
+    is_sso_configuration_ready,
+    record_sso_event,
+)
 from plane.authentication.utils.host import base_host
 from plane.authentication.utils.login import user_login
 from plane.authentication.utils.redirection_path import get_redirection_path
@@ -84,6 +89,7 @@ class SSOInitiateEndpoint(View):
             "code_verifier": code_verifier,
             "created_at": int(time.time()),
             "next_path": next_path,
+            "correlation_id": get_sso_correlation_id(request),
         }
         request.session.save()
 
@@ -112,6 +118,7 @@ class SSOCallbackEndpoint(View):
         if not isinstance(transaction_data, dict):
             record_sso_event(request, "login", "failed", metadata={"reason": "missing_transaction"})
             return _error_redirect(request, next_path)
+        request.sso_correlation_id = transaction_data.get("correlation_id") or get_sso_correlation_id(request)
 
         received_state = request.GET.get("state", "")
         expected_state = transaction_data.get("state", "")

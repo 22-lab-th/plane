@@ -2,7 +2,7 @@
 
 - **Epic:** Optional SSO lifecycle and production hardening
 - **Points:** 8
-- **Status:** backlog
+- **Status:** validation
 - **Depends on:** STORY-011, STORY-013, STORY-014, STORY-015
 - **Requirements:** FR-012, FR-014, FR-016, FR-020, NFR-002, NFR-008, NFR-010, NFR-011
 

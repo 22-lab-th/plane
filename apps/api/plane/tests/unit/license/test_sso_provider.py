@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-import pytest
+from importlib import import_module
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
+
+import pytest
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.test import override_settings
 from django.utils import timezone
@@ -12,8 +15,27 @@ from rest_framework.exceptions import ValidationError
 
 from plane.db.models import User
 from plane.license.api.serializers import SSOProviderSerializer
-from plane.license.models import Instance, InstanceAdmin, SSOIdentity, SSOProvider
-from plane.authentication.services import get_sso_configuration_fingerprint, has_viable_break_glass_admin
+from plane.license.models import (
+    Instance,
+    InstanceAdmin,
+    InstanceConfiguration,
+    SSOAuditEvent,
+    SSOIdentity,
+    SSOProvider,
+)
+from plane.authentication.services import (
+    get_sso_configuration_fingerprint,
+    get_sso_provider_mode,
+    has_viable_break_glass_admin,
+)
+
+
+def get_admin_session(api_client, create=False):
+    session_store = import_module(settings.SESSION_ENGINE).SessionStore
+    if create:
+        return session_store()
+    session_key = api_client.cookies[settings.ADMIN_SESSION_COOKIE_NAME].value
+    return session_store(session_key)
 
 
 @pytest.fixture
@@ -76,6 +98,46 @@ def test_provider_secret_is_preserved_when_unset_on_patch(provider):
 
 
 @pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
+def test_lifecycle_transitions_are_reversible_and_preserve_provider_data(provider, create_user):
+    provider.configuration_tested_at = timezone.now()
+    provider.configuration_fingerprint = get_sso_configuration_fingerprint(provider)
+    provider.save()
+    identity = SSOIdentity.objects.create(provider=provider, user=create_user, subject="stable-subject")
+    encrypted_secret = provider.client_secret_encrypted
+
+    enable = SSOProviderSerializer(provider, data={"is_enabled": True}, partial=True)
+    enable.is_valid(raise_exception=True)
+    provider = enable.save()
+
+    assert get_sso_provider_mode(provider).value == "optional"
+
+    disable = SSOProviderSerializer(provider, data={"is_enabled": False}, partial=True)
+    disable.is_valid(raise_exception=True)
+    provider = disable.save()
+
+    assert get_sso_provider_mode(provider).value == "disabled"
+    assert provider.client_secret_encrypted == encrypted_secret
+    assert SSOIdentity.objects.filter(pk=identity.pk, provider=provider).exists()
+
+
+@pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
+def test_lifecycle_always_allows_enforced_provider_to_be_unenforced(provider):
+    provider.is_enabled = True
+    provider.is_enforced = True
+    provider.configuration_tested_at = None
+    provider.configuration_fingerprint = ""
+    provider.save()
+
+    serializer = SSOProviderSerializer(provider, data={"is_enforced": False}, partial=True)
+    serializer.is_valid(raise_exception=True)
+    provider = serializer.save()
+
+    assert get_sso_provider_mode(provider).value == "optional"
+
+
+@pytest.mark.django_db
 def test_claim_mapping_values_must_be_non_empty_strings(instance):
     serializer = SSOProviderSerializer(
         data={
@@ -123,6 +185,31 @@ def test_public_instance_config_hides_stored_sso_when_gate_is_off(api_client, in
 
 
 @pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=False, SKIP_ENV_VAR=True)
+def test_configuration_update_cannot_disable_final_authentication_method(api_client, create_user, instance):
+    InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
+    api_client.force_authenticate(user=create_user)
+    for key, value in {
+        "ENABLE_EMAIL_PASSWORD": "1",
+        "ENABLE_MAGIC_LINK_LOGIN": "0",
+        "EMAIL_HOST": "",
+        "IS_GOOGLE_ENABLED": "0",
+        "IS_GITHUB_ENABLED": "0",
+        "IS_GITLAB_ENABLED": "0",
+        "IS_GITEA_ENABLED": "0",
+    }.items():
+        InstanceConfiguration.objects.create(key=key, value=value, category="AUTHENTICATION")
+
+    response = api_client.patch("/api/instances/configurations/", {"ENABLE_EMAIL_PASSWORD": "0"}, format="json")
+
+    assert response.status_code == 409
+    assert InstanceConfiguration.objects.get(key="ENABLE_EMAIL_PASSWORD").value == "1"
+    assert SSOAuditEvent.objects.filter(
+        event="authentication_configuration", outcome="denied", actor=create_user
+    ).exists()
+
+
+@pytest.mark.django_db
 @override_settings(SSO_BREAK_GLASS_ADMIN_EMAILS={"recovery@example.com"}, SSO_RECOVERY_TEST_MAX_AGE_SECONDS=86400)
 def test_break_glass_admin_requires_verified_password_and_recent_recovery_test(instance, provider):
     user = User.objects.create(email="recovery@example.com", username="recovery", is_email_verified=True)
@@ -154,7 +241,7 @@ def test_admin_interactive_test_uses_distinct_callback_and_pkce(
     query = parse_qs(urlparse(response.url).query)
     assert query["redirect_uri"] == ["http://testserver/api/instances/sso/providers/test-callback/"]
     assert query["code_challenge_method"] == ["S256"]
-    assert api_client.session["oidc_admin_test_transaction"]["provider_id"] == str(provider.id)
+    assert get_admin_session(api_client)["oidc_admin_test_transaction"]["provider_id"] == str(provider.id)
 
 
 @pytest.mark.django_db
@@ -168,15 +255,17 @@ def test_admin_interactive_callback_marks_current_configuration_ready(
     api_client.force_authenticate(user=create_user)
     mock_exchange.return_value = ({"id_token": "signed-token"}, {"issuer": provider.issuer_url})
     mock_validate.return_value = {"sub": "admin-test-subject"}
-    session = api_client.session
+    session = get_admin_session(api_client, create=True)
     session["oidc_admin_test_transaction"] = {
         "provider_id": str(provider.id),
         "state": "expected-state",
         "nonce": "expected-nonce",
         "code_verifier": "verifier",
         "created_at": int(timezone.now().timestamp()),
+        "correlation_id": "interactive-test-correlation",
     }
     session.save()
+    api_client.cookies[settings.ADMIN_SESSION_COOKIE_NAME] = session.session_key
 
     response = api_client.get("/api/instances/sso/providers/test-callback/?code=valid-code&state=expected-state")
 
@@ -186,6 +275,12 @@ def test_admin_interactive_callback_marks_current_configuration_ready(
     assert provider.configuration_tested_at is not None
     assert provider.configuration_fingerprint == get_sso_configuration_fingerprint(provider)
     assert not SSOIdentity.objects.filter(provider=provider).exists()
+    assert SSOAuditEvent.objects.filter(
+        provider=provider,
+        event="interactive_test",
+        outcome="success",
+        correlation_id="interactive-test-correlation",
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -194,7 +289,7 @@ def test_admin_interactive_callback_marks_current_configuration_ready(
 def test_admin_interactive_callback_rejects_invalid_state(mock_exchange, api_client, create_user, instance, provider):
     InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
     api_client.force_authenticate(user=create_user)
-    session = api_client.session
+    session = get_admin_session(api_client, create=True)
     session["oidc_admin_test_transaction"] = {
         "provider_id": str(provider.id),
         "state": "expected-state",
@@ -203,6 +298,7 @@ def test_admin_interactive_callback_rejects_invalid_state(mock_exchange, api_cli
         "created_at": int(timezone.now().timestamp()),
     }
     session.save()
+    api_client.cookies[settings.ADMIN_SESSION_COOKIE_NAME] = session.session_key
 
     response = api_client.get("/api/instances/sso/providers/test-callback/?code=valid-code&state=wrong-state")
 
@@ -252,6 +348,25 @@ def test_provider_subject_is_unique(provider):
 
 
 @pytest.mark.django_db
+def test_only_one_provider_can_be_enabled_per_instance(instance, provider):
+    provider.is_enabled = True
+    provider.save()
+    second_provider = SSOProvider(
+        instance=instance,
+        name="Second Identity",
+        slug="second",
+        issuer_url="https://second-id.example.com",
+        client_id="plane-second",
+        scopes=["openid", "email"],
+        is_enabled=True,
+    )
+    second_provider.set_client_secret("top-secret")
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        second_provider.save()
+
+
+@pytest.mark.django_db
 def test_anonymous_user_cannot_manage_sso_providers(api_client):
     response = api_client.get("/api/instances/sso/providers/")
 
@@ -259,6 +374,7 @@ def test_anonymous_user_cannot_manage_sso_providers(api_client):
 
 
 @pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
 def test_instance_admin_can_create_provider(api_client, create_user, instance):
     InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
     api_client.force_authenticate(user=create_user)
@@ -283,6 +399,7 @@ def test_instance_admin_can_create_provider(api_client, create_user, instance):
 
 
 @pytest.mark.django_db
+@override_settings(ENABLE_OIDC_SSO=True)
 def test_enabled_or_linked_provider_cannot_be_deleted(api_client, create_user, instance, provider):
     InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
     api_client.force_authenticate(user=create_user)

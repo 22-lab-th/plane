@@ -19,7 +19,7 @@ import { PageWrapper } from "@/components/common/page-wrapper";
 import { TOAST_TYPE, setToast } from "@/providers/toast";
 // types
 import type { Route } from "./+types/page";
-import { canEnableSSO, canEnforceSSO, getInteractiveTestStatus } from "./sso.utils";
+import { canEnableSSO, canEnforceSSO, getInteractiveTestStatus, getNormalAuthMethodLabels } from "./sso.utils";
 
 const instanceService = new InstanceService();
 
@@ -190,12 +190,35 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
 
   const toggleEnabled = async () => {
     const enabled = !form.is_enabled;
+    if (!enabled) {
+      const config = instanceInfo?.config;
+      const methods = config
+        ? getNormalAuthMethodLabels({
+            isEmailPasswordEnabled: config.is_email_password_enabled,
+            isMagicLoginEnabled: config.is_magic_login_enabled,
+            isSmtpConfigured: config.is_smtp_configured,
+            isGoogleEnabled: config.is_google_enabled,
+            isGithubEnabled: config.is_github_enabled,
+            isGitlabEnabled: config.is_gitlab_enabled,
+            isGiteaEnabled: config.is_gitea_enabled,
+          })
+        : [];
+      const message = `Disable OIDC SSO? Provider and identity links will be preserved. Remaining normal login methods: ${methods.join(", ") || "none"}.`;
+      if (!window.confirm(message)) return;
+    }
     const saved = await save({ is_enabled: enabled, is_enforced: enabled ? form.is_enforced : false });
     if (saved) updateForm("is_enabled", saved.is_enabled);
   };
 
   const toggleEnforced = async () => {
     const enforced = !form.is_enforced;
+    if (
+      enforced &&
+      !window.confirm(
+        "Enforce OIDC SSO? Normal member login methods will be blocked. Confirm that interactive login and recovery tests are current."
+      )
+    )
+      return;
     const saved = await save({ is_enforced: enforced });
     if (saved) updateForm("is_enforced", saved.is_enforced);
   };

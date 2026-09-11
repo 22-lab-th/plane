@@ -5,10 +5,13 @@
 # Third party imports
 from rest_framework import serializers
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 # Module imports
 from plane.license.models import SSOProvider
 from plane.authentication.services import (
+    SSOProviderLifecycle,
+    get_sso_provider_mode,
     has_normal_authentication_method,
     has_viable_break_glass_admin,
     is_sso_configuration_ready,
@@ -69,9 +72,7 @@ class SSOProviderSerializer(BaseSerializer):
         return has_viable_break_glass_admin(obj)
 
     def get_mode(self, obj):
-        if not settings.ENABLE_OIDC_SSO or not obj.is_enabled:
-            return "disabled"
-        return "enforced" if obj.is_enforced else "optional"
+        return get_sso_provider_mode(obj).value
 
     def get_deployment_enabled(self, obj):
         return settings.ENABLE_OIDC_SSO
@@ -128,7 +129,15 @@ class SSOProviderSerializer(BaseSerializer):
             raise serializers.ValidationError({"is_enabled": "OIDC SSO is disabled for this deployment."})
         if is_enabled and not has_secret:
             raise serializers.ValidationError({"client_secret": "A client secret is required before enabling SSO."})
-        if is_enabled and (tested_at is None or (instance is not None and not is_sso_configuration_ready(instance))):
+        readiness_required = is_enabled and (
+            instance is None
+            or not instance.is_enabled
+            or connection_changed
+            or (is_enforced and not instance.is_enforced)
+        )
+        if readiness_required and (
+            tested_at is None or (instance is not None and not is_sso_configuration_ready(instance))
+        ):
             raise serializers.ValidationError(
                 {"is_enabled": "Complete the interactive SSO login test before enabling it."}
             )
@@ -157,19 +166,7 @@ class SSOProviderSerializer(BaseSerializer):
         return provider
 
     def update(self, instance, validated_data):
-        client_secret = validated_data.pop("client_secret", None)
-        connection_fields = {"issuer_url", "client_id", "scopes", "protocol", "claim_mappings"}
-        connection_changed = client_secret is not None or any(
-            field in validated_data and validated_data[field] != getattr(instance, field) for field in connection_fields
-        )
-        for attribute, value in validated_data.items():
-            setattr(instance, attribute, value)
-        if client_secret is not None:
-            instance.set_client_secret(client_secret)
-        if connection_changed:
-            instance.configuration_tested_at = None
-            instance.configuration_fingerprint = ""
-            instance.recovery_tested_at = None
-            instance.recovery_tested_by = None
-        instance.save()
-        return instance
+        try:
+            return SSOProviderLifecycle.update(instance, validated_data)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc

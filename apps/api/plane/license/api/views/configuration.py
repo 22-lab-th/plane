@@ -39,6 +39,27 @@ def _authentication_remains_available():
     return has_normal_authentication_method() or has_usable_sso_authentication()
 
 
+AUTHENTICATION_CONFIGURATION_KEYS = {
+    "ENABLE_EMAIL_PASSWORD",
+    "ENABLE_MAGIC_LINK_LOGIN",
+    "EMAIL_HOST",
+    "IS_GOOGLE_ENABLED",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "IS_GITHUB_ENABLED",
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+    "IS_GITLAB_ENABLED",
+    "GITLAB_CLIENT_ID",
+    "GITLAB_CLIENT_SECRET",
+    "GITLAB_HOST",
+    "IS_GITEA_ENABLED",
+    "GITEA_CLIENT_ID",
+    "GITEA_CLIENT_SECRET",
+    "GITEA_HOST",
+}
+
+
 class InstanceConfigurationEndpoint(BaseAPIView):
     permission_classes = [InstanceAdminPermission]
 
@@ -66,7 +87,7 @@ class InstanceConfigurationEndpoint(BaseAPIView):
                 bulk_configurations.append(configuration)
 
             InstanceConfiguration.objects.bulk_update(bulk_configurations, ["value"], batch_size=100)
-            if not _authentication_remains_available():
+            if AUTHENTICATION_CONFIGURATION_KEYS.intersection(request.data) and not _authentication_remains_available():
                 transaction.set_rollback(True)
                 denied = True
         if denied:

@@ -27,6 +27,7 @@ from plane.authentication.provider.oidc import OIDCConfigurationError, OIDCProvi
 from plane.authentication.rate_limit import SSORecoveryTestThrottle
 from plane.authentication.services import (
     get_sso_configuration_fingerprint,
+    get_sso_correlation_id,
     is_break_glass_email,
     record_sso_event,
 )
@@ -200,6 +201,7 @@ class SSOProviderInteractiveTestInitiateEndpoint(BaseAPIView):
             "nonce": nonce,
             "code_verifier": code_verifier,
             "created_at": int(time.time()),
+            "correlation_id": get_sso_correlation_id(request),
         }
         request.session.save()
         params = {
@@ -221,7 +223,11 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
         transaction_data = request.session.pop("oidc_admin_test_transaction", None)
         request.session.modified = True
         if not settings.ENABLE_OIDC_SSO or not isinstance(transaction_data, dict):
+            record_sso_event(
+                request, "interactive_test", "failed", actor=request.user, metadata={"code": "invalid_transaction"}
+            )
             return _interactive_test_redirect(request, "failed", "invalid_transaction")
+        request.sso_correlation_id = transaction_data.get("correlation_id") or get_sso_correlation_id(request)
 
         received_state = request.GET.get("state", "")
         expected_state = transaction_data.get("state", "")
@@ -234,6 +240,13 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
             or time.time() - created_at > OIDC_ADMIN_TEST_TRANSACTION_MAX_AGE_SECONDS
             or time.time() < created_at
         ):
+            record_sso_event(
+                request,
+                "interactive_test",
+                "failed",
+                actor=request.user,
+                metadata={"code": "invalid_transaction"},
+            )
             return _interactive_test_redirect(request, "failed", "invalid_transaction")
         provider = SSOProvider.objects.filter(pk=transaction_data.get("provider_id")).first()
         code = request.GET.get("code")

@@ -1,7 +1,7 @@
 version: 1
-updated: "2026-09-11T12:55:38+07:00"
+updated: "2026-09-11T13:55:33+07:00"
 
-phase: "development"
+phase: "validation"
 
 planning:
   analysis: { completed: true, artifact: "docs/sso-auth-implementation-plan.md" }
@@ -12,12 +12,12 @@ planning:
 
 development:
   breakdown: { completed: true }
-  implementation: { completed: false }
+  implementation: { completed: true }
   testing:
     completed: false
-    coverage: null
-    e2e: null
-  delivery: { completed: false, artifact: null }
+    coverage: "83 focused API tests and 4 Admin unit tests pass; prior full API and browser evidence retained"
+    e2e: "HTTPS mock IdP passes; 22lab gate-off and customer live-tenant smoke tests pending"
+  delivery: { completed: false, artifact: "docs/auto/delivery-report.md" }
 
 gates:
   P1: "waived-adopted"
@@ -102,42 +102,42 @@ stories:
       id: STORY-011,
       title: "Make no-OIDC mode a supported deployment profile",
       points: 5,
-      status: backlog,
+      status: done,
       depends_on: [],
     }
   - {
       id: STORY-012,
       title: "Centralize provider lifecycle and enforce one active provider",
       points: 5,
-      status: backlog,
+      status: done,
       depends_on: [],
     }
   - {
       id: STORY-013,
       title: "Prove client configuration with an interactive OIDC test",
       points: 8,
-      status: backlog,
+      status: done,
       depends_on: [STORY-012],
     }
   - {
       id: STORY-014,
       title: "Harden authorization and break-glass recovery",
       points: 8,
-      status: backlog,
+      status: done,
       depends_on: [STORY-012],
     }
   - {
       id: STORY-015,
       title: "Deliver reversible Admin UX and component tests",
       points: 5,
-      status: backlog,
+      status: done,
       depends_on: [STORY-011, STORY-013, STORY-014],
     }
   - {
       id: STORY-016,
       title: "Complete audit, compatibility, and release evidence",
       points: 8,
-      status: backlog,
+      status: validation,
       depends_on: [STORY-011, STORY-013, STORY-014, STORY-015],
     }
 

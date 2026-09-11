@@ -1,42 +1,65 @@
-# Delivery Report — Plane OIDC SSO
+# Delivery Report — Plane OIDC SSO hardening
 
-- **Date:** 2026-09-10
-- **Gate:** D1
-- **Decision:** PASS
+- **Date:** 2026-09-11
+- **Gate:** D1 re-evaluation
+- **Decision:** HOLD — implementation complete; deployment acceptance pending
 - **Approval owner:** `bmad-orchestrator` under D-002
 
 ## Delivered behavior
 
-Plane now supports instance-wide generic OIDC configuration, secure discovery and token validation, stable issuer-subject identities, verified-email linking and JIT policy, optional and enforced sign-in, protected administrator recovery, audit events, and local-first RP logout. God Mode can save, test, enable, enforce, rotate, disable, and safely delete eligible provider configuration. The Web sign-in screen exposes only safe provider metadata.
+The same build now supports three explicit effective modes: Disabled, Optional,
+and Enforced. `ENABLE_OIDC_SSO` defaults Off, so 22lab's existing password,
+magic-code, and configured social login paths do not depend on an IdP. Customer
+deployments can enable OIDC without changing the default deployment profile.
 
-## Validation evidence
+Provider configuration and mode changes use a transactional lifecycle service,
+with database constraints and an instance lock enforcing one active provider.
+Interactive OIDC readiness and break-glass recovery readiness are separate,
+time-stamped prerequisites. Configuration changes invalidate readiness, while
+unenforcement remains available even if readiness has become stale. Disable
+preserves provider configuration and linked identities and is rejected if it
+would remove the final usable authentication method.
 
-- RTK installation: version 0.48.0; self-verification 154/154.
-- SSO/auth unit and security suite: 68 passed.
-- Authentication-critical branch coverage: 91% across OIDC client, identity resolver, callback, and enforcement middleware.
-- Full API unit suite: 409 passed.
-- Authentication contract suite: 32 passed with test SMTP configuration.
-- Playwright SSO browser suite: 3 passed against an HTTPS mock IdP, with ephemeral PostgreSQL and Valkey services provided by Podman.
-- Private IdP network and CA handling: 90 focused discovery/SSRF tests passed; the browser flow verified the configured private CA without disabling TLS validation.
+God Mode exposes deployment-gate, configuration, interactive-test, and recovery
+states; gate-Off is read-only. Disable and Enforce require explicit confirmation,
+and the Disable confirmation identifies the normal login methods that remain.
+Lifecycle, test, recovery, denied-transition, and authentication events carry a
+correlation ID without storing credentials, tokens, or raw claims.
+
+## Current validation evidence
+
+- Focused API OIDC, lifecycle, identity, readiness, discovery, and security suite:
+  83 passed in the isolated Podman stack.
+- Admin readiness and normal-auth helper unit tests: 4 passed.
+- Admin format, lint, and type checks: passed (existing warning budget only).
+- Admin production client and SSR build: passed.
 - Django migration drift check: no changes detected.
-- Frontend lint/format/type validation: 60/60 tasks passed in the final monorepo check.
-- Web/Admin production builds: 12/12 tasks passed.
-- Representative Entra ID, Okta, and Keycloak metadata fixtures: passed.
+- Python formatting and lint for all changed API files: passed.
+- Prior baseline evidence remains green: full API unit/contract suite, HTTPS mock
+  IdP Playwright flow, private-CA handling, Web/Admin builds, and representative
+  Entra ID, Okta, and Keycloak metadata fixtures.
 
-## Requirement and review result
+The current monorepo-wide `pnpm check` stops on formatting of the generated,
+unchanged `packages/i18n/src/types/keys.generated.ts`; the OIDC/Admin targeted
+checks and production build pass, and this run produced no tracked diff there.
 
-FR coverage is 17/17 and NFR coverage is 9/9. The architecture checklist passes 11/11 with no unresolved critical or high security/correctness finding. Full mapping and threshold calculations are in `docs/bmad/gate-check.md`.
+## Remaining deployment acceptance
 
-## Rollout and rollback
+D1 stays on hold until the two environment-specific checks that cannot be proven
+from repository fixtures are signed off:
 
-Follow `docs/bmad/sso-operations.md`. Roll out in disabled → tested → optional → enforced stages. Recovery uses a deployment-configured, rate-limited, audited instance administrator. Rollback turns off enforcement and then the provider while retaining additive database tables and identity/audit data.
+1. Run the 22lab normal-login smoke checklist with `ENABLE_OIDC_SSO=0` in the
+   target deployment.
+2. Run the customer staging authorization-code flow against its real OIDC tenant,
+   then test outage, secret rotation, reverse-proxy callback headers, disable,
+   rollback, and break-glass recovery before enabling Enforced mode.
 
-## Limitations and follow-up
+No live credentials, production configuration, or deployment action was used in
+this implementation run. Follow `docs/bmad/sso-operations.md`; roll out Disabled
+→ tested → Optional → Enforced, and return to Optional/Disabled for rollback.
 
-- A complete browser login was exercised against the local HTTPS mock IdP. Live-tenant login was not run because the repository has no real IdP credentials; deployment must smoke-test its own tenant before enforcement.
-- SAML, SCIM, per-workspace SSO, IdP-initiated logout, and back-channel logout remain outside this delivery.
-- Authlib 1.8.0 currently warns that `authlib.jose` will move to `joserfc`; migrate before Authlib 2.0.
+## Known follow-up
 
-## Final verification
-
-Migration drift, Python lint/compile, API unit/contract suites, the Playwright SSO browser suite, frontend checks, and Web/Admin builds are green. No production deployment was performed.
+Authlib 1.8 warns that `authlib.jose` will move to `joserfc`; migrate before
+Authlib 2.0. SAML, SCIM, per-workspace SSO, IdP-initiated logout, and back-channel
+logout remain outside this delivery.

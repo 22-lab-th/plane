@@ -14,3 +14,22 @@ export const getInteractiveTestStatus = (search: string) => {
 export const canEnableSSO = (readiness: TSSOReadiness) => readiness.deploymentEnabled && readiness.configurationReady;
 
 export const canEnforceSSO = (readiness: TSSOReadiness) => canEnableSSO(readiness) && readiness.recoveryReady;
+
+export const getNormalAuthMethodLabels = (config: {
+  isEmailPasswordEnabled: boolean;
+  isMagicLoginEnabled: boolean;
+  isSmtpConfigured: boolean;
+  isGoogleEnabled: boolean;
+  isGithubEnabled: boolean;
+  isGitlabEnabled: boolean;
+  isGiteaEnabled: boolean;
+}) => {
+  const methods: string[] = [];
+  if (config.isEmailPasswordEnabled) methods.push("email/password");
+  if (config.isMagicLoginEnabled && config.isSmtpConfigured) methods.push("magic code");
+  if (config.isGoogleEnabled) methods.push("Google");
+  if (config.isGithubEnabled) methods.push("GitHub");
+  if (config.isGitlabEnabled) methods.push("GitLab");
+  if (config.isGiteaEnabled) methods.push("Gitea");
+  return methods;
+};
