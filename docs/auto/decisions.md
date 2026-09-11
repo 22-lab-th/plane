@@ -24,3 +24,11 @@
 - **Context:** Plane must always end its own session while supporting providers that advertise RP-initiated logout. Retaining an ID token only for logout would increase credential exposure.
 - **Decision:** Destroy the Plane session before any IdP interaction. If validated discovery metadata includes `end_session_endpoint`, redirect with `client_id` and the Plane return URI. Fall back to the local return URI on discovery or provider failure and do not persist the ID token.
 - **Consequences:** Local logout is reliable and compatible providers receive an RP logout request. Providers that require `id_token_hint` may keep their IdP session, while the Plane session remains terminated.
+
+## D-004 — Make OIDC optional, disabled by default, and reversible
+
+- **Status:** Accepted by user
+- **Date:** 2026-09-11
+- **Context:** 22lab currently relies on normal Plane authentication, while OIDC is being prepared as an optional customer capability. The production-readiness review also found unresolved lifecycle, configuration-test, authorization, and recovery risks.
+- **Decision:** Adopt the approved Sprint Change Proposal at `docs/sprint-change-proposal-2026-09-11.md`. Add a deployment capability gate that defaults Off, explicit Disabled/Optional/Enforced modes, reversible non-destructive disable, one active provider, interactive readiness testing, and tested break-glass recovery.
+- **Consequences:** The previous D1 delivery decision is reopened. STORY-011 through STORY-016 must be completed and a new evidence-based D1 decision recorded before the feature is called production-ready. No production deployment is authorized by this decision.

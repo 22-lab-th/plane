@@ -1,9 +1,9 @@
 # Sprint Plan: Plane SSO Authentication
 
 - **Created:** 2026-09-10
-- **Delivery model:** Two sequential implementation sprints
+- **Delivery model:** Three sequential implementation sprints
 - **Approval owner:** `bmad-orchestrator` under D-002
-- **Total:** 10 stories, 63 points
+- **Total:** 16 stories, 102 points
 
 ## Goal
 
@@ -39,6 +39,21 @@ Sprint 2 exits when an administrator can safely configure, test, enable, and
 enforce SSO; members can sign in from Plane; recovery and logout work; and all
 required validation evidence is recorded.
 
+## Sprint 3 — Optional lifecycle and production hardening (39 points)
+
+| Story     | Title                                                         | Points | Depends on                      |
+| --------- | ------------------------------------------------------------- | -----: | ------------------------------- |
+| STORY-011 | Make no-OIDC mode a supported deployment profile              |      5 | None                            |
+| STORY-012 | Centralize provider lifecycle and enforce one active provider |      5 | None                            |
+| STORY-013 | Prove client configuration with an interactive OIDC test      |      8 | STORY-012                       |
+| STORY-014 | Harden authorization and break-glass recovery                 |      8 | STORY-012                       |
+| STORY-015 | Deliver reversible Admin UX and component tests               |      5 | STORY-011, STORY-013, STORY-014 |
+| STORY-016 | Complete audit, compatibility, and release evidence           |      8 | STORY-011, STORY-013–STORY-015  |
+
+Sprint 3 exits only when OIDC is disabled by default, 22lab normal login has
+no OIDC dependency, Disabled/Optional/Enforced transitions and rollback pass,
+recovery is exercised, and a real customer IdP smoke test is recorded.
+
 ## Dependency order
 
 ```text
@@ -46,6 +61,10 @@ STORY-001 ───────────────────────�
 STORY-002 → STORY-003 → STORY-004 → STORY-005 → STORY-006│
      │          │                              │          ├→ STORY-010
      └──────────┴→ STORY-007 ─────────────────→ STORY-008 → STORY-009
+
+STORY-011 ───────────────┐
+STORY-012 → STORY-013 ───┼→ STORY-015 → STORY-016
+       └──→ STORY-014 ───┘
 ```
 
 ## Capacity basis
@@ -63,5 +82,7 @@ approval pause.
 - Authentication-critical paths meet the 90% target where measurement is practical.
 - Relevant targeted tests, type checks, lint, formatting, and regression suites pass.
 - Reviewer finds no unresolved critical/high security or correctness issue.
+- Disabled, Optional, Enforced, disable, and rollback mode-matrix tests pass.
+- 22lab normal authentication and the customer staging OIDC flow are both evidenced.
 - Story status, requirement traceability, decisions, and validation evidence are updated.
 - No production deployment or real IdP credentials are required for story completion.

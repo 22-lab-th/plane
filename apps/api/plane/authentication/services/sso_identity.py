@@ -72,6 +72,8 @@ class SSOIdentityResolver:
             )
             if identity:
                 self._validate_user(identity.user)
+                if self.provider.allowed_email_domains or self.provider.allowed_groups:
+                    self._validate_first_login_claims(claims)
                 identity.claims = safe_claims
                 identity.last_login_at = timezone.now()
                 identity.save(update_fields=["claims", "last_login_at", "updated_at"])
@@ -114,5 +116,7 @@ class SSOIdentityResolver:
             )
             if identity:
                 self._validate_user(identity.user)
+                if self.provider.allowed_email_domains or self.provider.allowed_groups:
+                    self._validate_first_login_claims(claims)
                 return identity.user, False
             raise SSOIdentityError("identity_conflict", "The SSO identity could not be linked safely.") from exc

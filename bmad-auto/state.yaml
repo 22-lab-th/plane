@@ -1,7 +1,7 @@
 version: 1
-updated: "2026-09-10T14:22:20+07:00"
+updated: "2026-09-11T12:55:38+07:00"
 
-phase: "complete"
+phase: "development"
 
 planning:
   analysis: { completed: true, artifact: "docs/sso-auth-implementation-plan.md" }
@@ -12,17 +12,17 @@ planning:
 
 development:
   breakdown: { completed: true }
-  implementation: { completed: true }
+  implementation: { completed: false }
   testing:
-    completed: true
-    coverage: "91% auth-critical branch coverage"
-    e2e: "3/3 Playwright SSO scenarios passed with Podman PostgreSQL and Valkey"
-  delivery: { completed: true, artifact: "docs/auto/delivery-report.md" }
+    completed: false
+    coverage: null
+    e2e: null
+  delivery: { completed: false, artifact: null }
 
 gates:
   P1: "waived-adopted"
   P2: "passed"
-  D1: "passed"
+  D1: "reopened"
 
 adoption:
   date: "2026-09-10"
@@ -98,6 +98,48 @@ stories:
       status: done,
       depends_on: [STORY-001, STORY-002, STORY-003, STORY-004, STORY-005, STORY-006, STORY-007, STORY-008, STORY-009],
     }
+  - {
+      id: STORY-011,
+      title: "Make no-OIDC mode a supported deployment profile",
+      points: 5,
+      status: backlog,
+      depends_on: [],
+    }
+  - {
+      id: STORY-012,
+      title: "Centralize provider lifecycle and enforce one active provider",
+      points: 5,
+      status: backlog,
+      depends_on: [],
+    }
+  - {
+      id: STORY-013,
+      title: "Prove client configuration with an interactive OIDC test",
+      points: 8,
+      status: backlog,
+      depends_on: [STORY-012],
+    }
+  - {
+      id: STORY-014,
+      title: "Harden authorization and break-glass recovery",
+      points: 8,
+      status: backlog,
+      depends_on: [STORY-012],
+    }
+  - {
+      id: STORY-015,
+      title: "Deliver reversible Admin UX and component tests",
+      points: 5,
+      status: backlog,
+      depends_on: [STORY-011, STORY-013, STORY-014],
+    }
+  - {
+      id: STORY-016,
+      title: "Complete audit, compatibility, and release evidence",
+      points: 8,
+      status: backlog,
+      depends_on: [STORY-011, STORY-013, STORY-014, STORY-015],
+    }
 
 handoffs:
   - from: scrum
@@ -112,9 +154,21 @@ handoffs:
       ]
     warnings:
       ["real IdP credentials are outside delegated authority; use fixtures unless the user supplies credentials"]
+  - from: correct-course
+    to: dev
+    artifact: docs/sprint-change-proposal-2026-09-11.md
+    status: ready
+    key_points:
+      [
+        "OIDC defaults Off and 22lab normal login remains independent",
+        "implement Disabled, Optional, and Enforced modes",
+        "complete STORY-011 through STORY-016 before D1 re-evaluation",
+      ]
+    warnings:
+      ["production deployment and real customer IdP credentials still require human coordination"]
 
 engine_switches: []
 
 counters:
-  decisions: 3
+  decisions: 4
   research: 0

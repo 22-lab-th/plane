@@ -9,13 +9,14 @@ import time
 from urllib.parse import urlencode
 
 from django.http import HttpResponseRedirect
+from django.conf import settings
 from django.utils import timezone
 from django.views import View
 
 from plane.authentication.adapter.error import AUTHENTICATION_ERROR_CODES, AuthenticationException
 from plane.authentication.provider.oidc import OIDCConfigurationError, OIDCProviderClient
 from plane.authentication.rate_limit import authentication_throttle_allows
-from plane.authentication.services import SSOIdentityError, SSOIdentityResolver
+from plane.authentication.services import SSOIdentityError, SSOIdentityResolver, is_sso_configuration_ready
 from plane.authentication.services import record_sso_event
 from plane.authentication.utils.host import base_host
 from plane.authentication.utils.login import user_login
@@ -49,13 +50,15 @@ def _error_redirect(request, next_path=None, error_name="SSO_AUTHENTICATION_FAIL
 class SSOInitiateEndpoint(View):
     def get(self, request, provider_slug):
         next_path = validate_next_path(request.GET.get("next_path", ""))
+        if not settings.ENABLE_OIDC_SSO:
+            return _error_redirect(request, next_path)
         if not authentication_throttle_allows(request):
             return _error_redirect(request, next_path, "RATE_LIMIT_EXCEEDED")
         instance = Instance.objects.first()
         if instance is None or not instance.is_setup_done:
             return _error_redirect(request, next_path)
         provider = SSOProvider.objects.filter(instance=instance, slug=provider_slug, is_enabled=True).first()
-        if provider is None or provider.configuration_tested_at is None:
+        if provider is None or not is_sso_configuration_ready(provider):
             return _error_redirect(request, next_path)
 
         try:
@@ -99,6 +102,8 @@ class SSOInitiateEndpoint(View):
 
 class SSOCallbackEndpoint(View):
     def get(self, request):
+        if not settings.ENABLE_OIDC_SSO:
+            return _error_redirect(request)
         if not authentication_throttle_allows(request):
             return _error_redirect(request, error_name="RATE_LIMIT_EXCEEDED")
         transaction_data = request.session.pop("oidc_transaction", None)
@@ -127,7 +132,7 @@ class SSOCallbackEndpoint(View):
             return _error_redirect(request, next_path)
 
         provider = SSOProvider.objects.filter(pk=transaction_data.get("provider_id"), is_enabled=True).first()
-        if provider is None:
+        if provider is None or not is_sso_configuration_ready(provider):
             record_sso_event(request, "login", "failed", metadata={"reason": "provider_unavailable"})
             return _error_redirect(request, next_path)
 

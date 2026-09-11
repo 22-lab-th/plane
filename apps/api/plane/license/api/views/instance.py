@@ -20,6 +20,7 @@ from plane.license.api.permissions import InstanceAdminPermission
 from plane.license.api.serializers import InstanceSerializer
 from plane.license.models import Instance, SSOProvider
 from plane.license.utils.instance_value import get_configuration_value
+from plane.authentication.services import is_sso_configuration_ready
 from plane.utils.cache import cache_response, invalidate_cache
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_control
@@ -125,11 +126,18 @@ class InstanceEndpoint(BaseAPIView):
         data["is_gitea_enabled"] = IS_GITEA_ENABLED == "1"
         data["is_magic_login_enabled"] = ENABLE_MAGIC_LINK_LOGIN == "1"
         data["is_email_password_enabled"] = ENABLE_EMAIL_PASSWORD == "1"
-        enabled_sso_providers = SSOProvider.objects.filter(instance=instance, is_enabled=True).values(
-            "name", "slug", "is_enforced"
+        enabled_sso_providers = SSOProvider.objects.filter(instance=instance, is_enabled=True)
+        data["sso_providers"] = (
+            [
+                {"name": provider.name, "slug": provider.slug, "is_enforced": provider.is_enforced}
+                for provider in enabled_sso_providers
+                if is_sso_configuration_ready(provider)
+            ]
+            if settings.ENABLE_OIDC_SSO
+            else []
         )
-        data["sso_providers"] = list(enabled_sso_providers)
         data["is_sso_enforced"] = any(provider["is_enforced"] for provider in data["sso_providers"])
+        data["is_oidc_sso_available"] = settings.ENABLE_OIDC_SSO
 
         # Github app name
         data["github_app_name"] = str(GITHUB_APP_NAME)

@@ -15,6 +15,7 @@ import type {
   TPage,
   TSSOProvider,
   TSSOProviderPayload,
+  TSSORecoveryTestResult,
   TSSOTestResult,
 } from "@plane/types";
 // api service
@@ -171,6 +172,14 @@ export class InstanceService extends APIService {
 
   async testSSOProvider(id: string): Promise<TSSOTestResult> {
     return this.post(`/api/instances/sso/providers/${id}/test/`)
+      .then((response) => response.data)
+      .catch((error) => {
+        throw error?.response?.data;
+      });
+  }
+
+  async testSSORecovery(id: string, password: string): Promise<TSSORecoveryTestResult> {
+    return this.post(`/api/instances/sso/providers/${id}/test-recovery/`, { password })
       .then((response) => response.data)
       .catch((error) => {
         throw error?.response?.data;

@@ -93,6 +93,10 @@ export type TSSOProvider = {
   issuer_url: string;
   client_id: string;
   client_secret_configured: boolean;
+  configuration_ready: boolean;
+  recovery_ready: boolean;
+  deployment_enabled: boolean;
+  mode: "disabled" | "optional" | "enforced";
   scopes: string[];
   claim_mappings: Record<string, string>;
   allowed_email_domains: string[];
@@ -101,14 +105,26 @@ export type TSSOProvider = {
   allow_verified_email_auto_link: boolean;
   is_enabled: boolean;
   is_enforced: boolean;
+  metadata_tested_at: string | null;
   configuration_tested_at: string | null;
+  recovery_tested_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
 export type TSSOProviderPayload = Omit<
   TSSOProvider,
-  "id" | "client_secret_configured" | "configuration_tested_at" | "created_at" | "updated_at"
+  | "id"
+  | "client_secret_configured"
+  | "configuration_ready"
+  | "recovery_ready"
+  | "deployment_enabled"
+  | "mode"
+  | "metadata_tested_at"
+  | "configuration_tested_at"
+  | "recovery_tested_at"
+  | "created_at"
+  | "updated_at"
 > & {
   client_secret?: string;
 };
@@ -116,7 +132,13 @@ export type TSSOProviderPayload = Omit<
 export type TSSOTestResult = {
   status: "passed" | "failed";
   issuer?: string;
-  configuration_tested_at?: string;
+  metadata_tested_at?: string;
   code?: string;
+  error?: string;
+};
+
+export type TSSORecoveryTestResult = {
+  status: "passed" | "failed";
+  recovery_tested_at?: string;
   error?: string;
 };

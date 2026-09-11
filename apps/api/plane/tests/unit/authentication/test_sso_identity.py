@@ -24,6 +24,26 @@ def test_prelinked_subject_wins_when_email_changes(provider):
 
 
 @pytest.mark.django_db
+def test_prelinked_subject_must_continue_to_satisfy_group_policy(provider):
+    provider.allowed_groups = ["plane-users"]
+    provider.save()
+    user = User.objects.create(email="member@example.com", username="member")
+    SSOIdentity.objects.create(provider=provider, user=user, subject="stable-subject")
+
+    with pytest.raises(SSOIdentityError) as error:
+        SSOIdentityResolver(provider).resolve(
+            {
+                "sub": "stable-subject",
+                "email": "member@example.com",
+                "email_verified": True,
+                "groups": ["former-members"],
+            }
+        )
+
+    assert error.value.code == "group_denied"
+
+
+@pytest.mark.django_db
 def test_verified_email_auto_link_requires_explicit_policy(provider):
     user = User.objects.create(email="member@example.com", username="member")
 

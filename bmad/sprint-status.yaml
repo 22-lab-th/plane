@@ -6,15 +6,15 @@ project:
   level: 3
 
 sprint:
-  number: 1
-  start_date: "2026-09-10"
-  end_date: "2026-09-24"
-  goal: "Deliver secure generic OIDC SSO end to end"
-  capacity_points: 63
-  committed_points: 63
+  number: 3
+  start_date: "2026-09-11"
+  end_date: "2026-09-25"
+  goal: "Make OIDC optional, reversible, and production-ready without changing 22lab normal login"
+  capacity_points: 39
+  committed_points: 39
 
 velocity:
-  current_sprint: 63
+  current_sprint: 0
   rolling_average: 63
   history: []
 
@@ -31,6 +31,9 @@ epics:
   - id: E4
     title: "Operations and delivery"
     story_ids: [STORY-009, STORY-010]
+  - id: E5
+    title: "Optional SSO lifecycle and production hardening"
+    story_ids: [STORY-011, STORY-012, STORY-013, STORY-014, STORY-015, STORY-016]
 
 stories:
   - { id: STORY-001, title: "Stabilize the existing OAuth baseline", points: 3, status: done, depends_on: [] }
@@ -43,6 +46,12 @@ stories:
   - { id: STORY-008, title: "Enforce SSO with protected administrator recovery", points: 8, status: done, depends_on: [STORY-006, STORY-007] }
   - { id: STORY-009, title: "Complete logout, audit, and operational visibility", points: 5, status: done, depends_on: [STORY-008] }
   - { id: STORY-010, title: "Prove compatibility and release readiness", points: 5, status: done, depends_on: [STORY-001, STORY-002, STORY-003, STORY-004, STORY-005, STORY-006, STORY-007, STORY-008, STORY-009] }
+  - { id: STORY-011, title: "Make no-OIDC mode a supported deployment profile", points: 5, status: backlog, depends_on: [] }
+  - { id: STORY-012, title: "Centralize provider lifecycle and enforce one active provider", points: 5, status: backlog, depends_on: [] }
+  - { id: STORY-013, title: "Prove client configuration with an interactive OIDC test", points: 8, status: backlog, depends_on: [STORY-012] }
+  - { id: STORY-014, title: "Harden authorization and break-glass recovery", points: 8, status: backlog, depends_on: [STORY-012] }
+  - { id: STORY-015, title: "Deliver reversible Admin UX and component tests", points: 5, status: backlog, depends_on: [STORY-011, STORY-013, STORY-014] }
+  - { id: STORY-016, title: "Complete audit, compatibility, and release evidence", points: 8, status: backlog, depends_on: [STORY-011, STORY-013, STORY-014, STORY-015] }
 
 release_backlog:
   sprint_2:
@@ -50,16 +59,21 @@ release_backlog:
     points: 31
     story_ids: [STORY-006, STORY-007, STORY-008, STORY-009, STORY-010]
     status: completed
+  sprint_3:
+    goal: "Optional SSO lifecycle and production hardening"
+    points: 39
+    story_ids: [STORY-011, STORY-012, STORY-013, STORY-014, STORY-015, STORY-016]
+    status: planned
 
 burndown: []
 
 metrics:
-  total_stories: 10
+  total_stories: 16
   completed_stories: 10
   in_progress_stories: 0
   blocked_stories: 0
-  total_points: 63
+  total_points: 102
   completed_points: 63
-  completion_percentage: 100
+  completion_percentage: 61.8
 
-last_updated: "2026-09-10T16:30:00+07:00"
+last_updated: "2026-09-11T12:55:38+07:00"

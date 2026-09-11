@@ -26,6 +26,11 @@ rewriting it.
 | FR-015 | Should   | OIDC discovery and JWKS data are cached safely and refreshed on signing-key rotation.                                                                                                                           | Original §§6 Phase 2, 7              |
 | FR-016 | Must     | Existing password, magic-code, social OAuth, deactivated-user, bot-user, invitation, and onboarding behavior remains unchanged while SSO is optional.                                                           | Original §§3.2, 6 Phase 1, 7         |
 | FR-017 | Must     | `bmad-orchestrator` routes, evaluates, and records all remaining workflow and delivery gate decisions under the user's delegated authority until completion.                                                    | Original §2 Delivery governance      |
+| FR-018 | Must     | OIDC is protected by a deployment capability gate that defaults to disabled; while disabled, existing authentication remains independent of OIDC and no IdP request is made.                                    | Approved change proposal 2026-09-11  |
+| FR-019 | Must     | The effective instance authentication mode is exactly one of Disabled, Optional, or Enforced, with guarded atomic transitions and one active OIDC provider in the initial release.                              | Approved change proposal 2026-09-11  |
+| FR-020 | Must     | An administrator can transition Enforced to Optional to Disabled without deleting provider configuration or identity records, and normal authentication returns when enforcement ends.                          | Approved change proposal 2026-09-11  |
+| FR-021 | Must     | The system rejects a transition that would leave members with no usable authentication method and reports which normal method must be enabled first.                                                            | Approved change proposal 2026-09-11  |
+| FR-022 | Must     | Enforced mode requires a current successful interactive OIDC login test and a successful recovery test by a viable break-glass administrator.                                                                   | Approved change proposal 2026-09-11  |
 
 ## Non-functional requirements
 
@@ -40,13 +45,18 @@ rewriting it.
 | NFR-007 | Should   | New interactive Admin and sign-in controls follow the existing Plane design system, keyboard navigation, visible focus, form labels, and WCAG 2.1 AA intent.                | Reconstructed UX quality default; see mockups |
 | NFR-008 | Must     | Frontend checks and the relevant Docker-backed Django authentication suite pass before delivery.                                                                            | Original §8 and repository `AGENTS.md`        |
 | NFR-009 | Must     | Automated gate approval is evidence-based and cannot waive security controls, required tests, critical/high findings, traceability, or mandatory human escalations.         | Original §2 Delivery governance               |
+| NFR-010 | Must     | Disabled mode makes normal-auth behavior, latency, and availability independent of OIDC configuration and IdP health.                                                       | Approved change proposal 2026-09-11           |
+| NFR-011 | Must     | Mode changes are atomic, audited, cache-invalidated, reversible, and preserve provider and identity data.                                                                   | Approved change proposal 2026-09-11           |
 
 ## Scope boundaries
 
 In scope for the development contract:
 
+- OIDC disabled by default, with Disabled, Optional, and Enforced operating modes
+- Existing 22lab password/magic-code/social authentication with no OIDC dependency
+- Reversible disable without deleting provider or identity data
 - Generic OIDC at instance scope
-- One enabled provider in the initial UI with a schema that permits multiple providers
+- Exactly one enabled provider in the initial release while retaining a future-compatible schema
 - Provider administration, connection testing, optional SSO, enforcement, and recovery
 - Main Plane web sign-in flow
 - Local logout and optional RP-initiated logout
@@ -67,4 +77,4 @@ Deferred according to the original plan:
 
 ## Success criteria
 
-Delivery is accepted when all Must requirements are implemented, all security-negative tests pass, Entra ID/Okta/Keycloak compatibility is evidenced, recovery is exercised, existing optional-auth behavior has no regression, the validation commands in FR-016/NFR-008 are green, and `bmad-orchestrator` records the evidence and delivery decision required by FR-017/NFR-009.
+Delivery is accepted when all Must requirements are implemented, all security-negative tests pass, Entra ID/Okta/Keycloak compatibility is evidenced, recovery is exercised, the full Disabled/Optional/Enforced matrix passes, 22lab normal authentication is proven independent of OIDC, disable and rollback preserve data, the validation commands in FR-016/NFR-008 are green, and a new evidence-based delivery decision closes the reopened gate.

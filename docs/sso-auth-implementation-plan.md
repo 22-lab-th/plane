@@ -508,3 +508,25 @@ OIDC ที่พร้อมใช้งาน production จึงอยู่
 - IdP-initiated logout และ back-channel logout
 - Automated certificate/metadata rollover สำหรับ SAML
 - Per-workspace SSO policy
+
+## 12. Approved course correction — optional and reversible OIDC
+
+On 2026-09-11 the user approved
+[`sprint-change-proposal-2026-09-11.md`](sprint-change-proposal-2026-09-11.md).
+This addendum is authoritative where it strengthens or clarifies earlier text.
+
+- The same application build must support 22lab normal authentication with no
+  dependency on OIDC or IdP availability.
+- `ENABLE_OIDC_SSO` is a deployment capability gate and defaults to disabled.
+- Effective instance mode is exactly Disabled, Optional, or Enforced.
+- Disabled exposes no OIDC provider and makes no IdP request. Optional adds
+  OIDC alongside normal methods. Enforced blocks normal member authentication
+  while preserving tested administrator recovery.
+- Disabling OIDC preserves provider configuration and identity records and
+  restores independently enabled normal authentication immediately.
+- The initial release permits exactly one active provider.
+- Enabling requires a current interactive OIDC test tied to the current
+  configuration. Enforcement additionally requires a verified, usable, and
+  recently tested break-glass administrator.
+- Delivery is reopened until STORY-011 through STORY-016, the complete mode
+  matrix, 22lab no-OIDC smoke testing, and a customer IdP smoke test pass.

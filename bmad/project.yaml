@@ -38,7 +38,7 @@ workflow:
 metadata:
   created: "2026-09-10T07:22:27Z"
   bmad_version: "6.0.0"
-  last_updated: "2026-09-10T07:22:27Z"
+  last_updated: "2026-09-11T12:55:38+07:00"
 
 governance:
   approval_owner: "bmad-orchestrator"

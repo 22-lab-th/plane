@@ -20,6 +20,9 @@ from plane.license.api.views import (
     InstanceWorkSpaceEndpoint,
     SSOProviderDetailEndpoint,
     SSOProviderEndpoint,
+    SSOProviderInteractiveTestCallbackEndpoint,
+    SSOProviderInteractiveTestInitiateEndpoint,
+    SSOProviderRecoveryTestEndpoint,
     SSOProviderTestEndpoint,
 )
 
@@ -77,4 +80,19 @@ urlpatterns = [
     path("sso/providers/", SSOProviderEndpoint.as_view(), name="sso-providers"),
     path("sso/providers/<uuid:pk>/", SSOProviderDetailEndpoint.as_view(), name="sso-provider-detail"),
     path("sso/providers/<uuid:pk>/test/", SSOProviderTestEndpoint.as_view(), name="sso-provider-test"),
+    path(
+        "sso/providers/<uuid:pk>/test-login/",
+        SSOProviderInteractiveTestInitiateEndpoint.as_view(),
+        name="sso-provider-interactive-test",
+    ),
+    path(
+        "sso/providers/test-callback/",
+        SSOProviderInteractiveTestCallbackEndpoint.as_view(),
+        name="sso-provider-interactive-test-callback",
+    ),
+    path(
+        "sso/providers/<uuid:pk>/test-recovery/",
+        SSOProviderRecoveryTestEndpoint.as_view(),
+        name="sso-provider-recovery-test",
+    ),
 ]

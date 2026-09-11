@@ -9,6 +9,8 @@ def authentication_base_urls(settings):
     settings.WEB_URL = "http://localhost:3000"
     settings.APP_BASE_URL = "http://localhost:3000"
     settings.ADMIN_BASE_URL = "http://localhost:3001"
+    settings.ENABLE_OIDC_SSO = True
+    settings.SSO_RECOVERY_TEST_MAX_AGE_SECONDS = 86400
 
 
 @pytest.fixture

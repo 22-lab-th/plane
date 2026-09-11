@@ -171,6 +171,8 @@ SSO_BREAK_GLASS_ADMIN_EMAILS = {
     email.strip().lower() for email in os.environ.get("SSO_BREAK_GLASS_ADMIN_EMAILS", "").split(",") if email.strip()
 }
 SSO_BREAK_GLASS_SESSION_AGE = int(os.environ.get("SSO_BREAK_GLASS_SESSION_AGE", "900"))
+ENABLE_OIDC_SSO = os.environ.get("ENABLE_OIDC_SSO", "0") == "1"
+SSO_RECOVERY_TEST_MAX_AGE_SECONDS = int(os.environ.get("SSO_RECOVERY_TEST_MAX_AGE_SECONDS", "86400"))
 
 # Root Urls
 ROOT_URLCONF = "plane.urls"

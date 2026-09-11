@@ -26,4 +26,11 @@ from .workspace import (
     InstanceWorkSpaceAvailabilityCheckEndpoint,
     InstanceWorkSpaceEndpoint,
 )
-from .sso import SSOProviderDetailEndpoint, SSOProviderEndpoint, SSOProviderTestEndpoint
+from .sso import (
+    SSOProviderDetailEndpoint,
+    SSOProviderEndpoint,
+    SSOProviderInteractiveTestCallbackEndpoint,
+    SSOProviderInteractiveTestInitiateEndpoint,
+    SSOProviderRecoveryTestEndpoint,
+    SSOProviderTestEndpoint,
+)

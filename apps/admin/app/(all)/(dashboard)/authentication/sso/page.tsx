@@ -88,8 +88,10 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
   const [provider, setProvider] = useState<TSSOProvider>();
   const [form, setForm] = useState<TSSOProviderPayload>(EMPTY_PROVIDER);
   const [secret, setSecret] = useState("");
+  const [recoveryPassword, setRecoveryPassword] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isRecoveryTesting, setIsRecoveryTesting] = useState(false);
   const [testStatus, setTestStatus] = useState("");
 
   const { data, isLoading, mutate } = useSWR("INSTANCE_SSO_PROVIDERS", () => instanceService.ssoProviders());
@@ -114,6 +116,13 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
       is_enforced: currentProvider.is_enforced,
     });
   }, [data]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const outcome = new URLSearchParams(window.location.search).get("oidc_test");
+    if (outcome === "success") setTestStatus("Interactive login passed. This configuration is ready to enable.");
+    if (outcome === "failed") setTestStatus("Interactive login failed. Review the IdP client and redirect URI.");
+  }, []);
 
   const updateForm = <Key extends keyof TSSOProviderPayload>(key: Key, value: TSSOProviderPayload[Key]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -147,12 +156,34 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
     setTestStatus("Testing discovery and signing keys…");
     try {
       const result = await instanceService.testSSOProvider(saved.id);
-      setTestStatus(`Connection passed for ${result.issuer}. You can now enable SSO.`);
+      setTestStatus(`Metadata and signing keys passed for ${result.issuer}. Continue with the interactive login test.`);
       await mutate();
     } catch (error) {
       setTestStatus(errorMessage(error));
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const testInteractiveLogin = async () => {
+    const saved = await save({ is_enabled: false, is_enforced: false });
+    if (!saved) return;
+    const origin = API_BASE_URL || window.location.origin;
+    window.location.assign(`${origin}/api/instances/sso/providers/${saved.id}/test-login/`);
+  };
+
+  const testRecovery = async () => {
+    if (!provider || !recoveryPassword) return;
+    setIsRecoveryTesting(true);
+    try {
+      await instanceService.testSSORecovery(provider.id, recoveryPassword);
+      setRecoveryPassword("");
+      setTestStatus("Recovery credentials passed. Enforcement can now be enabled for the configured validity window.");
+      await mutate();
+    } catch (error) {
+      setTestStatus(errorMessage(error));
+    } finally {
+      setIsRecoveryTesting(false);
     }
   };
 
@@ -170,6 +201,7 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
 
   const browserOrigin = typeof window === "undefined" ? "" : window.location.origin;
   const callbackURL = `${API_BASE_URL || browserOrigin}/auth/sso/callback/`;
+  const testCallbackURL = `${API_BASE_URL || browserOrigin}/api/instances/sso/providers/test-callback/`;
 
   return (
     <PageWrapper
@@ -185,6 +217,17 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
           void save();
         }}
       >
+        {provider && !provider.deployment_enabled && (
+          <div className="rounded-lg border border-subtle bg-layer-2 p-4 text-13 md:col-span-2">
+            OIDC SSO is disabled for this deployment. Set <code>ENABLE_OIDC_SSO=1</code> and restart the API before
+            testing or enabling it. Regular login remains available.
+          </div>
+        )}
+        {provider && (
+          <div className="rounded-lg border border-subtle p-4 text-13 md:col-span-2">
+            Current mode: <span className="font-medium text-primary capitalize">{provider.mode}</span>
+          </div>
+        )}
         <Field
           id="sso-name"
           label="Provider name"
@@ -264,6 +307,8 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
         <div className="rounded-lg border border-subtle bg-layer-2 p-4 text-13 md:col-span-2">
           <div className="font-medium text-primary">Redirect URI</div>
           <code className="mt-1 block break-all text-secondary">{callbackURL}</code>
+          <div className="mt-3 font-medium text-primary">Admin test redirect URI</div>
+          <code className="mt-1 block break-all text-secondary">{testCallbackURL}</code>
         </div>
         <div className="flex items-center justify-between gap-4 rounded-lg border border-subtle p-4">
           <span>
@@ -306,7 +351,7 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
             size="md"
             stretch="auto"
             loading={isTesting}
-            disabled={isSaving}
+            disabled={isSaving || provider?.deployment_enabled === false}
             onClick={() => void testConnection()}
             label="Test connection"
           />
@@ -315,7 +360,20 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
             variant="secondary"
             size="md"
             stretch="auto"
-            disabled={!provider?.configuration_tested_at || isSaving}
+            disabled={!provider?.metadata_tested_at || !provider.deployment_enabled || isSaving}
+            onClick={() => void testInteractiveLogin()}
+            label="Test interactive login"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            stretch="auto"
+            disabled={
+              isSaving ||
+              !provider ||
+              (!form.is_enabled && (!provider.configuration_ready || !provider.deployment_enabled))
+            }
             onClick={() => void toggleEnabled()}
             label={form.is_enabled ? "Disable SSO" : "Enable SSO"}
           />
@@ -324,10 +382,38 @@ export default function InstanceSSOAuthenticationPage(_props: Route.ComponentPro
             variant="secondary"
             size="md"
             stretch="auto"
-            disabled={!form.is_enabled || !provider?.configuration_tested_at || isSaving}
+            disabled={
+              isSaving ||
+              !form.is_enabled ||
+              !provider ||
+              (!form.is_enforced &&
+                (!provider.configuration_ready || !provider.recovery_ready || !provider.deployment_enabled))
+            }
             onClick={() => void toggleEnforced()}
             label={form.is_enforced ? "Stop enforcing SSO" : "Enforce SSO"}
           />
+        </div>
+        <div className="grid gap-3 rounded-lg border border-subtle p-4 md:col-span-2 md:grid-cols-[1fr_auto]">
+          <Field
+            id="sso-recovery-password"
+            label="Recovery administrator password"
+            value={recoveryPassword}
+            onChange={setRecoveryPassword}
+            type="password"
+            description="Verifies that the signed-in, allow-listed instance administrator can recover without SSO."
+          />
+          <div className="flex items-end">
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              stretch="auto"
+              loading={isRecoveryTesting}
+              disabled={!provider || !recoveryPassword || !provider.deployment_enabled}
+              onClick={() => void testRecovery()}
+              label="Test recovery"
+            />
+          </div>
         </div>
         <p className="text-11 text-tertiary md:col-span-2">
           Enforcement requires an active instance administrator listed in SSO_BREAK_GLASS_ADMIN_EMAILS. Recovery

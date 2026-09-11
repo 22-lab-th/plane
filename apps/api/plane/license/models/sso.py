@@ -8,6 +8,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 
 # Module imports
 from plane.db.models import BaseModel
@@ -36,7 +37,17 @@ class SSOProvider(BaseModel):
     allow_verified_email_auto_link = models.BooleanField(default=False)
     is_enabled = models.BooleanField(default=False)
     is_enforced = models.BooleanField(default=False)
+    metadata_tested_at = models.DateTimeField(null=True, blank=True)
     configuration_tested_at = models.DateTimeField(null=True, blank=True)
+    configuration_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    recovery_tested_at = models.DateTimeField(null=True, blank=True)
+    recovery_tested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="recovery_tested_sso_providers",
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         verbose_name = "SSO Provider"
@@ -46,6 +57,12 @@ class SSOProvider(BaseModel):
         constraints = [
             models.UniqueConstraint(fields=["instance", "slug"], name="unique_sso_provider_slug_per_instance"),
             models.UniqueConstraint(fields=["instance", "issuer_url"], name="unique_sso_provider_issuer_per_instance"),
+            models.UniqueConstraint(
+                fields=["instance"], condition=Q(is_enabled=True), name="unique_enabled_sso_provider_per_instance"
+            ),
+            models.UniqueConstraint(
+                fields=["instance"], condition=Q(is_enforced=True), name="unique_enforced_sso_provider_per_instance"
+            ),
         ]
 
     @property
@@ -102,6 +119,7 @@ class SSOAuditEvent(TimeAuditModel):
     )
     event = models.CharField(max_length=100)
     outcome = models.CharField(max_length=20)
+    correlation_id = models.CharField(max_length=100, db_index=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True)
     metadata = models.JSONField(default=dict)

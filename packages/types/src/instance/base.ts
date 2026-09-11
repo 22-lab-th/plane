@@ -59,6 +59,7 @@ export interface IInstanceConfig {
     is_enforced: boolean;
   }>;
   is_sso_enforced: boolean;
+  is_oidc_sso_available: boolean;
   github_app_name: string | undefined;
   slack_client_id: string | undefined;
   has_unsplash_configured: boolean;

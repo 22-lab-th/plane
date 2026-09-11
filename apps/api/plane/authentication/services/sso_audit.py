@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
+import uuid
+
 from plane.license.models import SSOAuditEvent
 from plane.utils.exception_logger import log_exception
 from plane.utils.ip_address import get_client_ip
@@ -15,12 +17,17 @@ def record_sso_event(request, event, outcome, provider=None, actor=None, metadat
         for key, value in (metadata or {}).items()
         if key not in {"token", "id_token", "access_token", "refresh_token", "client_secret"}
     }
+    correlation_id = getattr(request, "sso_correlation_id", None) or request.META.get("HTTP_X_REQUEST_ID")
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+    request.sso_correlation_id = str(correlation_id)[:100]
     try:
         return SSOAuditEvent.objects.create(
             provider=provider,
             actor=actor if actor and actor.is_authenticated else None,
             event=event[:100],
             outcome=outcome[:20],
+            correlation_id=request.sso_correlation_id,
             ip_address=get_client_ip(request=request),
             user_agent=request.META.get("HTTP_USER_AGENT", "")[:2000],
             metadata=safe_metadata,
