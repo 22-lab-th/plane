@@ -28,6 +28,7 @@ from plane.authentication.services import (
     get_sso_provider_mode,
     has_viable_break_glass_admin,
 )
+from plane.license.api.views.sso import _claim_evidence
 
 
 def get_admin_session(api_client, create=False):
@@ -254,7 +255,20 @@ def test_admin_interactive_callback_marks_current_configuration_ready(
     InstanceAdmin.objects.create(user=create_user, instance=instance, role=20, is_verified=True)
     api_client.force_authenticate(user=create_user)
     mock_exchange.return_value = ({"id_token": "signed-token"}, {"issuer": provider.issuer_url})
-    mock_validate.return_value = {"sub": "admin-test-subject"}
+    mock_validate.return_value = {
+        "sub": "admin-test-subject",
+        "iss": provider.issuer_url,
+        "aud": [provider.client_id, provider.client_id],
+        "tid": "7f305233-cfec-4741-80c2-d1b9af91f99a",
+        "oid": "3f80b7d1-e322-464e-aa13-595860b5428f",
+        "roles": [
+            "LocableAI.PlatformAdmin",
+            "LocableAI.Contributor",
+            "LocableAI.Contributor",
+            "",
+            None,
+        ],
+    }
     session = get_admin_session(api_client, create=True)
     session["oidc_admin_test_transaction"] = {
         "provider_id": str(provider.id),
@@ -275,12 +289,57 @@ def test_admin_interactive_callback_marks_current_configuration_ready(
     assert provider.configuration_tested_at is not None
     assert provider.configuration_fingerprint == get_sso_configuration_fingerprint(provider)
     assert not SSOIdentity.objects.filter(provider=provider).exists()
-    assert SSOAuditEvent.objects.filter(
+    audit_event = SSOAuditEvent.objects.get(
         provider=provider,
         event="interactive_test",
         outcome="success",
         correlation_id="interactive-test-correlation",
-    ).exists()
+    )
+    assert audit_event.metadata == {
+        "issuer": provider.issuer_url,
+        "audience": f'["{provider.client_id}"]',
+        "tenant_id": "7f305233-cfec-4741-80c2-d1b9af91f99a",
+        "object_id": "3f80b7d1-e322-464e-aa13-595860b5428f",
+        "roles": '["LocableAI.Contributor","LocableAI.PlatformAdmin"]',
+        "issuer_matches": "true",
+        "audience_matches": "true",
+        "claim_evidence_complete": "true",
+    }
+
+
+@pytest.mark.django_db
+def test_claim_evidence_matches_full_audience_before_bounding(provider):
+    provider.client_id = "z" * 120
+    claims = {
+        "iss": provider.issuer_url,
+        "aud": ["a", "b", "c", "d", provider.client_id, f"{provider.client_id}suffix"],
+        "tid": "tenant-id",
+        "oid": "object-id",
+        "roles": ["role"],
+    }
+
+    evidence = _claim_evidence(provider, claims)
+
+    assert evidence["audience_matches"] == "true"
+    assert evidence["claim_evidence_complete"] == "true"
+    assert provider.client_id[:100] in evidence["audience"]
+
+
+@pytest.mark.django_db
+def test_claim_evidence_requires_matching_issuer(provider):
+    evidence = _claim_evidence(
+        provider,
+        {
+            "iss": "https://unexpected.example.com",
+            "aud": provider.client_id,
+            "tid": "tenant-id",
+            "oid": "object-id",
+            "roles": ["role"],
+        },
+    )
+
+    assert evidence["issuer_matches"] == "false"
+    assert evidence["claim_evidence_complete"] == "false"
 
 
 @pytest.mark.django_db

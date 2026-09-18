@@ -61,7 +61,7 @@ class RequestLoggerMiddleware:
 
         # Log the request information
         api_logger.info(
-            f"{request.method} {request.get_full_path()} {response.status_code}",
+            f"{request.method} {request.path} {response.status_code}",
             extra={
                 "path": request.path,
                 "method": request.method,
@@ -146,7 +146,6 @@ class APITokenLogMiddleware:
                 ).hexdigest(),
                 "path": request.path,
                 "method": request.method,
-                "query_params": request.META.get("QUERY_STRING", ""),
                 "headers": self._redacted_headers(request),
                 "body": (
                     (

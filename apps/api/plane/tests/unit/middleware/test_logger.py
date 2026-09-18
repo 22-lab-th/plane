@@ -20,7 +20,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse
 from django.test import RequestFactory
 
-from plane.middleware.logger import APITokenLogMiddleware
+from plane.middleware.logger import APITokenLogMiddleware, RequestLoggerMiddleware
 
 
 @pytest.fixture
@@ -77,3 +77,39 @@ class TestAPITokenLogMiddleware:
         with patch("plane.middleware.logger.process_logs") as process_logs:
             middleware.process_request(request, HttpResponse(b"{}"), request_body=b"")
             assert not process_logs.delay.called
+
+
+@pytest.mark.unit
+def test_request_logger_omits_sensitive_query_string(request_factory, caplog):
+    request = request_factory.get(
+        "/api/instances/sso/providers/test-callback/",
+        {"code": "single-use-authorization-code", "state": "oidc-state"},
+    )
+    request.user = AnonymousUser()
+    middleware = RequestLoggerMiddleware(Mock(return_value=HttpResponse(status=302)))
+
+    with caplog.at_level("INFO", logger="plane.api.request"):
+        middleware(request)
+
+    assert "GET /api/instances/sso/providers/test-callback/ 302" in caplog.text
+    assert "single-use-authorization-code" not in caplog.text
+    assert "oidc-state" not in caplog.text
+
+
+@pytest.mark.unit
+def test_api_token_logger_omits_sensitive_query_string(middleware, request_factory):
+    request = request_factory.get(
+        "/api/instances/sso/providers/test-callback/",
+        {"code": "single-use-authorization-code", "state": "oidc-state"},
+        HTTP_X_API_KEY=TestAPITokenLogMiddleware.API_KEY,
+    )
+    request.user = AnonymousUser()
+
+    with patch("plane.middleware.logger.process_logs") as process_logs:
+        middleware.process_request(request, HttpResponse(b"{}"), request_body=b"")
+
+    log_data = process_logs.delay.call_args.kwargs["log_data"]
+    serialized_log_data = str(log_data)
+    assert "query_params" not in log_data
+    assert "single-use-authorization-code" not in serialized_log_data
+    assert "oidc-state" not in serialized_log_data

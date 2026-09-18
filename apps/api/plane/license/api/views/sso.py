@@ -5,6 +5,7 @@
 # Python imports
 import base64
 import hashlib
+import json
 import secrets
 import time
 from urllib.parse import urlencode
@@ -48,6 +49,47 @@ def _interactive_test_redirect(request, outcome, code=None):
     if code:
         params["code"] = code
     return HttpResponseRedirect(f"{base_host(request=request, is_admin=True)}authentication/sso?{urlencode(params)}")
+
+
+def _claim_evidence(provider, claims):
+    raw_audience = claims.get("aud")
+    audience_values = [raw_audience] if isinstance(raw_audience, str) else raw_audience
+    normalized_audiences = sorted(
+        {value.strip() for value in audience_values or [] if isinstance(value, str) and value.strip()}
+    )
+    audience_matches = provider.client_id in normalized_audiences
+    display_audiences = (
+        [provider.client_id]
+        + [value for value in normalized_audiences if value != provider.client_id]
+        if audience_matches
+        else normalized_audiences
+    )
+    audiences = [value[:100] for value in display_audiences[:4]]
+
+    raw_roles = claims.get("roles")
+    roles = (
+        sorted({value.strip()[:100] for value in raw_roles if isinstance(value, str) and value.strip()})[:4]
+        if isinstance(raw_roles, list)
+        else []
+    )
+
+    issuer = claims.get("iss") if isinstance(claims.get("iss"), str) else ""
+    tenant_id = claims.get("tid") if isinstance(claims.get("tid"), str) else ""
+    object_id = claims.get("oid") if isinstance(claims.get("oid"), str) else ""
+    issuer_matches = issuer == provider.issuer_url
+
+    return {
+        "issuer": issuer[:500],
+        "audience": json.dumps(audiences, separators=(",", ":")),
+        "tenant_id": tenant_id[:100],
+        "object_id": object_id[:100],
+        "roles": json.dumps(roles, separators=(",", ":")),
+        "issuer_matches": str(issuer_matches).lower(),
+        "audience_matches": str(audience_matches).lower(),
+        "claim_evidence_complete": str(
+            bool(issuer_matches and tenant_id and object_id and audience_matches and roles)
+        ).lower(),
+    }
 
 
 class SSOProviderEndpoint(BaseAPIView):
@@ -259,7 +301,7 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
                 code_verifier=transaction_data["code_verifier"],
                 redirect_uri=_interactive_test_callback_uri(request),
             )
-            client.validate_id_token(token_data, metadata, transaction_data["nonce"])
+            claims = client.validate_id_token(token_data, metadata, transaction_data["nonce"])
         except (OIDCConfigurationError, KeyError) as exc:
             code_name = exc.code if isinstance(exc, OIDCConfigurationError) else "missing_value"
             record_sso_event(
@@ -275,7 +317,14 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
         provider.configuration_tested_at = timezone.now()
         provider.configuration_fingerprint = get_sso_configuration_fingerprint(provider)
         provider.save(update_fields=["configuration_tested_at", "configuration_fingerprint", "updated_at"])
-        record_sso_event(request, "interactive_test", "success", provider=provider, actor=request.user)
+        record_sso_event(
+            request,
+            "interactive_test",
+            "success",
+            provider=provider,
+            actor=request.user,
+            metadata=_claim_evidence(provider, claims),
+        )
         return _interactive_test_redirect(request, "success")
 
 
