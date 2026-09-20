@@ -84,7 +84,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   // store hooks
   const { getProjectRoleByWorkspaceSlugAndProjectId } = useUserPermissions();
   // the same permission source the navigation item is filtered by: a GUEST lists and reads, and may not mutate
-  const isReadOnly = getProjectRoleByWorkspaceSlugAndProjectId(workspaceSlug, projectId) === EUserPermissions.GUEST;
+  const projectRole = getProjectRoleByWorkspaceSlugAndProjectId(workspaceSlug, projectId);
+  const isReadOnly = projectRole === EUserPermissions.GUEST;
+  // purge is the one action the API keeps for project ADMINs (AC-27)
+  const isProjectAdmin = projectRole === EUserPermissions.ADMIN;
 
   // view mode: an explicit `mode` wins, otherwise the breakpoint decides (DESIGN §5)
   const [responsiveViewMode, setResponsiveViewMode] = useState<TFilesViewMode>("table");
@@ -386,11 +389,16 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
       </div>
       {fileId && (
         <FileDetailDrawer
+          // A different file is a different drawer: no preview URL, version choice or
+          // open question may carry across (DESIGN §8).
+          key={fileId}
           workspaceSlug={workspaceSlug}
           projectId={projectId}
           fileId={fileId}
           trashed={quickView === "trash"}
+          isProjectAdmin={isProjectAdmin}
           onClose={handleCloseDrawer}
+          onFileMutated={handleStored}
         />
       )}
     </div>

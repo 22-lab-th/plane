@@ -56,7 +56,11 @@ export const UPLOAD_UNVERIFIED_COPY = "This upload could not be verified and was
 export type TUploadRow = {
   id: string;
   file: File;
-  /** The display name; the initiation response's `name_display` replaces it (R-FOLD-5). */
+  /**
+   * The display name; the initiation response's `name_display` replaces it (R-FOLD-5).
+   * Between the collision decision and that response the row carries the name the modal
+   * promised, so the rest of the batch predicts from it (see `keepBothNameFor`).
+   */
   name: string;
   sizeBytes: number;
   /** The type the row declares, resolved by `resolveUploadMimeType`. */
@@ -94,6 +98,26 @@ export type TUploadTarget = {
 };
 
 /**
+ * The first field error in a DRF validation body, e.g.
+ * `{"size_bytes": ["Ensure this value is greater than or equal to 1."]}`.
+ *
+ * A serializer refusal carries no `error`, `detail` or `message` string at all, so
+ * without this the row could only report the generic failure for a case the server
+ * explained exactly - a 0-byte file, refused by `size_bytes: min_value=1`
+ * (DEFECT-003 §3.8). Only list-shaped values are read: a body that also carries
+ * `code`/`field` strings must not surface one of those as the reason.
+ */
+const firstFieldError = (payload: Record<string, unknown>): string | null => {
+  for (const value of Object.values(payload)) {
+    if (!Array.isArray(value)) continue;
+    const message = value.find((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    if (message) return message;
+  }
+
+  return null;
+};
+
+/**
  * The service throws `error.response.data` for an HTTP error and the raw error for a
  * transport failure, and the presigned PUT sender rejects its own shapes, so the code, the
  * message and the cancellation are read from whichever of them arrived.
@@ -103,20 +127,14 @@ export const readUploadFailure = (error: unknown): TUploadFailure => {
     return { code: null, message: error instanceof Error ? error.message : null, cancelled: false };
   }
 
-  const payload = error as {
-    code?: unknown;
-    error?: unknown;
-    detail?: unknown;
-    message?: unknown;
-    cancelled?: unknown;
-  };
+  const payload = error as Record<string, unknown>;
   const reported = [payload.error, payload.detail, payload.message].find(
     (value): value is string => typeof value === "string" && value.length > 0
   );
 
   return {
     code: typeof payload.code === "string" ? payload.code : null,
-    message: reported ?? null,
+    message: reported ?? firstFieldError(payload),
     cancelled: payload.cancelled === true,
   };
 };
@@ -143,6 +161,38 @@ export const nextAvailableName = (fileName: string, taken: Set<string>): string 
 
   return fileName;
 };
+
+/**
+ * The names the destination folder's namespace already holds, as the queue sees it: every
+ * file the view lists for that folder, plus every queued row's name.
+ *
+ * A row's `name` is the name it owns there - the file's own name until the server answers,
+ * and the server's derived name from then on - so a row that has just been resolved as
+ * "Keep both" contributes the suffixed name it was promised rather than the original one.
+ * That is what makes the *second* modal in a batch of same-named files predict the name the
+ * server will actually derive (DEFECT-003 §3.4): with only the original names in the set,
+ * two same-named picks predicted `collide (3).txt` twice while the server stored
+ * `collide (3).txt` and then `collide (4).txt`.
+ */
+export const collisionNamespace = (
+  listedFiles: IProjectFile[],
+  rows: TUploadRow[],
+  exceptRowId: string
+): Set<string> => {
+  const taken = new Set(listedFiles.map((file) => file.name_display.toLowerCase()));
+  rows.forEach((row) => {
+    if (row.id !== exceptRowId) taken.add(row.name.toLowerCase());
+  });
+
+  return taken;
+};
+
+/**
+ * The name the keep-both choice promises for one colliding row, derived from the same
+ * namespace `available_display_name` will derive it from.
+ */
+export const keepBothNameFor = (row: TUploadRow, listedFiles: IProjectFile[], rows: TUploadRow[]): string =>
+  nextAvailableName(row.name, collisionNamespace(listedFiles, rows, row.id));
 
 /** The statuses that still own a place in the destination folder's name space. */
 const occupiesName = (status: TUploadRowStatus): boolean =>

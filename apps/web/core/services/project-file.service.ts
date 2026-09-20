@@ -209,6 +209,43 @@ export interface IProjectFileUploadCompletion {
   storage_usage: { project_used_bytes: number; limit_bytes: number };
 }
 
+/**
+ * A presigned GET as the delivery endpoints return it (ARCH-001 §4.3).
+ *
+ * `disposition` is the decision the server signed, not a suggestion: it is
+ * `inline` only for the inert allowlist, and every script-capable type - SVG and
+ * HTML above all - is signed `attachment` (AD-07, AC-08). The URL is short-lived,
+ * so it is never cached across an open.
+ */
+export interface IProjectFileAccessUrl {
+  url: string;
+  expires_at: string;
+  disposition: string;
+  file_name: string;
+  version_no: number;
+}
+
+/** `POST files/{id}/versions/{n}/activate/` response: the swap and what it demoted. */
+export interface IProjectFileVersionActivation {
+  file: IProjectFile;
+  version: IProjectFileVersion;
+  previous_version_no: number | null;
+  /** False for a repeated activation: the end state was already the requested one. */
+  activated: boolean;
+  /** True when a version the rows called purged was found in the store and put back. */
+  repaired: boolean;
+}
+
+/** `POST files/{id}/restore/` response, including where the file landed. */
+export interface IProjectFileRestoreResult {
+  file: IProjectFile;
+  restore: {
+    restored_links: number;
+    /** True when the original folder was gone and the file landed at the project root. */
+    folder_fallback: boolean;
+  };
+}
+
 /** The list query parameters the endpoint documents. */
 export type TProjectFileListQuery = {
   /** Omit for the project root; a folder UUID browses that folder. */
@@ -280,6 +317,117 @@ export class ProjectFileService extends APIService {
         // surface off the thrown value, so the raw error is the fallback.
         throw error?.response?.data ?? error;
       });
+  }
+
+  /**
+   * Sign a short-lived GET for the preview area (R-DL-2, AC-08).
+   *
+   * Called on every open rather than reusing a stored URL: the URL expires, and a
+   * cached one would either break the preview or outlive its TTL in the DOM
+   * (DESIGN §8). `versionNo` previews a version without moving the active pointer.
+   */
+  async getProjectFilePreviewUrl(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    options: { versionNo?: number | null } = {}
+  ): Promise<IProjectFileAccessUrl> {
+    return this.get(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/preview/${this.versionQuery(options)}`
+    )
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Sign a short-lived GET forced to `attachment` for the Download action (R-DL-1). */
+  async getProjectFileDownloadUrl(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    options: { versionNo?: number | null } = {}
+  ): Promise<IProjectFileAccessUrl> {
+    return this.get(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/download/${this.versionQuery(options)}`
+    )
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Rename, move within the project, or pin the file (AC-06, AC-10).
+   *
+   * Metadata only: `name_original`, the object key and every stored version stay as
+   * they are. A name the destination folder already holds is refused with a 409
+   * rather than suffixed, because here the user chose the name.
+   */
+  async updateProjectFile(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    payload: { name_display?: string; folder_id?: string | null; is_pinned?: boolean }
+  ): Promise<IProjectFile> {
+    return this.patch(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/`, payload)
+      .then((response) => response?.data?.file)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Bring a trashed file back, reviving the links whose entities are still live (AC-11). */
+  async restoreProjectFile(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string
+  ): Promise<IProjectFileRestoreResult> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/restore/`)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Delete the file and every version object for good (AC-12, AC-27).
+   *
+   * The API refuses the call unless it carries the explicit confirmation, so the
+   * query parameter is the request's own proof that a human was asked.
+   */
+  async purgeProjectFile(workspaceSlug: string, projectId: string, fileId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/purge/?confirm=true`)
+      .then(() => undefined)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Move the active pointer to one stored version (AD-18, AC-43).
+   *
+   * The only call that changes which version preview and download follow; a revision
+   * upload never does this on its own.
+   */
+  async activateProjectFileVersion(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    versionNo: number
+  ): Promise<IProjectFileVersionActivation> {
+    return this.post(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/versions/${versionNo}/activate/`
+    )
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** `?version=` for the delivery endpoints; absent means the active version. */
+  private versionQuery(options: { versionNo?: number | null }): string {
+    return options.versionNo ? `?version=${options.versionNo}` : "";
   }
 
   /**

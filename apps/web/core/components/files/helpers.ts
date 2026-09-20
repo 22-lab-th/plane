@@ -376,6 +376,110 @@ export const validateUploadCandidate = (candidate: {
   return { ok: true, mimeType };
 };
 
+// --- preview and version status (T-114) -------------------------------------
+
+/**
+ * The types the drawer must never render inline, whatever a response says.
+ *
+ * SVG is XML that can carry script and HTML is script; serving either inline on the
+ * application's origin is the documented token-theft class R-LEG-3 exists for. The
+ * server already signs them `attachment` (AC-08); naming them here means the drawer
+ * cannot start inlining them if the allowlist below is ever widened.
+ */
+const FILES_NEVER_INLINE_MIME_TYPES = new Set([
+  "image/svg+xml",
+  "text/html",
+  "application/xhtml+xml",
+  "text/xml",
+  "application/xml",
+  "text/javascript",
+  "application/javascript",
+]);
+
+/**
+ * Whether the drawer may render a live URL for this type inside the panel.
+ *
+ * Raster images only, and never SVG or HTML: an `<img>` cannot execute script, which
+ * is the whole reason this is the one element the drawer renders uploaded bytes with.
+ * The only other option for the types the server also signs `inline` - PDF and the
+ * plain-text family - is an `<iframe>`, and that trade does not pay: Chrome's PDF
+ * viewer renders nothing at all in a sandboxed frame (measured), while an unsandboxed
+ * one would run uploaded PDF script inside this page. Those types get the type tile and
+ * their Download action instead (DESIGN §8, AC-08).
+ *
+ * A stricter client than the server's `is_inline_safe` is deliberate - the server's
+ * allowlist is a superset of what may be *rendered here* - and an unknown, empty or
+ * script-capable type is refused (fail-closed).
+ *
+ * This is only half the decision: the render also requires the payload to report
+ * `disposition: "inline"`, because the server is the one that knows whether the object
+ * it verified is the type it claims.
+ */
+export const isInlineRenderableMime = (mimeType: string): boolean => {
+  const mime = (mimeType || "").split(";")[0].trim().toLowerCase();
+  if (!mime) return false;
+  if (FILES_NEVER_INLINE_MIME_TYPES.has(mime)) return false;
+  return mime.startsWith("image/");
+};
+
+/**
+ * True for the types the drawer never renders inline, so the tile can say why: SVG and
+ * HTML read differently from a type that simply has no preview (R-LEG-3, DESIGN §8).
+ */
+export const isAlwaysDownloadMime = (mimeType: string): boolean =>
+  FILES_NEVER_INLINE_MIME_TYPES.has((mimeType || "").split(";")[0].trim().toLowerCase());
+
+/** The version statuses the API records, as the history's chip names them. */
+export const VERSION_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  superseded: "Superseded",
+  uploading: "Uploading",
+  failed: "Failed",
+  purged: "Purged",
+  purge_failed: "Purge failed",
+};
+
+/**
+ * The audit actions in the words the activity list uses (R-AUD-1, AC-18). The
+ * spelling comes from `FileAccessLog.Action`; an action this map does not know is
+ * shown as the API recorded it rather than hidden.
+ */
+export const FILE_ACTIVITY_LABELS: Record<string, string> = {
+  upload_initiated: "started an upload",
+  upload_completed: "completed an upload",
+  upload_failed: "had an upload fail",
+  version_created: "uploaded a version",
+  version_activated: "made a version active",
+  downloaded: "downloaded",
+  previewed: "previewed",
+  renamed: "renamed",
+  moved: "moved",
+  copied: "copied",
+  linked: "linked",
+  unlinked: "unlinked",
+  trashed: "moved to trash",
+  restored: "restored",
+  purged: "purged",
+  permission_denied: "was refused for lack of permission",
+  quota_rejected: "was refused for quota",
+  folder_created: "created a folder",
+  folder_renamed: "renamed a folder",
+  folder_moved: "moved a folder",
+  folder_deleted: "deleted a folder",
+};
+
+/** One audit row as the activity list reads it, from the row the API returned. */
+export const fileActivityCopy = (entry: {
+  action: string;
+  version_no: number | null;
+  actor: { display_name: string | null } | null;
+  actor_display: string | null;
+}): { actor: string; action: string } => {
+  const actor = entry.actor?.display_name || entry.actor_display || "Unknown actor";
+  const label = FILE_ACTIVITY_LABELS[entry.action] ?? entry.action;
+  return { actor, action: entry.version_no === null ? label : `${label} v${entry.version_no}` };
+};
+
 // --- the copy these surfaces show (DES-001 §7) ------------------------------
 
 export const uploadTooLargeCopy = (limitBytes: number): string =>
@@ -393,6 +497,25 @@ export const quotaExceededCopy = (usedBytes: number, limitBytes: number): string
 /** The used share of the project's effective ceiling; 0 when no ceiling is set. */
 export const storageUsedPct = (storage: Pick<IProjectFileStorage, "project_used_bytes" | "limit_bytes">): number =>
   storage.limit_bytes > 0 ? Math.round((storage.project_used_bytes / storage.limit_bytes) * 100) : 0;
+
+/** The question a completed revision upload ends in (EXP-001 F-09 step 2, AC-43). */
+export const versionActivationAskCopy = (versionNo: number): string =>
+  `Make v${versionNo} the active version? The current version stays available in the history.`;
+
+export const versionActivatedCopy = (versionNo: number): string => `Version ${versionNo} is now active.`;
+
+/** A stored revision whose activation is still open. */
+export const versionSavedCopy = (versionNo: number): string => `Version ${versionNo} saved.`;
+
+/** Declining the question: the new revision stays, the pointer does not move (AC-43). */
+export const versionDeclinedCopy = (versionNo: number, activeVersionNo: number): string =>
+  `Version ${versionNo} saved — v${activeVersionNo} is still the active version.`;
+
+/** A restore that could not return the file to its folder (DES-001 §7). */
+export const restoredToRootCopy = "Restored to the project root — the original folder no longer exists.";
+
+/** The purge confirmation's question (DES-001 §7); the body names the irreversibility. */
+export const purgeConfirmCopy = (name: string): string => `Permanently delete ${name}? This cannot be undone.`;
 
 /**
  * What the URL asks the API for. The URL is the only place the browse state

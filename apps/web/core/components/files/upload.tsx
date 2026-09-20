@@ -31,7 +31,7 @@ import {
   UPLOAD_CANCELLED_COPY,
   UPLOAD_QUEUED_COPY,
   UPLOAD_VERIFYING_COPY,
-  nextAvailableName,
+  keepBothNameFor,
   planUploadRows,
   runUploadAttempt,
 } from "./upload-queue";
@@ -275,12 +275,7 @@ export function useFilesUpload(options: TFilesUploadOptions): TFilesUpload {
   const collision = useMemo(() => {
     if (!collisionRow) return null;
 
-    const taken = new Set(listedFiles.map((file) => file.name_display.toLowerCase()));
-    rows.forEach((row) => {
-      if (row.id !== collisionRow.id) taken.add(row.name.toLowerCase());
-    });
-
-    return { row: collisionRow, keepBothName: nextAvailableName(collisionRow.name, taken) };
+    return { row: collisionRow, keepBothName: keepBothNameFor(collisionRow, listedFiles, rows) };
   }, [collisionRow, listedFiles, rows]);
 
   const chooseCollision = useCallback(
@@ -312,7 +307,16 @@ export function useFilesUpload(options: TFilesUploadOptions): TFilesUpload {
         return;
       }
 
-      patchRow(row.id, { status: "queued", message: UPLOAD_QUEUED_COPY });
+      // The name the modal promised is reserved on the row before the attempt starts: the
+      // server derives the next free suffix from the same namespace, so a second
+      // same-named pick in the same batch then predicts that suffixed name in turn rather
+      // than repeating the first one (DEFECT-003 §3.4). The initiation response's
+      // `name_display` still overwrites it, so what the row finally shows is the server's.
+      patchRow(row.id, {
+        status: "queued",
+        message: UPLOAD_QUEUED_COPY,
+        name: keepBothNameFor(row, listedFiles, rowsRef.current),
+      });
       startRow(row.id);
     },
     [applyRows, folderId, listedFiles, patchRow, startRow]
