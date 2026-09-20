@@ -40,7 +40,12 @@ from rest_framework.response import Response
 
 # Module imports
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import delivery_refusal, project_or_404, require_project_member
+from plane.app.views.file.base import (
+    delivery_refusal,
+    file_queryset,
+    project_or_404,
+    require_project_member,
+)
 from plane.db.models import FileAccessLog, FileObject, FileVersion
 from plane.settings.storage import S3Storage
 from plane.utils.file_storage.audit import record_file_access
@@ -108,10 +113,16 @@ def resolve_version(file_object, version_no):
     else:
         version = versions.filter(is_active=True).first()
         if version is None:
-            version = versions.order_by("-version_no").first()
-
-    if version is None:
-        raise FileVersion.DoesNotExist
+            # Without an active version there is nothing to serve. Falling back to
+            # the newest stored version would sign a URL for an object the file's
+            # own pointer does not claim - reachable the moment a purge removes the
+            # active version (ARCH-001 §4.3, ADV-001 §5.1).
+            raise ProjectFileError(
+                "This file has no active version to serve.",
+                code="object_unavailable",
+                status_code=status.HTTP_409_CONFLICT,
+                version_status=None,
+            )
 
     refusal = delivery_refusal(file_object, version)
     if refusal is not None:
@@ -191,9 +202,11 @@ class FileDownloadEndpoint(BaseAPIView):
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
         require_project_member(request, project)
-        # All objects: a trashed file must reach the documented 409 rather than
-        # disappearing behind a 404, while a genuinely missing id still 404s.
-        file_object = FileObject.all_objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
+        # Trashed rows are resolved on purpose (``include_trashed=True``): the
+        # documented answer is a 409 ``file_trashed`` refusal, not a 404, while a
+        # genuinely missing or purged id still 404s. The query itself comes from
+        # the shared resolver so this path and the listing agree on visibility.
+        file_object = file_queryset(project, slug, include_trashed=True).get(id=file_id)
 
         return Response(
             issue_file_url(
@@ -217,7 +230,7 @@ class FilePreviewEndpoint(BaseAPIView):
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
         require_project_member(request, project)
-        file_object = FileObject.all_objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
+        file_object = file_queryset(project, slug, include_trashed=True).get(id=file_id)
 
         disposition = "inline" if is_inline_safe(file_object.mime_type) else "attachment"
 

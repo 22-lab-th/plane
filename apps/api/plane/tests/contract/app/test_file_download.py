@@ -416,11 +416,39 @@ class TestVersionSelection:
             object_deleted=object_deleted,
         )
 
-        response = session_client.get(download_url(project.workspace.slug, project.id, file_object.id))
+        response = session_client.get(
+            download_url(project.workspace.slug, project.id, file_object.id), {"version": 1}
+        )
 
         assert response.status_code == status.HTTP_409_CONFLICT
         assert response.data["code"] == "object_unavailable"
         assert response.data["version_status"] == status_value
+
+    def test_a_file_without_an_active_version_is_refused_rather_than_guessed(
+        self, session_client, project, stored_objects
+    ):
+        """No active pointer means nothing to serve, never the newest stored row."""
+        file_object, _ = make_file_with_object(
+            project,
+            name="superseded-only.pdf",
+            mime="application/pdf",
+            content=PDF_BYTES,
+            stored_objects=stored_objects,
+            status=FileVersion.Status.SUPERSEDED,
+            is_active=False,
+        )
+
+        response = session_client.get(download_url(project.workspace.slug, project.id, file_object.id))
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["code"] == "object_unavailable"
+        assert response.data["version_status"] is None
+        # The requested-version path still describes the version it was asked for.
+        explicit = session_client.get(
+            download_url(project.workspace.slug, project.id, file_object.id), {"version": 1}
+        )
+        assert explicit.status_code == status.HTTP_200_OK
+        assert fetch(explicit.data["url"]).content == PDF_BYTES
 
     def test_a_trashed_file_is_not_served(self, session_client, project, stored_objects):
         """A trashed file is restored before it is downloaded or previewed.

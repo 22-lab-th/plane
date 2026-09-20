@@ -35,8 +35,16 @@ from plane.app.serializers.file import (
 )
 from plane.app.views.base import BaseAPIView
 from plane.throttles.project_file import ProjectFileUploadThrottle
-from plane.app.views.file.base import breadcrumbs, delivery_refusal, member_role, parse_bool, project_or_404
-from plane.db.models import FileFolder, FileLink, FileObject, FileVersion, ProjectMember
+from plane.app.views.file.base import (
+    breadcrumbs,
+    file_queryset,
+    member_role,
+    parse_bool,
+    permissions_for,
+    project_or_404,
+    trashed_files,
+)
+from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.global_paginator import PaginateCursor, paginate
@@ -209,18 +217,13 @@ def _files_queryset(project, slug, filters):
     Every filter is conjunctive and the trash view is opt-in: without
     ``trashed=true`` the trashed files are excluded (R-FIND-1).
 
-    Moving a file to trash sets both ``status='trashed'`` and ``deleted_at``
-    (R-FOLD-4), so the trash view reads through the all-objects manager to find
-    those rows again; the default view keeps the live manager and additionally
-    excludes the trashed status, so a trashed row is invisible either way.
+    Visibility comes from the shared resolver (``file_queryset``/``trashed_files``)
+    rather than from a manager chosen here, so the rows this list shows are
+    exactly the rows the detail endpoint will resolve (ADV-001 §5 P-1).
     """
-    manager = FileObject.all_objects if filters["trashed"] else FileObject.objects
-    queryset = manager.filter(project_id=project.id, workspace__slug=slug)
-
-    if filters["trashed"]:
-        queryset = queryset.filter(status=FileObject.Status.TRASHED)
-    else:
-        queryset = queryset.exclude(status=FileObject.Status.TRASHED)
+    queryset = (
+        trashed_files(project, slug) if filters["trashed"] else file_queryset(project, slug, include_trashed=False)
+    )
 
     if filters["folder"] == ROOT_FOLDER:
         queryset = queryset.filter(folder__isnull=True)
@@ -346,32 +349,6 @@ def _cursor(request):
     )
 
 
-def permissions_for(request, project, file_object, *, version=None):
-    """Return the caller's affordances for this file.
-
-    GUEST members may list and read but never edit or delete, and an archived
-    project is read-only for everyone (AC-37). A file that is already trashed has
-    no edit affordance because it is restored rather than edited.
-
-    ``can_download`` is driven by the same predicate the delivery endpoints
-    enforce, so the advertised affordance and the answer download/preview give
-    cannot drift apart (a trashed, quarantined or object-less version reports
-    false here *and* is refused there).
-    """
-    member = ProjectMember.objects.filter(
-        project_id=project.id, member=request.user, is_active=True
-    ).first()
-    is_editor = member is not None and member.role in (ROLE.ADMIN.value, ROLE.MEMBER.value)
-    writable = is_editor and project.archived_at is None
-    is_trashed = file_object.status == FileObject.Status.TRASHED
-
-    return {
-        "can_edit": writable and not is_trashed,
-        "can_delete": writable,
-        "can_download": delivery_refusal(file_object, version) is None,
-    }
-
-
 class FileListEndpoint(BaseAPIView):
     """List the files and folders of a project, with the documented filters.
 
@@ -462,12 +439,11 @@ class FileDetailEndpoint(BaseAPIView):
             parse_bool(raw_trashed, "trashed") if raw_trashed not in (None, "") else False
         ) or member_role(request, project) == ROLE.ADMIN.value
 
-        manager = FileObject.all_objects if include_trashed else FileObject.objects
-
-        # Scoped by project, so a file belonging to another project is simply not
-        # found and the caller learns nothing about it (AD-06).
+        # The same visibility source the list reads, scoped by project, so a file
+        # belonging to another project is simply not found and the caller learns
+        # nothing about it (AD-06).
         file_object = (
-            manager.filter(project_id=project.id, workspace__slug=slug)
+            file_queryset(project, slug, include_trashed=include_trashed)
             .annotate(link_count=link_count_expression())
             .select_related("created_by", "folder")
             .get(id=file_id)

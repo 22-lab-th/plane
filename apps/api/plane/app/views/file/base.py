@@ -13,6 +13,15 @@ Three rules live here so no endpoint can forget them:
 * breadcrumbs are walked from the database ``parent_id`` chain, never derived
   from an object key (R-FOLD-2, AD-02), and the walk is guarded against a cycle
   at read time as well as at write time.
+
+It is also the **one resolver** for "can this row be seen, and can it be served"
+(ADV-001 §5 P-1): ``file_queryset``/``trashed_files`` decide which rows exist for
+a caller, ``delivery_refusal`` decides whether a row may be served, and
+``permissions_for`` reports both answers instead of computing its own. The list,
+the detail endpoint, the ``permissions`` block and the two delivery endpoints all
+read these three functions, so they cannot drift apart again - which is exactly
+what went wrong when the list showed a row that detail 404ed, or when
+``can_download`` advertised a file every delivery endpoint refused.
 """
 
 # Django imports
@@ -59,6 +68,19 @@ def member_role(request, project):
     """Return the caller's active project role value, or ``None``."""
     member = ProjectMember.objects.filter(project_id=project.id, member=request.user, is_active=True).first()
     return member.role if member is not None else None
+
+
+def can_write(request, project):
+    """Return True when the caller may mutate files in this project.
+
+    The same membership, role and archived-project rules ``require_project_editor``
+    enforces, expressed as a predicate so the ``permissions`` block a response
+    advertises is derived from the answer the mutating endpoints would give
+    (AC-37; a GUEST is a reader, and an archived project is read-only for all).
+    """
+    role = member_role(request, project)
+
+    return role in (ROLE.ADMIN.value, ROLE.MEMBER.value) and project.archived_at is None
 
 
 def require_project_member(request, project):
@@ -184,11 +206,69 @@ def available_display_name(project, folder, file_name):
     )
 
 
+def file_queryset(project, slug, *, include_trashed):
+    """The one visibility source for project files.
+
+    ``include_trashed=False`` is the default surface: the rows the live manager
+    returns (``deleted_at IS NULL``) **and** whose status is not ``trashed``. Both
+    halves matter - trashing sets the two together (R-FOLD-4), and a row where
+    they disagree must be hidden by every path rather than listed by one and
+    refused by another.
+
+    ``include_trashed=True`` adds the soft-deleted rows back, so the trash
+    surface and an explicit ``?trashed=true`` lookup can address what the default
+    surface hides. Deleted rows are read through ``all_objects``; a row that a
+    purge removed for good is absent from both.
+    """
+    manager = FileObject.all_objects if include_trashed else FileObject.objects
+    queryset = manager.filter(project_id=project.id, workspace__slug=slug)
+
+    if not include_trashed:
+        queryset = queryset.exclude(status=FileObject.Status.TRASHED)
+
+    return queryset
+
+
+def trashed_files(project, slug):
+    """The trash surface: the rows whose status is ``trashed``, and only those."""
+    return file_queryset(project, slug, include_trashed=True).filter(status=FileObject.Status.TRASHED)
+
+
+def permissions_for(request, project, file_object, *, version=None):
+    """Return the caller's affordances for this file, from the shared predicates.
+
+    ``can_download`` is true exactly when ``delivery_refusal`` would let the
+    delivery endpoints sign: a trashed, quarantined or object-less version
+    reports false here *and* is refused there, so the advertised affordance and
+    the real answer cannot drift apart (ADV-001 §4 P-1).
+
+    ``can_edit``/``can_delete`` come from ``can_write``: a GUEST may list and read
+    but never mutate, and an archived project is read-only for everyone. A file
+    that is already trashed has no edit affordance because it is restored rather
+    than edited, while deleting it again stays allowed.
+    """
+    write_allowed = can_write(request, project)
+
+    return {
+        "can_edit": write_allowed and file_object.status != FileObject.Status.TRASHED,
+        "can_delete": write_allowed,
+        "can_download": delivery_refusal(file_object, version) is None,
+    }
+
+
 def delivery_refusal(file_object, version):
     """Return the refusal the delivery endpoints would apply, or ``None``.
 
     Kept in one place so the ``permissions`` block a detail response advertises
-    and the answer download/preview actually give can never disagree.    """
+    and the answer download/preview actually give can never disagree.
+
+    ``version`` is the version the caller resolved (the active one unless a
+    specific ``?version=`` was asked for). A file with **no** active version is
+    not servable and arrives here as ``None``: there is no fallback to the newest
+    stored version, because that would sign a URL for an object the file's own
+    pointer no longer claims - reachable as soon as a purge removes the active
+    version (ADV-001 §5.1, T-104 F-4).
+    """
     if file_object.status == FileObject.Status.TRASHED:
         return ProjectFileError(
             "This file is in the trash; restore it before downloading it.",
