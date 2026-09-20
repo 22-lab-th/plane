@@ -124,6 +124,8 @@ from .file import (
     FileDownloadEndpoint,
     FileFolderDetailEndpoint,
     FileFolderListEndpoint,
+    FileLinkDetailEndpoint,
+    FileLinkListEndpoint,
     FileListEndpoint,
     FilePreviewEndpoint,
     FileUploadAbortEndpoint,

@@ -6,6 +6,8 @@ from django.urls import path
 
 from plane.app.views import (
     FileCopyEndpoint,
+    FileLinkDetailEndpoint,
+    FileLinkListEndpoint,
     FileVersionActivateEndpoint,
     FileVersionListEndpoint,
     FilePurgeEndpoint,
@@ -82,6 +84,17 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/purge/",
         FilePurgeEndpoint.as_view(),
         name="project-file-purge",
+    ),
+    # Entity links (T-109)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/links/",
+        FileLinkListEndpoint.as_view(),
+        name="project-file-links",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/links/<uuid:link_id>/",
+        FileLinkDetailEndpoint.as_view(),
+        name="project-file-link-detail",
     ),
     # Versions (T-108): history, revision initiation and activation
     path(

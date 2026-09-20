@@ -56,29 +56,18 @@ from plane.db.models import (
     FileLink,
     FileObject,
     FileVersion,
-    Issue,
-    IssueComment,
-    ProjectPage,
 )
 from plane.settings.storage import S3Storage
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.file_storage.links import category_for_entity, entity_ref_for, resolve_link
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.magic_bytes import HEAD_BYTES, check_magic_bytes, normalize_mime_type
 from plane.utils.object_key import build_object_key
 
 #: Category a file inherits from the entity it was created from (DEC-001).
-CATEGORY_BY_ENTITY_TYPE = {
-    FileLink.EntityType.ISSUE: FileObject.Category.ISSUES,
-    FileLink.EntityType.PAGE: FileObject.Category.PAGES,
-}
-
-#: Entity types whose target row can be validated in this repository. ``milestone``
-#: and ``deliverable`` are accepted choices without a table in this fork, so their
-#: payload contract belongs to the links ticket rather than to upload.
-UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.MILESTONE, FileLink.EntityType.DELIVERABLE)
 
 
 def _target_file(project, slug, file_id):
@@ -98,88 +87,16 @@ def _target_file(project, slug, file_id):
 
 
 def _resolve_link(project, link):
-    """Validate a link target inside this project and derive the key's entityRef.
+    """Validate a payload's ``link`` through the shared rules (ARCH-001 §2.5).
 
-    A link may never cross projects, so the target row is checked here rather
-    than trusted (ARCH-001 §2.5). The result carries the identifiers the link row
-    and the key need: ``entity_ref`` is the readable segment DEC-001 freezes into
-    the key at creation, and it stays ``None`` for project-level files, which
-    carry no entity segment.
+    The upload door and the links door must agree on what a link target is, so the
+    lookup itself lives in :mod:`plane.utils.file_storage.links` and this only adapts
+    the payload shape.
     """
     if not link:
         return None
 
-    entity_type = link["entity_type"]
-    entity_id = link["entity_id"]
-    resolved = {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "entity_ref": None,
-        "entity_identifier": entity_id,
-    }
-
-    if entity_type == FileLink.EntityType.PROJECT:
-        if str(project.id) != entity_id:
-            raise ProjectFileError(
-                "A project link must reference the project in the URL.",
-                code="invalid_request",
-                field="link.entity_id",
-            )
-        resolved["entity_identifier"] = project.identifier
-        return resolved
-
-    if entity_type == FileLink.EntityType.ISSUE:
-        issue = Issue.objects.filter(id=entity_id, project_id=project.id).first()
-        if issue is None:
-            raise ProjectFileError(
-                "link.entity_id does not belong to this project.",
-                code="invalid_request",
-                field="link.entity_id",
-            )
-        identifier = f"{project.identifier}-{issue.sequence_id}"
-        resolved["entity_ref"] = identifier
-        resolved["entity_identifier"] = identifier
-        return resolved
-
-    if entity_type == FileLink.EntityType.PAGE:
-        page = ProjectPage.objects.filter(page_id=entity_id, project_id=project.id).first()
-        if page is None:
-            raise ProjectFileError(
-                "link.entity_id does not belong to this project.",
-                code="invalid_request",
-                field="link.entity_id",
-            )
-        resolved["entity_ref"] = entity_id
-        return resolved
-
-    if entity_type == FileLink.EntityType.COMMENT:
-        if not IssueComment.objects.filter(id=entity_id, project_id=project.id).exists():
-            raise ProjectFileError(
-                "link.entity_id does not belong to this project.",
-                code="invalid_request",
-                field="link.entity_id",
-            )
-
-    return resolved
-
-
-def _existing_entity_ref(file_object):
-    """Return the entityRef a revision inherits from the file's first live link.
-
-    The segment is frozen at the file's creation (DEC-001), so a revision keeps
-    the same readable entity segment as the version it succeeds.
-    """
-    if file_object is None:
-        return None
-
-    link = FileLink.objects.filter(file_id=file_object.id).order_by("created_at").first()
-    if link is None:
-        return None
-
-    if link.entity_type in (FileLink.EntityType.PROJECT, FileLink.EntityType.COMMENT):
-        return None
-
-    return link.entity_identifier or str(link.entity_id)
+    return resolve_link(project, link["entity_type"], link["entity_id"])
 
 
 def _category_for(requested_category, link, file_object):
@@ -190,8 +107,8 @@ def _category_for(requested_category, link, file_object):
     if requested_category:
         return requested_category
 
-    if link and link["entity_type"] in CATEGORY_BY_ENTITY_TYPE:
-        return CATEGORY_BY_ENTITY_TYPE[link["entity_type"]]
+    if link:
+        return category_for_entity(link["entity_type"])
 
     return FileObject.Category.ASSETS
 
@@ -333,7 +250,7 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
 
     category = _category_for(payload.get("category"), link, file_object)
     version_no = _next_version_no(file_object)
-    entity_ref = link["entity_ref"] if link else _existing_entity_ref(file_object)
+    entity_ref = link["entity_ref"] if link else entity_ref_for(file_object)
     bucket = settings.AWS_STORAGE_BUCKET_NAME
     file_id = file_object.id if file_object is not None else uuid4()
     display_name = stored_name(payload["file_name"])

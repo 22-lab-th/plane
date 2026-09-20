@@ -17,6 +17,7 @@ from rest_framework import serializers
 from plane.app.views.file.base import delivery_refusal
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.file_storage.links import SUPPORTED_ENTITY_TYPES
 from plane.utils.magic_bytes import normalize_mime_type
 from plane.utils.object_key import OBJECT_KEY_CATEGORIES
 
@@ -82,8 +83,17 @@ class FileUploadInitiateSerializer(serializers.Serializer):
         entity_type = value.get("entity_type")
         entity_id = value.get("entity_id")
 
-        if entity_type not in FileLink.EntityType.values:
-            raise serializers.ValidationError("link.entity_type must be one of the supported entity types.")
+        if entity_type not in SUPPORTED_ENTITY_TYPES:
+            # A code, not a field error: every other refusal on this surface carries
+            # one, and the links door refuses the same way (F-3 discipline).
+            raise ProjectFileError(
+                "link.entity_type must be one of: "
+                + ", ".join(str(value) for value in SUPPORTED_ENTITY_TYPES)
+                + ".",
+                code="unsupported_entity_type",
+                status_code=400,
+                field="link.entity_type",
+            )
         if not entity_id:
             raise serializers.ValidationError("link.entity_id is required.")
 
@@ -126,6 +136,25 @@ class FileVersionInitiateSerializer(FileUploadInitiateSerializer):
 
     #: the file is in the URL here; naming another one in the body is an error.
     file_id = None
+
+    def validate(self, attrs):
+        reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
+        return attrs
+
+
+class FileLinkWriteSerializer(serializers.Serializer):
+    """`POST files/{file_id}/links/` payload: which entity to attach.
+
+    Only the shape is checked here; whether the entity exists and belongs to this
+    project is decided inside the write transaction by
+    :func:`plane.utils.file_storage.links.resolve_link`, so the links door and the
+    upload door cannot disagree about what a valid target is.
+    """
+
+    PAYLOAD_FIELDS = ("entity_type", "entity_id")
+
+    entity_type = serializers.CharField(max_length=24)
+    entity_id = serializers.UUIDField()
 
     def validate(self, attrs):
         reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
