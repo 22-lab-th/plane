@@ -457,12 +457,18 @@ async function snapshotList(
   // Long enough for any warmed transition to answer, short enough that the fallbacks
   // below do not dominate the run. The request is captured alongside the response so a
   // fallback compares against the URL the view asked for, not a re-derivation of it.
-  const captured = page.waitForResponse(isListResponse, { timeout: 8_000 }).catch(() => null);
+  // The body is read as soon as the response arrives: a snapshot whose action is a
+  // navigation loses the response body, and reading it afterwards is a race.
+  const captured = page
+    .waitForResponse(isListResponse, { timeout: 8_000 })
+    .then(async (response) => ({ response, body: await response.json().catch(() => null) }))
+    .catch(() => null);
   const capturedRequest = page
     .waitForRequest((request) => isListUrl(new URL(request.url())), { timeout: 8_000 })
     .catch(() => null);
   await action();
-  const [response, request] = await Promise.all([captured, capturedRequest]);
+  const [received, request] = await Promise.all([captured, capturedRequest]);
+  const response = received?.response ?? null;
 
   if (!response) {
     expect(options.requireLive ?? false, `${label}: the view must fetch the list at least once for this URL`).toBe(
@@ -487,7 +493,7 @@ async function snapshotList(
 
   rowsComeFromLiveResponse = true;
   expect(response.status(), `${label}: ${response.url()}`).toBe(200);
-  const live = (await response.json()) as TListBody;
+  const live = (received?.body ?? ((await response.json()) as TListBody)) as TListBody;
 
   const refetchedResponse = await page.request.get(response.url());
   expect(refetchedResponse.ok(), `${label}: re-fetching ${response.url()}`).toBe(true);
