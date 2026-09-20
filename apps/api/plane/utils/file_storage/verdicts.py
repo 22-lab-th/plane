@@ -31,6 +31,12 @@ def is_on_default_surface(file_object):
     must be live (``deleted_at IS NULL``) **and** not carry the trashed status.
     Trashing sets both (R-FOLD-4); the two can still disagree after a partial
     write, and when they do every path has to agree they mean "not visible".
+
+    One question is deliberately *not* folded in here: whether a **listing** may
+    present the row. A file with no verified version is never listed (AC-20, applied
+    in ``listed_files``), but it keeps resolving by id - the write doors and the
+    detail endpoint must be able to answer for it - so this predicate stays the
+    live-state question the write paths read (T-118).
     """
     return file_object.deleted_at is None and file_object.status != FileObject.Status.TRASHED
 

@@ -185,7 +185,10 @@ class FileState:
     """What the four read paths must answer for one state, and how it was built."""
 
     id: str
-    #: the default listing shows the row / the ``?trashed=true`` listing shows it
+    #: the default listing shows the row / the ``?trashed=true`` listing shows it.
+    #: The default listing carries one more rule than the resolver: a file with no
+    #: verified version is never listed (AC-20, SPEC C-03), so ``pending_uploading``
+    #: and ``failed_verification`` are False here while their objects still exist.
     visible_in_list: bool
     visible_in_trash: bool
     #: whether the delivery endpoints sign; also what ``can_download`` must say
@@ -217,11 +220,20 @@ class FileState:
     #: ``None`` means the generic "does not exist" body (the row is off the default
     #: surface, so the write doors treat it as absent rather than as a refusal).
     copy_refusal_code: str | None = None
+    #: whether ``GET {file_id}/`` resolves for a MEMBER with no ``?trashed=true``.
+    #: It differs from ``visible_in_list`` in exactly one direction: a row the default
+    #: listing hides because it has no verified version stays addressable by id, because
+    #: the client that has just been refused a finalize reads the failed version and the
+    #: recorded mismatch there and retries the same file id (AC-04, T-118).
+    addressable_without_flag: bool = True
 
 
 PENDING = FileState(
     id="pending_uploading",
-    visible_in_list=True,
+    # An attempt in flight has no verified version yet, so the listing does not show
+    # it (AC-20 "never listed"); the view paints the row from its own upload queue
+    # until the finalize activates it (EXP-001 F-02 step 5).
+    visible_in_list=False,
     visible_in_trash=False,
     servable=False,
     refusal_status=409,
@@ -264,7 +276,11 @@ SUPERSEDED = FileState(
 
 FAILED = FileState(
     id="failed_verification",
-    visible_in_list=True,
+    # The object is stored but never verified, so the file is not listed (AC-20,
+    # SPEC C-03: "a mismatch at finalize leaves the file invisible") and the sweep
+    # owns the object. Its detail still answers: that is where the client reads the
+    # failed version and the mismatch record before retrying the same file id (AC-04).
+    visible_in_list=False,
     visible_in_trash=False,
     servable=False,
     refusal_status=409,
@@ -310,6 +326,10 @@ TRASHED = FileState(
     copy_allowed=False,
     copy_refusal_status=409,
     copy_refusal_code="file_trashed",
+    # A trashed row is off the default surface for a MEMBER: the detail endpoint 404s
+    # without the flag (unchanged by T-118 - this is the trash rule, not the
+    # no-verified-version rule).
+    addressable_without_flag=False,
 )
 
 
@@ -344,6 +364,9 @@ PURGE_FAILED = FileState(
     # than as a copyable file: its remaining life is restore or purge.
     copy_refusal_status=404,
     copy_refusal_code=None,
+    # Soft-deleted, so the detail endpoint 404s for a MEMBER without the flag: the
+    # same reason as the trashed state.
+    addressable_without_flag=False,
 )
 
 
@@ -596,14 +619,15 @@ class TestStateMatrix:
             ).exists(), f"{state.id}: the purged audit row must survive the file"
             return
 
-        # 2 + 3. detail and the permissions it advertises
+        # 2 + 3. detail and the permissions it advertises. Addressability by id is a
+        # separate question from listing: a row hidden for the trash is 404 without
+        # the flag, while a row hidden because it has no verified version still answers
+        # (the client reads its failure there and retries the same file id, T-118).
         detail = session_client.get(detail_url(slug, project.id, file_id))
-        if state.visible_in_list:
+        if state.addressable_without_flag:
             assert detail.status_code == status.HTTP_200_OK, f"{state.id}: {detail.data}"
             addressed = detail
         else:
-            # A row the default surface hides is not addressable at all, which is
-            # the point: the listing and the detail endpoint agree on visibility.
             assert detail.status_code == status.HTTP_404_NOT_FOUND
             addressed = session_client.get(detail_url(slug, project.id, file_id), {"trashed": True})
             assert addressed.status_code == status.HTTP_200_OK, f"{state.id}: {addressed.data}"

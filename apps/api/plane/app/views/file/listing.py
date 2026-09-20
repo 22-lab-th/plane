@@ -43,6 +43,7 @@ from plane.app.views.file.base import (
     include_trashed,
     cursor_token,
     invalid_param,
+    listed_files,
     page_size,
     parse_bool,
     parse_int,
@@ -181,13 +182,14 @@ def _files_queryset(project, slug, filters):
     Every filter is conjunctive and the trash view is opt-in: without
     ``trashed=true`` the trashed files are excluded (R-FIND-1).
 
-    Visibility comes from the shared resolver (``file_queryset``/``trashed_files``)
+    Visibility comes from the shared resolvers (``listed_files``/``trashed_files``)
     rather than from a manager chosen here, so the rows this list shows are
-    exactly the rows the detail endpoint will resolve (ADV-001 §5 P-1).
+    exactly the rows a listing may present (ADV-001 §5 P-1, AC-20).
     """
-    queryset = (
-        trashed_files(project, slug) if filters["trashed"] else file_queryset(project, slug, include_trashed=False)
-    )
+    # The default surface here is the *listing's*, not the resolver's: a file with no
+    # verified version is not shown, while the detail endpoint still resolves it so a
+    # client can read why its finalize was refused (AC-04, T-118).
+    queryset = trashed_files(project, slug) if filters["trashed"] else listed_files(project, slug)
 
     if filters["folder"] == ROOT_FOLDER:
         queryset = queryset.filter(folder__isnull=True)

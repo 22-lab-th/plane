@@ -144,18 +144,31 @@ def make_file(
 
 
 def make_version(file_object, version_no=1, *, is_active=True, size=100, uploaded_by=None, status=None):
-    return FileVersion.objects.create(
-        project=file_object.project,
+    """Create or replace this ``(file, version_no)``.
+
+    The ``library`` fixture gives every file the verified version a listed file must
+    have - the listing shows a file only when one of its versions is a verified,
+    still-stored object (AC-20) - so a test that wants different attributes on v1 (a
+    failed status, another uploader, a superseded revision) states them through this
+    call instead of colliding with the fixture's row.
+    """
+    version, _ = FileVersion.objects.update_or_create(
         file=file_object,
-        uploaded_by=uploaded_by,
         version_no=version_no,
-        object_key=f"{file_object.object_key}.v{version_no}",
-        bucket="uploads",
-        mime_type=file_object.mime_type,
-        size_bytes=size,
-        status=status or (FileVersion.Status.ACTIVE if is_active else FileVersion.Status.SUPERSEDED),
-        is_active=is_active,
+        defaults={
+            "project": file_object.project,
+            "object_key": f"{file_object.object_key}.v{version_no}",
+            "bucket": "uploads",
+            "mime_type": file_object.mime_type,
+            "size_bytes": size,
+            "status": status or (FileVersion.Status.ACTIVE if is_active else FileVersion.Status.SUPERSEDED),
+            "is_active": is_active,
+            # Only stated when a test states one, so a call that does not care about
+            # the uploader leaves the row the fixture built alone.
+            **({"uploaded_by": uploaded_by} if uploaded_by is not None else {}),
+        },
     )
+    return version
 
 
 def names(response):
@@ -242,6 +255,18 @@ def library(project, create_user):
             entity_type=FileLink.EntityType.ISSUE,
             entity_id=issue.id,
             entity_identifier=f"LIST-{issue.sequence_id}",
+        )
+
+    # Every file a listing carries has the verified version such a file must have: a
+    # file with no verified version is never listed (AC-20), and a file row with no
+    # version rows at all is a state the upload pipeline cannot produce - a file is
+    # created together with its first version's row.
+    for file_object in (alpha, beta, gamma, delta, epsilon, zeta, unicode_file):
+        make_version(
+            file_object,
+            version_no=1,
+            size=file_object.size_bytes,
+            uploaded_by=file_object.created_by,
         )
 
     return {
@@ -429,7 +454,10 @@ class TestFileListing:
         # can keep pagination deterministic.
         stamp = datetime(2026, 7, 5, 12, 0, tzinfo=dt_timezone.utc)
         for index in range(10):
-            make_file(project, name=f"Tie {index}.pdf", size=100, created_at=stamp)
+            tie = make_file(project, name=f"Tie {index}.pdf", size=100, created_at=stamp)
+            # A listed file carries a verified version (AC-20); the tie this test
+            # walks is in the file row's size and timestamps, which is what it orders by.
+            make_version(tie, version_no=1, size=100)
 
         single = session_client.get(list_url(project.workspace.slug, project.id), {"ordering": "size"})
         walked = []
@@ -550,7 +578,9 @@ class TestFileListing:
 
         storage = response.data["storage"]
         assert storage["file_count"] == 7
-        assert storage["version_count"] == 0
+        # One verified version per file, which is the row the listing rule reads
+        # (AC-20) and the row ``version_count`` counts.
+        assert storage["version_count"] == 7
         assert storage["project_used_bytes"] == 0
         assert storage["workspace_used_bytes"] == 0
         assert storage["limit_bytes"] is not None
@@ -559,10 +589,11 @@ class TestFileListing:
     def test_a_thousand_rows_stay_bounded_and_query_constant(self, session_client, project):
         """Cheap sanity check, not the recorded benchmark (that is T-120)."""
         stamp = datetime(2026, 8, 5, 12, 0, tzinfo=dt_timezone.utc)
+        file_ids = [uuid.uuid4() for _ in range(1000)]
         FileObject.objects.bulk_create(
             [
                 FileObject(
-                    id=uuid.uuid4(),
+                    id=file_ids[index],
                     project=project,
                     workspace=project.workspace,
                     name_original=f"Row {index}.pdf",
@@ -575,6 +606,29 @@ class TestFileListing:
                     object_key=f"{uuid.uuid4()}.pdf",
                     category=FileObject.Category.DOCS,
                     status=FileObject.Status.ACTIVE,
+                    created_at=stamp,
+                    updated_at=stamp,
+                )
+                for index in range(1000)
+            ]
+        )
+        # Each row carries the verified version the listing rule requires (AC-20);
+        # the visibility filter is an ``EXISTS`` in the listing's own query, so the
+        # query count the assertions below bound does not grow with the page.
+        FileVersion.objects.bulk_create(
+            [
+                FileVersion(
+                    id=uuid.uuid4(),
+                    project=project,
+                    workspace=project.workspace,
+                    file_id=file_ids[index],
+                    version_no=1,
+                    object_key=f"{uuid.uuid4()}.v1.pdf",
+                    bucket="uploads",
+                    mime_type=PDF,
+                    size_bytes=index,
+                    status=FileVersion.Status.ACTIVE,
+                    is_active=True,
                     created_at=stamp,
                     updated_at=stamp,
                 )

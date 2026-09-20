@@ -16,12 +16,13 @@ Three rules live here so no endpoint can forget them:
 
 It is also the **one resolver** for "can this row be seen, and can it be served"
 (ADV-001 §5 P-1): ``file_queryset``/``trashed_files`` decide which rows exist for
-a caller, ``delivery_refusal`` decides whether a row may be served, and
-``permissions_for`` reports both answers instead of computing its own. The list,
-the detail endpoint, the ``permissions`` block and the two delivery endpoints all
-read these three functions, so they cannot drift apart again - which is exactly
-what went wrong when the list showed a row that detail 404ed, or when
-``can_download`` advertised a file every delivery endpoint refused.
+a caller, ``listed_files`` narrows that to the rows a listing may present (a file
+with no verified version is never listed, AC-20), ``delivery_refusal`` decides
+whether a row may be served, and ``permissions_for`` reports both answers instead
+of computing its own. The list, the detail endpoint, the ``permissions`` block and
+the two delivery endpoints all read these functions, so they cannot drift apart
+again - which is exactly what went wrong when the list showed a row that detail
+404ed, or when ``can_download`` advertised a file every delivery endpoint refused.
 """
 
 # Python imports
@@ -30,6 +31,7 @@ from datetime import datetime, time
 
 # Django imports
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
@@ -376,6 +378,35 @@ TRASHED_STATUSES = (FileObject.Status.TRASHED, FileObject.Status.PURGE_FAILED)
 def trashed_files(project, slug):
     """The trash surface: the rows that are in the trash, and only those."""
     return file_queryset(project, slug, include_trashed=True).filter(status__in=TRASHED_STATUSES)
+
+
+def listed_files(project, slug):
+    """The rows a **listing** may present: the default surface minus unverified files.
+
+    ``file_queryset`` answers "which rows exist for this caller"; a listing asks a
+    narrower question. A file with no verified version is not a file a row in the tab
+    could open - its object is still being uploaded, failed verification, or was taken
+    by a purge - so AC-20's "never listed" and SPEC C-03's "a mismatch at finalize
+    leaves the file invisible" are enforced here, and the sweep then removes the
+    object within one interval (T-118).
+
+    The by-id doors deliberately keep reading ``file_queryset``: the client that has
+    just been refused a finalize reads *why* from the detail endpoint (the failed
+    version, the recorded mismatch) and retries the same file id (AC-04), and the
+    write doors must still resolve such a row to report the documented refusal
+    instead of pretending it does not exist. So this narrows what is *listed*, not
+    what a file id resolves to. The trash surface is not narrowed either: it shows
+    what it holds, including a row that still consumes quota (R3-02).
+    """
+    return file_queryset(project, slug, include_trashed=False).filter(
+        Exists(
+            FileVersion.objects.filter(
+                file_id=OuterRef("pk"),
+                status__in=GOOD_VERSION_STATUSES,
+                object_deleted_at__isnull=True,
+            )
+        )
+    )
 
 
 def include_trashed(request, project):
