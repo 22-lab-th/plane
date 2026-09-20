@@ -14,13 +14,16 @@ entity binding. ``{fileId}``, ``v{version}`` and ``{sanitizedFilename}`` are
 always present, so a key is unique per file and version (AD-04, AD-13).
 
 The client never supplies a key segment: the file id and version come from the
-database, the category from the server-side allowlist, and the filename is
-sanitised by :func:`sanitize_key_segment` before it reaches the key.
+database, the category comes from the server-side allowlist, and the filename is
+sanitised by :func:`sanitize_key_segment` before it reaches the key. Anything
+that cannot be represented safely is rejected with :class:`ValueError` rather
+than silently folded into a different value.
 """
 
 # Python imports
 import re
 import unicodedata
+from uuid import UUID
 
 #: Categories allowed in the ``{category}`` key segment (DEC-001 taxonomy).
 OBJECT_KEY_CATEGORIES: frozenset = frozenset(
@@ -54,31 +57,45 @@ MAX_PROJECT_STORAGE_KEY_ATTEMPTS = 1000
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _SEGMENT_DISALLOWED = re.compile(r"[^a-z0-9._-]")
-_SEGMENT_DISALLOWED_ANY_CASE = re.compile(r"[^A-Za-z0-9._-]")
-_SEGMENT_RUN = re.compile(r"[.-]{2,}")
+_DASH_RUN = re.compile(r"-{2,}")
+_DOT_RUN = re.compile(r"\.{2,}")
+#: A real extension: alphanumeric only, which is what keeps "..", "%2f" and
+#: other traversal fragments in the stem where they are sanitised away.
+_EXTENSION = re.compile(r"\A[a-z0-9]{1,%d}\Z" % MAX_EXTENSION_CHARS)
+#: Segments that are embedded in a key verbatim. Uppercase is allowed because
+#: DEC-001's approved example project prefix is ``CBUTR-smart-cbu-tracking-system``
+#: and issue keys are ``CBUTR-11``; every character that could forge a path
+#: (``/``, ``\\``, ``:``, ``|``, whitespace, ``%``, control characters,
+#: non-ASCII) is rejected.
+_KEY_SEGMENT = re.compile(r"\A[A-Za-z0-9._-]+\Z")
 _PROJECT_KEY_DISALLOWED = re.compile(r"[^A-Za-z0-9]+")
 _EDGE_CHARS = ".-"
 
 
-def _sanitize_segment(value, *, lowercase):
-    """Reduce ``value`` to the characters an object-key segment may contain."""
-    if not isinstance(value, str) or not value:
-        return ""
-
-    segment = unicodedata.normalize("NFC", value)
-    if lowercase:
-        segment = segment.lower()
-
+def _sanitize_text(value):
+    """Reduce an already lowercased ``value`` to an object-key segment's characters."""
     # Control characters (including NUL) are removed rather than replaced, so
-    # they can never forge a separator, and separators are mapped to "-" by the
-    # allowlist pass below instead of being collapsed away.
-    segment = _CONTROL_CHARS.sub("", segment)
-    pattern = _SEGMENT_DISALLOWED if lowercase else _SEGMENT_DISALLOWED_ANY_CASE
-    segment = pattern.sub("-", segment)
-    # Runs of dots and dashes collapse to one dash, which also destroys "..",
-    # ".-." and "%2e%2e%2f" style traversal fragments.
-    segment = _SEGMENT_RUN.sub("-", segment)
-    return segment.strip(_EDGE_CHARS)
+    # they can never forge a separator.
+    text = _CONTROL_CHARS.sub("", value)
+    text = _SEGMENT_DISALLOWED.sub("-", text)
+    # Dashes and dots collapse separately: collapsing them together would eat the
+    # dot that separates a filename from its extension.
+    text = _DASH_RUN.sub("-", text)
+    text = _DOT_RUN.sub(".", text)
+    return text.strip(_EDGE_CHARS)
+
+
+def _split_extension(name):
+    """Split an already-normalised, lowercased name into ``(head, extension)``.
+
+    Only an alphanumeric extension is recognised, so ``..%2f`` and
+    ``/etc/passwd`` stay in the head and are sanitised as text instead of being
+    promoted to an extension.
+    """
+    stem, dot, extension = name.rpartition(".")
+    if not dot or not _EXTENSION.match(extension):
+        return name, ""
+    return stem, extension
 
 
 def _cap_segment(segment):
@@ -86,8 +103,8 @@ def _cap_segment(segment):
     if len(segment) <= MAX_SEGMENT_CHARS:
         return segment
 
-    stem, dot, extension = segment.rpartition(".")
-    if dot and 0 < len(extension) <= MAX_EXTENSION_CHARS:
+    stem, extension = _split_extension(segment)
+    if extension:
         stem = stem[: MAX_SEGMENT_CHARS - len(extension) - 1].strip(_EDGE_CHARS)
         if stem:
             return f"{stem}.{extension}"
@@ -95,31 +112,36 @@ def _cap_segment(segment):
     return segment[:MAX_SEGMENT_CHARS].strip(_EDGE_CHARS)
 
 
-def sanitize_key_segment(name):
+def sanitize_key_segment(name, fallback_stem=""):
     """Return ``name`` as a safe, lowercased, single object-key segment.
 
     * NFC-normalised and lowercased;
-    * path separators, control characters and every other character outside
-      ``[a-z0-9._-]`` are replaced with ``-``;
-    * runs of dots and dashes collapse to a single ``-`` and leading/trailing
-      dots and dashes are trimmed, so ``.``, ``..``, ``../``, ``..\\`` and
-      percent-encoded equivalents normalise to ``""``;
-    * capped at :data:`MAX_SEGMENT_CHARS` characters, retaining the extension.
+    * control characters are removed, and every character outside ``[a-z0-9._-]``
+      becomes ``-`` (this is what neutralises path separators, ``:`` and ``%``);
+    * runs of dashes collapse to one ``-`` and runs of dots to one ``.``, so
+      ``..``, ``../`` and their percent-encoded spellings cannot survive;
+    * the final alphanumeric extension is kept, and the segment is capped at
+      :data:`MAX_SEGMENT_CHARS`.
 
-    An empty return value means the caller must fall back to a server-generated
-    identifier; it never means "use the raw input".
+    :param fallback_stem: stem used when everything before the extension
+        sanitises away — the file id, during key building — so ``เอกสาร.pdf``
+        becomes ``<fallback_stem>.pdf`` instead of an empty segment. Without a
+        fallback such a name sanitises to ``""``.
     """
-    return _cap_segment(_sanitize_segment(name, lowercase=True))
+    if not isinstance(name, str) or not name:
+        return fallback_stem or ""
 
+    normalized = _CONTROL_CHARS.sub("", unicodedata.normalize("NFC", name)).lower()
+    stem, extension = _split_extension(normalized)
+    stem = _sanitize_text(stem)
+    extension = _sanitize_text(extension)
 
-def _sanitize_entity_ref(entity_ref):
-    """Sanitise ``entity_ref`` without changing its case (issue keys are uppercase).
+    if not stem:
+        if not fallback_stem:
+            return ""
+        return _cap_segment(f"{fallback_stem}.{extension}" if extension else fallback_stem)
 
-    ``entity_ref`` is a single key segment. Callers pass the human issue key
-    (``CBUTR-11``) or the immutable page UUID; a value that carries a path
-    separator is folded into one segment instead of escaping the prefix.
-    """
-    return _cap_segment(_sanitize_segment(entity_ref, lowercase=False))
+    return _cap_segment(f"{stem}.{extension}" if extension else stem)
 
 
 def _require_key_segment(value, label):
@@ -128,32 +150,55 @@ def _require_key_segment(value, label):
         raise ValueError(f"{label} must not be None")
 
     segment = str(value)
-    if (
-        not segment
-        or not segment.isascii()
-        or segment in {".", ".."}
-        or ".." in segment
-        or "/" in segment
-        or "\\" in segment
-        or any(character.isspace() for character in segment)
-        or _CONTROL_CHARS.search(segment)
-    ):
+    if not _KEY_SEGMENT.match(segment) or segment in {".", ".."} or ".." in segment:
         raise ValueError(f"{label} is not a usable object-key segment: {value!r}")
 
     return segment
 
 
+def _require_entity_ref(value):
+    """Validate an entity reference, or return ``""`` when there is none.
+
+    The reference is embedded verbatim (NFC-normalised, case preserved), so any
+    value that would have to be modified to be safe is rejected rather than
+    silently folded into something else.
+    """
+    if value is None:
+        return ""
+
+    if not isinstance(value, str):
+        raise ValueError(f"entity_ref is not a usable object-key segment: {value!r}")
+
+    reference = unicodedata.normalize("NFC", value)
+    if not _KEY_SEGMENT.match(reference) or reference in {".", ".."} or ".." in reference:
+        raise ValueError(f"entity_ref is not a usable object-key segment: {value!r}")
+    if len(reference) > MAX_SEGMENT_CHARS:
+        raise ValueError(f"entity_ref is longer than {MAX_SEGMENT_CHARS} characters: {value!r}")
+
+    return reference
+
+
 def _version_segment(version_no):
     """Validate ``version_no`` and render it as the ``v{n}`` key segment."""
-    try:
-        version = int(version_no)
-    except (TypeError, ValueError):
-        raise ValueError(f"version_no must be an integer: {version_no!r}")
+    if isinstance(version_no, bool) or not isinstance(version_no, int):
+        raise ValueError(f"version_no must be an int: {version_no!r}")
 
-    if version < 1:
+    if version_no < 1:
         raise ValueError(f"version_no must be positive: {version_no!r}")
 
-    return f"v{version}"
+    return f"v{version_no}"
+
+
+def _file_segment(file_id):
+    """Return the canonical UUID segment for ``file_id``.
+
+    The file id is database-generated, never client-supplied; anything that is
+    not a UUID is rejected so a malformed caller cannot inject a segment.
+    """
+    try:
+        return str(UUID(str(file_id)))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError(f"file_id must be a UUID: {file_id!r}")
 
 
 def build_object_key(
@@ -172,28 +217,27 @@ def build_object_key(
     :param project_storage_key: immutable ``Project.storage_key``.
     :param category: one of :data:`OBJECT_KEY_CATEGORIES`; anything else raises
         :class:`ValueError`.
-    :param file_id: ``FileObject.id``; never client-supplied.
-    :param version_no: 1-based ``FileVersion.version_no``.
+    :param file_id: ``FileObject.id`` as a UUID (or its string form); never
+        client-supplied.
+    :param version_no: 1-based ``FileVersion.version_no`` as an ``int``.
     :param filename: original upload filename; sanitised, never trusted.
     :param entity_ref: optional single segment binding the file to an entity
-        (for example ``CBUTR-11`` or a page UUID). Omitted when ``None`` or when
-        nothing safe survives sanitisation.
-    :raises ValueError: for an unknown category or an unusable server segment.
+        (for example ``CBUTR-11`` or a page UUID). Omitted when ``None``.
+    :raises ValueError: for an unknown category, an unusable server segment or a
+        filename that cannot be represented safely.
     """
     if category not in OBJECT_KEY_CATEGORIES:
         raise ValueError(f"unknown file category: {category!r}")
 
     workspace_segment = _require_key_segment(workspace_slug, "workspace_slug")
     project_segment = _require_key_segment(project_storage_key, "project_storage_key")
-    file_segment = sanitize_key_segment(str(file_id))
-    if not file_segment:
-        raise ValueError(f"file_id is not a usable object-key segment: {file_id!r}")
-
+    file_segment = _file_segment(file_id)
     version_segment = _version_segment(version_no)
-    # A filename that sanitises to nothing (".", "..", "///", control-only, ...)
-    # falls back to the immutable file id, never to the raw client input.
-    filename_segment = sanitize_key_segment(filename) or file_segment
-    entity_segment = _sanitize_entity_ref(entity_ref) if entity_ref is not None else ""
+    # A filename whose stem sanitises away keeps its extension on the file id, so
+    # no object is ever stored without a readable suffix and no key segment is
+    # ever empty.
+    filename_segment = sanitize_key_segment(filename, fallback_stem=file_segment)
+    entity_segment = _require_entity_ref(entity_ref)
 
     segments = ["workspace", workspace_segment, "projects", project_segment, category]
     if entity_segment:
@@ -201,8 +245,9 @@ def build_object_key(
     segments.extend([file_segment, version_segment, filename_segment])
 
     key = "/".join(segments)
-    if len(key.encode("utf-8")) > MAX_OBJECT_KEY_BYTES:
-        raise ValueError(f"object key exceeds {MAX_OBJECT_KEY_BYTES} bytes: {len(key)} characters")
+    key_bytes = len(key.encode("utf-8"))
+    if key_bytes > MAX_OBJECT_KEY_BYTES:
+        raise ValueError(f"object key is {key_bytes} bytes, over the {MAX_OBJECT_KEY_BYTES}-byte limit")
 
     return key
 

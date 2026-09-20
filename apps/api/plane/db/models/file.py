@@ -14,6 +14,7 @@ per project so the ceiling is serialised at a single point.
 # Django imports
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 # Module imports
 from .base import BaseModel
@@ -43,9 +44,13 @@ class FileFolder(ProjectBaseModel):
         db_table = "file_folders"
         ordering = ("-created_at",)
         constraints = [
+            # ``nulls_distinct=False`` makes the constraint cover the project root
+            # (``parent_id IS NULL``), which PostgreSQL would otherwise treat as
+            # always distinct (ARCH-001 §2.2; PostgreSQL 15+).
             models.UniqueConstraint(
                 fields=["project", "parent", "name_normalized"],
                 condition=Q(deleted_at__isnull=True),
+                nulls_distinct=False,
                 name="file_folder_unique_name_in_parent_when_deleted_at_null",
             ),
         ]
@@ -121,9 +126,13 @@ class FileObject(ProjectBaseModel):
         db_table = "file_objects"
         ordering = ("-created_at",)
         constraints = [
+            # ``nulls_distinct=False`` extends this to the project root
+            # (``folder_id IS NULL``), where PostgreSQL treats NULLs as distinct
+            # by default (ARCH-001 §2.3; PostgreSQL 15+).
             models.UniqueConstraint(
                 fields=["project", "folder", "name_normalized"],
                 condition=Q(deleted_at__isnull=True) & ~Q(status="trashed"),
+                nulls_distinct=False,
                 name="file_object_unique_name_in_folder_when_live",
             ),
         ]
@@ -185,8 +194,9 @@ class FileVersion(ProjectBaseModel):
     reservation_expires_at = models.DateTimeField(null=True, blank=True)
     #: Set when this version's object was deleted, so a row is never swept twice.
     object_deleted_at = models.DateTimeField(null=True, blank=True)
-    #: Updated whenever ``status`` changes; the sweep's age guard reads it.
-    status_changed_at = models.DateTimeField(auto_now_add=True)
+    #: Set at creation and moved by :meth:`mark_status` whenever ``status``
+    #: changes; the sweep's age guard reads this field (ARCH-001 §2.4).
+    status_changed_at = models.DateTimeField(default=timezone.now)
     #: Single-fire release guard: counters are decremented only by the actor
     #: whose conditional update matched this row.
     reservation_released_at = models.DateTimeField(null=True, blank=True)
@@ -211,6 +221,19 @@ class FileVersion(ProjectBaseModel):
 
     def __str__(self):
         return f"{self.file_id} v{self.version_no}"
+
+    def mark_status(self, new_status, save=True):
+        """Move this version to ``new_status`` and stamp ``status_changed_at``.
+
+        The cleanup sweep's age guard reads ``status_changed_at``, so every
+        status transition has to move it; this method is the single place that
+        does both (ARCH-001 §2.4, R3-01).
+        """
+        self.status = new_status
+        self.status_changed_at = timezone.now()
+        if save:
+            self.save(update_fields=["status", "status_changed_at", "updated_at"])
+        return self.status
 
 
 class FileLink(ProjectBaseModel):
@@ -362,11 +385,13 @@ class FileJob(ProjectBaseModel):
         db_table = "file_jobs"
         ordering = ("-created_at",)
         constraints = [
-            # A retried finalize must not queue duplicate verification work.
+            # One verification job per version: a retried finalize must not queue
+            # duplicate work (ARCH-001 §2.7). Scoped to ``verify`` so a failed
+            # thumbnail/scan/extract job can be queued again.
             models.UniqueConstraint(
                 fields=["version", "job_type"],
-                condition=Q(version__isnull=False),
-                name="file_job_unique_version_job_type",
+                condition=Q(job_type="verify"),
+                name="file_job_unique_verify_per_version",
             ),
             # Purge is keyed by file.
             models.UniqueConstraint(

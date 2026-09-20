@@ -4,9 +4,9 @@
 
 """Unit tests for the S3-compatible presigned PUT helper (`S3Storage`).
 
-Signing is a local operation, so these tests exercise the real botocore
-signer with fake credentials and never touch the network (R-NFR-8: the same
-adapter serves MinIO locally and R2 in production).
+Signing is a local operation, so these tests exercise the real botocore signer
+with fake credentials and never touch the network (R-NFR-8: the same adapter
+serves MinIO locally and R2 in production).
 """
 
 # Python imports
@@ -37,15 +37,26 @@ CREDENTIAL_ENV = {
     "AWS_SECRET_ACCESS_KEY": "test-secret-key",
     "AWS_S3_BUCKET_NAME": BUCKET,
     "AWS_S3_ENDPOINT_URL": INTERNAL_ENDPOINT,
-    "AWS_REGION": "us-east-1",
+    "AWS_S3_ADDRESSING_STYLE": "path",
     "SIGNED_URL_EXPIRATION": "900",
 }
 
 
-def make_storage(extra_env=None):
+def make_storage(extra_env=None, drop=()):
     """Build an adapter with fake credentials; no request is sent by signing."""
-    with patch.dict(os.environ, {**CREDENTIAL_ENV, **(extra_env or {})}, clear=True):
+    env = {**CREDENTIAL_ENV, **(extra_env or {})}
+    for key in drop:
+        env.pop(key, None)
+    with patch.dict(os.environ, env, clear=True):
         return S3Storage()
+
+
+def query_of(url):
+    return parse_qs(urlsplit(url).query)
+
+
+def credential_scope(url):
+    return parse_qs(urlsplit(url).query)["X-Amz-Credential"][0]
 
 
 @pytest.mark.unit
@@ -66,16 +77,16 @@ class TestGeneratePresignedPut:
 
         assert url.scheme == "http"
         assert url.hostname == "test-minio"
-        assert OBJECT_KEY in url.path
-        assert BUCKET in url.path or BUCKET in url.netloc
+        assert url.path == f"/{BUCKET}/{OBJECT_KEY}"
 
     def test_url_carries_a_signature_and_the_content_type(self):
         url = make_storage().generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"]
-        query = parse_qs(urlsplit(url).query)
+        query = query_of(url)
 
         assert query["X-Amz-Signature"][0]
         assert query["X-Amz-Credential"][0].startswith("test-access-key/")
         assert query["X-Amz-Expires"][0] == "900"
+        assert query["X-Amz-Algorithm"][0] == "AWS4-HMAC-SHA256"
         # Content-Type is part of the signed header set, so the provider rejects
         # a PUT that declares a different type with SignatureDoesNotMatch.
         assert "content-type" in query["X-Amz-SignedHeaders"][0].lower()
@@ -83,12 +94,12 @@ class TestGeneratePresignedPut:
     def test_content_type_is_bound_to_the_signature(self):
         storage = make_storage()
 
-        pdf_signature = parse_qs(
-            urlsplit(storage.generate_presigned_put(OBJECT_KEY, "application/pdf")["url"]).query
-        )["X-Amz-Signature"][0]
-        text_signature = parse_qs(
-            urlsplit(storage.generate_presigned_put(OBJECT_KEY, "text/plain")["url"]).query
-        )["X-Amz-Signature"][0]
+        pdf_signature = query_of(storage.generate_presigned_put(OBJECT_KEY, "application/pdf")["url"])[
+            "X-Amz-Signature"
+        ][0]
+        text_signature = query_of(storage.generate_presigned_put(OBJECT_KEY, "text/plain")["url"])["X-Amz-Signature"][
+            0
+        ]
 
         assert pdf_signature != text_signature
 
@@ -104,10 +115,9 @@ class TestGeneratePresignedPut:
 
     def test_explicit_expiry_overrides_the_default(self):
         result = make_storage().generate_presigned_put(OBJECT_KEY, CONTENT_TYPE, expires_in=60)
-        query = parse_qs(urlsplit(result["url"]).query)
 
         assert result["expires_in"] == 60
-        assert query["X-Amz-Expires"][0] == "60"
+        assert query_of(result["url"])["X-Amz-Expires"][0] == "60"
 
     def test_signs_against_the_browser_facing_endpoint_when_minio_is_split(self):
         """Keep the existing internal/browser endpoint split used by POST and GET."""
@@ -122,7 +132,7 @@ class TestGeneratePresignedPut:
         # ... while the presigned URL must be reachable by the browser.
         url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
 
-        assert url.hostname.endswith("objects.example.com")
+        assert url.hostname == "objects.example.com"
 
     def test_signing_failure_returns_none_instead_of_an_unsigned_url(self, monkeypatch):
         storage = make_storage()
@@ -139,3 +149,76 @@ class TestGeneratePresignedPut:
         assert kwargs["Params"]["Key"] == OBJECT_KEY
         assert kwargs["Params"]["ContentType"] == CONTENT_TYPE
         assert kwargs["HttpMethod"] == "PUT"
+
+
+@pytest.mark.unit
+class TestProviderConfiguration:
+    """The provider variables ARCH-001 §3 documents are read by the adapter."""
+
+    def test_signature_version_defaults_to_s3v4(self):
+        storage = make_storage(drop=("AWS_S3_SIGNATURE_VERSION",))
+
+        assert storage.aws_signature_version == "s3v4"
+        assert storage.s3_config.signature_version == "s3v4"
+        assert query_of(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])["X-Amz-Algorithm"][0] == (
+            "AWS4-HMAC-SHA256"
+        )
+
+    def test_region_defaults_to_auto_for_r2(self):
+        storage = make_storage(drop=("AWS_REGION", "AWS_S3_REGION_NAME"))
+
+        assert storage.aws_region == "auto"
+        assert "/auto/s3/aws4_request" in credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+    def test_region_is_read_from_aws_s3_region_name(self):
+        storage = make_storage(extra_env={"AWS_S3_REGION_NAME": "auto", "AWS_REGION": "eu-west-1"})
+
+        assert storage.aws_region == "auto"
+        credential = credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+        assert "/auto/" in credential
+        assert "eu-west-1" not in credential
+
+    def test_region_falls_back_to_aws_region(self):
+        storage = make_storage(extra_env={"AWS_REGION": "eu-west-1"})
+
+        assert storage.aws_region == "eu-west-1"
+        assert "/eu-west-1/s3/aws4_request" in credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+    def test_addressing_style_defaults_to_virtual_for_r2(self):
+        storage = make_storage(drop=("AWS_S3_ADDRESSING_STYLE",))
+        url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+        assert storage.aws_addressing_style == "virtual"
+        # Virtual-host addressing puts the bucket in the host, path-style in the path.
+        assert url.hostname == f"{BUCKET}.test-minio"
+        assert url.path == f"/{OBJECT_KEY}"
+
+    def test_addressing_style_defaults_to_path_for_minio(self):
+        """The local/dev MinIO stack reaches storage by host without wildcard DNS."""
+        storage = make_storage(extra_env={"USE_MINIO": "1"}, drop=("AWS_S3_ADDRESSING_STYLE",))
+        url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+        assert storage.aws_addressing_style == "path"
+        assert url.hostname == "test-minio"
+        assert url.path == f"/{BUCKET}/{OBJECT_KEY}"
+
+    def test_addressing_style_env_overrides_the_minio_default(self):
+        storage = make_storage(extra_env={"USE_MINIO": "1", "AWS_S3_ADDRESSING_STYLE": "virtual"})
+
+        assert storage.aws_addressing_style == "virtual"
+
+    def test_both_clients_share_the_provider_configuration(self):
+        storage = make_storage(
+            extra_env={
+                "USE_MINIO": "1",
+                "MINIO_PUBLIC_ENDPOINT_URL": PUBLIC_ENDPOINT,
+                "AWS_S3_ADDRESSING_STYLE": "virtual",
+                "AWS_S3_SIGNATURE_VERSION": "s3v4",
+            }
+        )
+
+        assert storage.s3_client is not storage.presign_s3_client
+        for client in (storage.s3_client, storage.presign_s3_client):
+            assert client.meta.config.s3["addressing_style"] == "virtual"
+            assert client.meta.config.signature_version == "s3v4"

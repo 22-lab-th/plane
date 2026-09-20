@@ -29,8 +29,23 @@ class S3Storage(S3Boto3Storage):
         self.aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
         # Use the AWS_S3_BUCKET_NAME environment variable for the bucket name
         self.aws_storage_bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
-        # Use the AWS_REGION environment variable for the region
-        self.aws_region = os.environ.get("AWS_REGION")
+        # R2 requires the SigV4 credential scope region to be "auto", and the
+        # documented variable is AWS_S3_REGION_NAME (ARCH-001 §3); AWS_REGION is
+        # kept as a fallback for existing deployments.
+        self.aws_region = os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION") or "auto"
+        # Addressing style and signature version are provider configuration, not
+        # code branches (AD-01). The documented R2 defaults are "virtual" and
+        # "s3v4"; the local/dev MinIO stack is reached by container name or
+        # loopback address with no wildcard DNS, so it keeps path-style
+        # addressing unless the operator sets AWS_S3_ADDRESSING_STYLE explicitly.
+        self.aws_addressing_style = os.environ.get("AWS_S3_ADDRESSING_STYLE") or (
+            "path" if os.environ.get("USE_MINIO") == "1" else "virtual"
+        )
+        self.aws_signature_version = os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4")
+        self.s3_config = boto3.session.Config(
+            signature_version=self.aws_signature_version,
+            s3={"addressing_style": self.aws_addressing_style},
+        )
         # Use the AWS_S3_ENDPOINT_URL environment variable for the endpoint URL
         self.aws_s3_endpoint_url = os.environ.get("AWS_S3_ENDPOINT_URL") or os.environ.get("MINIO_ENDPOINT_URL")
         # Optional browser-accessible MinIO endpoint for deployments where the API
@@ -56,7 +71,7 @@ class S3Storage(S3Boto3Storage):
                 aws_secret_access_key=self.aws_secret_access_key,
                 region_name=self.aws_region,
                 endpoint_url=internal_endpoint_url,
-                config=boto3.session.Config(signature_version="s3v4"),
+                config=self.s3_config,
             )
             # Sign browser-facing URLs with the externally reachable endpoint.
             self.presign_s3_client = (
@@ -66,7 +81,7 @@ class S3Storage(S3Boto3Storage):
                     aws_secret_access_key=self.aws_secret_access_key,
                     region_name=self.aws_region,
                     endpoint_url=public_endpoint_url,
-                    config=boto3.session.Config(signature_version="s3v4"),
+                    config=self.s3_config,
                 )
                 if public_endpoint_url != internal_endpoint_url
                 else self.s3_client
@@ -79,7 +94,7 @@ class S3Storage(S3Boto3Storage):
                 aws_secret_access_key=self.aws_secret_access_key,
                 region_name=self.aws_region,
                 endpoint_url=self.aws_s3_endpoint_url,
-                config=boto3.session.Config(signature_version="s3v4"),
+                config=self.s3_config,
             )
             self.presign_s3_client = self.s3_client
 

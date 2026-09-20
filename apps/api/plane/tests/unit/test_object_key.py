@@ -69,18 +69,21 @@ class TestBuildObjectKey:
     def test_issue_linked_key_matches_the_approved_pattern(self):
         key = build("Customer Deliverables.pdf", entity_ref="CBUTR-11")
 
-        assert key == (
-            f"{KEY_PREFIX}/issues/CBUTR-11/{FILE_ID_STR}/v1/customer-deliverables.pdf"
-        )
+        assert key == f"{KEY_PREFIX}/issues/CBUTR-11/{FILE_ID_STR}/v1/customer-deliverables.pdf"
 
     def test_project_level_key_omits_the_entity_segment(self):
         key = build("customer-deliverables.pdf")
 
         assert key == f"{KEY_PREFIX}/issues/{FILE_ID_STR}/v1/customer-deliverables.pdf"
 
-    def test_entity_ref_that_sanitises_to_nothing_is_omitted(self):
-        assert build("a.pdf", entity_ref="///") == build("a.pdf")
-        assert build("a.pdf", entity_ref="") == build("a.pdf")
+    def test_entity_ref_is_omitted_when_not_given(self):
+        assert build("a.pdf", entity_ref=None) == build("a.pdf")
+
+    @pytest.mark.parametrize("entity_ref", ["", "///", "Pages/0193f0a1", "CBUTR|11", "CBUTR x", "a" * 121])
+    def test_entity_ref_that_would_have_to_be_modified_is_rejected(self, entity_ref):
+        """The reference is embedded verbatim, so a foldable value is an error."""
+        with pytest.raises(ValueError, match="entity_ref"):
+            build("a.pdf", entity_ref=entity_ref)
 
     def test_page_uuid_entity_ref_is_preserved(self):
         key = build("wireframe.png", entity_ref=FILE_ID_STR, category="pages")
@@ -91,10 +94,18 @@ class TestBuildObjectKey:
     def test_version_segment_carries_the_version_number(self):
         assert build("a.pdf", version_no=7).endswith(f"{FILE_ID_STR}/v7/a.pdf")
 
-    @pytest.mark.parametrize("version_no", [0, -1, "seven", None])
-    def test_invalid_version_number_is_rejected(self, version_no):
-        with pytest.raises(ValueError):
+    @pytest.mark.parametrize("version_no", [0, -1, "3", 2.9, True, "seven", None])
+    def test_version_number_must_be_a_positive_int(self, version_no):
+        with pytest.raises(ValueError, match="version_no"):
             build("a.pdf", version_no=version_no)
+
+    @pytest.mark.parametrize("file_id", [None, 5, True, "not-a-uuid", "../etc/passwd", ""])
+    def test_file_id_must_be_a_uuid(self, file_id):
+        with pytest.raises(ValueError, match="file_id"):
+            build("a.pdf", file_id=file_id)
+
+    def test_file_id_is_canonicalised(self):
+        assert build("a.pdf", file_id=FILE_ID_STR.upper()) == build("a.pdf", file_id=FILE_ID)
 
     def test_nfc_and_nfd_filenames_produce_the_same_key(self):
         nfc = unicodedata.normalize("NFC", "café résumé.pdf")
@@ -102,7 +113,17 @@ class TestBuildObjectKey:
 
         assert nfc != nfd
         assert build(nfc) == build(nfd)
+        assert build(nfc).endswith("/caf-r-sum.pdf")
         assert build(nfc).isascii()
+
+    def test_accented_filename_keeps_its_extension_and_stem(self):
+        assert sanitize_key_segment("café.pdf") == "caf.pdf"
+        assert build("café.pdf").endswith("/caf.pdf")
+
+    def test_filename_whose_stem_sanitises_away_keeps_the_extension(self):
+        """A fully non-ASCII name falls back to the file id plus its extension."""
+        assert sanitize_key_segment("เอกสาร.pdf") == ""
+        assert build("เอกสาร.pdf").endswith(f"/{FILE_ID_STR}.pdf")
 
     @pytest.mark.parametrize("filename", TRAVERSAL_FILENAMES)
     def test_traversal_corpus_cannot_escape_or_forge_a_segment(self, filename):
@@ -116,6 +137,7 @@ class TestBuildObjectKey:
         assert len(parts) == 8
         assert "." not in parts
         assert ".." not in parts
+        assert ".." not in key
         assert "%" not in key
         assert "\\" not in key
         assert ":" not in key
@@ -128,7 +150,7 @@ class TestBuildObjectKey:
         assert build("invoice\x00.pdf").endswith("/invoice.pdf")
         assert build("in/voice.pdf").endswith("/in-voice.pdf")
 
-    @pytest.mark.parametrize("filename", [".", "..", "...", "///", "***", ""])
+    @pytest.mark.parametrize("filename", [".", "..", "...", "///", "***", "", None])
     def test_filename_that_sanitises_to_empty_falls_back_to_the_file_id(self, filename):
         assert sanitize_key_segment(filename) == ""
         assert build(filename).endswith(f"/{FILE_ID_STR}/v1/{FILE_ID_STR}")
@@ -145,12 +167,16 @@ class TestBuildObjectKey:
             ("file.txt:evil.exe", "file.txt-evil.exe"),
             ("..%2f", "2f"),
             ("%00", "00"),
+            ("a..b.pdf", "a.b.pdf"),
+            ("report.final.PDF", "report.final.pdf"),
+            (".gitignore", f"{FILE_ID_STR}.gitignore"),
         ],
     )
     def test_adversarial_filenames_produce_safe_segments(self, filename, expected_tail):
         key = build(filename)
 
         assert key.endswith(f"/{expected_tail}")
+        assert ".." not in key
         assert not any(part in {".", ".."} for part in segments(key))
 
     def test_long_filename_is_capped_and_keeps_its_extension(self):
@@ -171,7 +197,7 @@ class TestBuildObjectKey:
         key = build("รายงานประจำเดือน.pdf")
 
         assert key.isascii()
-        assert key.endswith("/pdf")
+        assert key.endswith(f"/{FILE_ID_STR}.pdf")
 
     @pytest.mark.parametrize("category", sorted(OBJECT_KEY_CATEGORIES))
     def test_every_allowed_category_is_accepted(self, category):
@@ -191,15 +217,27 @@ class TestBuildObjectKey:
             ("", PROJECT_STORAGE_KEY),
             (None, PROJECT_STORAGE_KEY),
             ("acme/other", PROJECT_STORAGE_KEY),
-            ("acme", ""),
-            ("acme", "../escape"),
-            ("acme", "CBUTR x"),
+            ("acme:evil", PROJECT_STORAGE_KEY),
+            ("acme\\evil", PROJECT_STORAGE_KEY),
+            ("acme evil", PROJECT_STORAGE_KEY),
             ("acmeé", PROJECT_STORAGE_KEY),
+            ("acme", ""),
+            ("acme", None),
+            ("acme", "../escape"),
+            ("acme", "CBUTR|x"),
+            ("acme", "CBUTR x"),
+            ("acme", "CBUTR..x"),
         ],
     )
     def test_unusable_server_segments_are_rejected(self, workspace_slug, project_storage_key):
         with pytest.raises(ValueError):
             build_object_key(workspace_slug, project_storage_key, "docs", FILE_ID, 1, "a.pdf")
+
+    def test_server_segments_keep_the_documented_identifier_case(self):
+        """DEC-001's approved example prefix is uppercase: it must stay valid."""
+        key = build_object_key(WORKSPACE_SLUG, "CBUTR-smart-cbu-tracking-system", "docs", FILE_ID, 1, "a.pdf")
+
+        assert segments(key)[3] == "CBUTR-smart-cbu-tracking-system"
 
     def test_key_never_carries_a_client_supplied_path_segment(self):
         key = build("../../v9/other.pdf", entity_ref="CBUTR-11")
