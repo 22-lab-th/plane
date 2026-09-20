@@ -222,6 +222,8 @@ class TestUploadHappyPath:
         }
         assert file_object.status == FileObject.Status.ACTIVE
         assert file_object.current_version_no == 1
+        assert file_object.created_by.email == "test@plane.so"
+        assert version.uploaded_by.email == "test@plane.so"
 
         usage = ProjectStorageUsage.objects.get(project=project)
         quota_row = StorageQuota.objects.get(workspace=project.workspace)

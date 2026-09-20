@@ -42,6 +42,7 @@ from plane.app.serializers.file import (
     FileUploadInitiateSerializer,
 )
 from plane.app.views.base import BaseAPIView
+from plane.app.views.file.base import project_or_404, require_writable_project
 from plane.db.models import (
     FileAccessLog,
     FileFolder,
@@ -50,14 +51,13 @@ from plane.db.models import (
     FileVersion,
     Issue,
     IssueComment,
-    Project,
     ProjectPage,
 )
 from plane.settings.storage import S3Storage
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
-from plane.utils.file_storage.errors import FileUploadError
+from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.magic_bytes import HEAD_BYTES, check_magic_bytes, normalize_mime_type
 from plane.utils.object_key import build_object_key
@@ -78,11 +78,6 @@ MAX_NAME_ATTEMPTS = 200
 UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.MILESTONE, FileLink.EntityType.DELIVERABLE)
 
 
-def _project(slug, project_id):
-    """Resolve the project from the URL; a foreign project never resolves (AD-06)."""
-    return Project.objects.get(id=project_id, workspace__slug=slug)
-
-
 def _folder_for(project, folder_id):
     """Return the folder inside this project, or raise a 400."""
     if not folder_id:
@@ -90,7 +85,7 @@ def _folder_for(project, folder_id):
 
     folder = FileFolder.objects.filter(id=folder_id, project_id=project.id).first()
     if folder is None:
-        raise FileUploadError(
+        raise ProjectFileError(
             "folder_id does not belong to this project.",
             code="invalid_request",
             field="folder_id",
@@ -133,7 +128,7 @@ def _resolve_link(project, link):
 
     if entity_type == FileLink.EntityType.PROJECT:
         if str(project.id) != entity_id:
-            raise FileUploadError(
+            raise ProjectFileError(
                 "A project link must reference the project in the URL.",
                 code="invalid_request",
                 field="link.entity_id",
@@ -144,7 +139,7 @@ def _resolve_link(project, link):
     if entity_type == FileLink.EntityType.ISSUE:
         issue = Issue.objects.filter(id=entity_id, project_id=project.id).first()
         if issue is None:
-            raise FileUploadError(
+            raise ProjectFileError(
                 "link.entity_id does not belong to this project.",
                 code="invalid_request",
                 field="link.entity_id",
@@ -157,7 +152,7 @@ def _resolve_link(project, link):
     if entity_type == FileLink.EntityType.PAGE:
         page = ProjectPage.objects.filter(page_id=entity_id, project_id=project.id).first()
         if page is None:
-            raise FileUploadError(
+            raise ProjectFileError(
                 "link.entity_id does not belong to this project.",
                 code="invalid_request",
                 field="link.entity_id",
@@ -167,7 +162,7 @@ def _resolve_link(project, link):
 
     if entity_type == FileLink.EntityType.COMMENT:
         if not IssueComment.objects.filter(id=entity_id, project_id=project.id).exists():
-            raise FileUploadError(
+            raise ProjectFileError(
                 "link.entity_id does not belong to this project.",
                 code="invalid_request",
                 field="link.entity_id",
@@ -240,7 +235,7 @@ def _refuse_live_attempt(file_object):
         return
 
     attempt = live_attempts[0]
-    raise FileUploadError(
+    raise ProjectFileError(
         "Another upload for this file is already in progress.",
         code="upload_in_progress",
         status_code=status.HTTP_409_CONFLICT,
@@ -286,7 +281,7 @@ def _available_display_name(project, folder, file_name):
 
         candidate = f"{stem} ({index}){extension}"
 
-    raise FileUploadError(
+    raise ProjectFileError(
         "A unique name could not be derived for this file.",
         code="name_conflict",
     )
@@ -368,7 +363,8 @@ class FileUploadInitiateEndpoint(BaseAPIView):
         serializer.is_valid(raise_exception=True)
         payload = serializer.validated_data
 
-        project = _project(slug, project_id)
+        project = project_or_404(slug, project_id)
+        require_writable_project(project)
         link = _resolve_link(project, payload.get("link"))
         folder = _folder_for(project, payload.get("folder_id"))
         file_object = _existing_file(project, slug, payload.get("file_id"))
@@ -376,7 +372,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
             FileObject.Status.TRASHED,
             FileObject.Status.PURGED,
         ):
-            raise FileUploadError(
+            raise ProjectFileError(
                 "This file is trashed and cannot receive a new version.",
                 code="invalid_request",
                 field="file_id",
@@ -417,7 +413,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
                     _refuse_live_attempt(file_object)
 
                 if file_object is None:
-                    file_object = FileObject.objects.create(
+                    file_object = FileObject(
                         id=file_id,
                         project=project,
                         folder=folder,
@@ -432,6 +428,10 @@ class FileUploadInitiateEndpoint(BaseAPIView):
                         status=FileObject.Status.PENDING,
                         checksum_sha256=payload.get("checksum_sha256"),
                     )
+                    # The uploader is recorded from the request rather than from
+                    # the ambient current user, so the uploader filter and the
+                    # audit trail stay correct outside a request context too.
+                    file_object.save(force_insert=True, created_by_id=request.user.id)
 
                 version = FileVersion.objects.create(
                     project=project,
@@ -531,7 +531,8 @@ class FileUploadCompleteEndpoint(BaseAPIView):
         serializer.is_valid(raise_exception=True)
         payload = serializer.validated_data
 
-        project = _project(slug, project_id)
+        project = project_or_404(slug, project_id)
+        require_writable_project(project)
         file_object = FileObject.objects.get(id=file_id, project_id=project.id, workspace__slug=slug)
         version = FileVersion.objects.get(file=file_object, version_no=payload["version_no"])
 
@@ -762,7 +763,8 @@ class FileUploadAbortEndpoint(BaseAPIView):
         serializer = FileUploadAbortSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        project = _project(slug, project_id)
+        project = project_or_404(slug, project_id)
+        require_writable_project(project)
         file_object = FileObject.objects.get(id=file_id, project_id=project.id, workspace__slug=slug)
         version = FileVersion.objects.get(file=file_object, version_no=serializer.validated_data["version_no"])
 

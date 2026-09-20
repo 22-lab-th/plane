@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-"""Request validation for the project-file upload lifecycle (ARCH-001 §4.1)."""
+"""Request and response serialisation for project files (ARCH-001 §4.1)."""
 
 # Python imports
 import re
@@ -14,11 +14,23 @@ from django.conf import settings
 from rest_framework import serializers
 
 # Module imports
-from plane.db.models import FileLink
+from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.magic_bytes import normalize_mime_type
 from plane.utils.object_key import OBJECT_KEY_CATEGORIES
 
 CHECKSUM_SHA256_PATTERN = re.compile(r"\A[0-9a-fA-F]{64}\Z")
+
+
+def user_payload(user):
+    """Return the uploader snapshot returned with files and versions."""
+    if user is None:
+        return None
+
+    return {
+        "id": str(user.id),
+        "display_name": user.display_name or user.email or user.username or "",
+        "email": user.email,
+    }
 
 
 class FileUploadInitiateSerializer(serializers.Serializer):
@@ -96,3 +108,101 @@ class FileUploadAbortSerializer(serializers.Serializer):
     """`POST files/{file_id}/abort-upload/` payload."""
 
     version_no = serializers.IntegerField(min_value=1)
+
+
+class FileFolderSerializer(serializers.ModelSerializer):
+    """A folder in the listing response (folders never appear in object keys)."""
+
+    class Meta:
+        model = FileFolder
+        fields = [
+            "id",
+            "name",
+            "parent_id",
+            "depth",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class FileVersionSerializer(serializers.ModelSerializer):
+    """One stored version of a file, including the evidence finalize recorded."""
+
+    uploader = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FileVersion
+        fields = [
+            "id",
+            "version_no",
+            "status",
+            "is_active",
+            "size_bytes",
+            "mime_type",
+            "client_checksum_sha256",
+            "etag",
+            "magic_bytes_checked_at",
+            "uploader",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_uploader(self, obj):
+        return user_payload(obj.uploaded_by)
+
+
+class FileLinkSerializer(serializers.ModelSerializer):
+    """A binding between a file and the entity that surfaces it."""
+
+    class Meta:
+        model = FileLink
+        fields = [
+            "id",
+            "entity_type",
+            "entity_id",
+            "entity_identifier",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class FileObjectSerializer(serializers.ModelSerializer):
+    """A file as the list and detail endpoints return it.
+
+    ``link_count`` is annotated by the queryset so a listing never issues one
+    query per file (R-NFR-1).
+    """
+
+    link_count = serializers.IntegerField(read_only=True)
+    uploader = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FileObject
+        fields = [
+            "id",
+            "name_display",
+            "name_original",
+            "category",
+            "status",
+            "visibility",
+            "mime_type",
+            "extension",
+            "size_bytes",
+            "folder_id",
+            "current_version_no",
+            "object_key",
+            "bucket",
+            "checksum_sha256",
+            "is_pinned",
+            "last_accessed_at",
+            "link_count",
+            "uploader",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_uploader(self, obj):
+        return user_payload(obj.created_by)

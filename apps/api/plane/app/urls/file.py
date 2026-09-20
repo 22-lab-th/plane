@@ -5,12 +5,22 @@
 from django.urls import path
 
 from plane.app.views import (
+    FileDetailEndpoint,
+    FileListEndpoint,
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,
     FileUploadInitiateEndpoint,
 )
 
 urlpatterns = [
+    # Listing (T-103)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/",
+        FileListEndpoint.as_view(),
+        name="project-files",
+    ),
+    # Upload lifecycle (T-102). The literal segments stay ahead of the
+    # parameterised detail pattern so the intent is obvious.
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/initiate-upload/",
         FileUploadInitiateEndpoint.as_view(),
@@ -25,5 +35,11 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/abort-upload/",
         FileUploadAbortEndpoint.as_view(),
         name="project-file-abort-upload",
+    ),
+    # Detail (T-103)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/",
+        FileDetailEndpoint.as_view(),
+        name="project-file-detail",
     ),
 ]

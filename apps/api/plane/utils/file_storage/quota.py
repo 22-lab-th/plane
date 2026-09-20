@@ -30,10 +30,10 @@ from django.utils import timezone
 
 # Module imports
 from plane.db.models import FileVersion, ProjectStorageUsage, StorageQuota
-from plane.utils.file_storage.errors import FileUploadError
+from plane.utils.file_storage.errors import ProjectFileError
 
 
-class QuotaExceeded(FileUploadError):
+class QuotaExceeded(ProjectFileError):
     """Raised when a reservation or a settlement would cross a configured ceiling."""
 
     code = "quota_exceeded"
