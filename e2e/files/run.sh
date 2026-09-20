@@ -118,6 +118,12 @@ say "broker and stores ready"
 # Django-side environment shared by every container command below.
 DJANGO_ENV=(
   -e DJANGO_SETTINGS_MODULE=plane.settings.local
+  # The suite signs in about twenty times (one per test plus the guest contexts) and the
+  # product default is AUTHENTICATION_RATE_LIMIT=10/minute per IP. Without this, the sign-ins
+  # that fall past the budget answer 302 RATE_LIMIT_EXCEEDED, no session is established, and
+  # whichever test they belong to fails on some unrelated assertion much later (DEFECT-007).
+  # The product's own default is untouched; only this harness's stack is raised.
+  -e AUTHENTICATION_RATE_LIMIT=300/minute
   -e DATABASE_URL=postgresql://plane:plane@test-db:5432/plane
   -e REDIS_URL=redis://test-redis:6379/
   -e RABBITMQ_HOST=plane-files-e2e-mq

@@ -445,7 +445,22 @@ const displayDate = (iso: string): string => {
   return `${months[(month ?? 1) - 1]} ${String(day).padStart(2, "0")}, ${year}`;
 };
 
-// --- the specs --------------------------------------------------------------
+/** The `X-Amz-Signature` a presigned URL carries: the part a re-signing open changes. */
+const signatureOf = (url: string): string => new URL(url).searchParams.get("X-Amz-Signature") ?? "";
+
+/**
+ * Wait (bounded, at most 1.1 s) until the wall clock has crossed the next second boundary.
+ *
+ * A SigV4 presign is a pure function of the key, the expiry and `X-Amz-Date`, and that date
+ * has **second** granularity, so two signing requests inside one second legitimately return
+ * the identical URL. Spacing an open past a boundary is what lets "a second open signs its
+ * own URL" be a claim about the signing rather than about the clock (DEFECT-008).
+ */
+async function waitPastSecondBoundary(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 1_100 - (Date.now() % 1_000)));
+}
+
+// --- the specs -------------------------------------------------------------------------------------------------------------------------
 
 test.describe("File detail drawer (T-114)", () => {
   test("the_deep_link_opens_the_drawer_and_escape_closes_it", async ({ page }) => {
@@ -561,22 +576,32 @@ test.describe("File detail drawer (T-114)", () => {
     ).toBeGreaterThan(0);
 
     // --- every open signs its own URL -----------------------------------------
+    // Spaced past a second boundary: a same-second re-sign is legitimately identical, and
+    // what this asserts is that the drawer re-signed at all (DEFECT-008).
+    await waitPastSecondBoundary();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId(DRAWER)).toBeHidden();
     await page.getByTestId(`files-row-${png.fileId}`).click();
     await expect(page.getByTestId(DRAWER)).toBeVisible();
     const second = await settledBody<TAccessUrl>(page, previews, 1, "the preview the second open signed");
+    expect(previews.length, "the second open issued a preview request of its own").toBeGreaterThan(1);
+    expect(
+      signatureOf(second.url),
+      "and re-signed: its URL carries a different X-Amz-Signature from the first open's"
+    ).not.toBe(signatureOf(first.url));
     expect(second.url, "a presigned URL belongs to one rendering, so a second open signs a different one").not.toBe(
       first.url
     );
     await expect(page.getByTestId("files-drawer-preview-image")).toHaveAttribute("src", second.url);
 
     // --- and a deep link survives a reload (AC-17) ----------------------------
+    await waitPastSecondBoundary();
     const beforeReload = previews.length;
     await page.reload();
     await expect(page.getByTestId(DRAWER), "the reloaded deep link re-opens the drawer").toBeVisible();
     const third = await settledBody<TAccessUrl>(page, previews, beforeReload, "the preview the reload signed");
-    expect(third.url, "the reload signs a URL of its own").not.toBe(second.url);
+    expect(previews.length, "the reload issued a preview request of its own").toBeGreaterThan(beforeReload);
+    expect(signatureOf(third.url), "the reload signs a URL of its own").not.toBe(signatureOf(second.url));
     const reloadedImage = page.getByTestId("files-drawer-preview-image");
     await expect(reloadedImage).toBeVisible();
     await expect(reloadedImage).toHaveAttribute("src", third.url);

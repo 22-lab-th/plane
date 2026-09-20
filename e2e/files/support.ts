@@ -593,6 +593,19 @@ export async function signIn(page: Page, email: string, password: string): Promi
   });
   expect([200, 302], `POST /auth/sign-in/ answered ${response.status()}`).toContain(response.status());
 
+  // A throttled sign-in is a redirect to the auth error page (error_code 5900,
+  // RATE_LIMIT_EXCEEDED) instead of a session. Name the throttle here: otherwise the test
+  // fails later on whatever it was actually asserting, which is how one throttled attempt
+  // became three unrelated-looking failures (DEFECT-007). The stack raises the limit in
+  // `run.sh`; this is not retried.
+  const redirect = response.headers()["location"] ?? "";
+  if (redirect.includes("RATE_LIMIT_EXCEEDED")) {
+    throw new Error(
+      `POST /auth/sign-in/ for ${email} was throttled by AUTHENTICATION_RATE_LIMIT ` +
+        `(default 10/minute per IP; the e2e stack raises it in run.sh). Redirect: ${redirect}`
+    );
+  }
+
   const me = await page.request.get(`${API_URL}/api/users/me/`);
   expect(me.status(), `signing in ${email} must establish an API session`).toBe(200);
   expect(((await me.json()) as { email: string }).email, "the signed-in identity").toBe(email);
