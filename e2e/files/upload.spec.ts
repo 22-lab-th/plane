@@ -659,7 +659,12 @@ test.describe("Project files upload (T-113)", () => {
     await expect(modal).toContainText(`“${base.name}” already exists in Project root`);
     const keepBothLabel = (await page.getByTestId("files-upload-collision-keep-both").textContent()) ?? "";
     const predictedName = /Keep both \((.+?)\)Adds/.exec(keepBothLabel)?.[1] ?? "";
-    expect(keepBothLabel, "the modal offers the three ways out").toContain("Replace as new version");
+    expect(predictedName, "the keep-both choice names the file the server derives from the rule (R-FOLD-5)").toBe(
+      `${stem} (2).txt`
+    );
+    // All three ways out are offered (DESIGN §8).
+    await expect(page.getByTestId("files-upload-collision-replace")).toContainText("Replace as new version");
+    await expect(page.getByTestId("files-upload-collision-cancel")).toContainText("Cancel");
 
     await page.getByTestId("files-upload-collision-keep-both").click();
     await expect(modal).toBeHidden();
