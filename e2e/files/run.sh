@@ -18,6 +18,7 @@ NETWORK="plane_test_env"
 API_CONTAINER="plane-files-e2e-api"
 MINIO_CONTAINER="plane-files-e2e-minio"
 MQ_CONTAINER="plane-files-e2e-mq"
+MQ_PORT=59110
 MINIO_PORT=59010
 MINIO_CONSOLE_PORT=59011
 API_PORT=8000
@@ -39,7 +40,7 @@ rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 # Reclaim the harness ports from a previous run that was killed before its trap.
 for holder in $(podman ps -a --format '{{.Names}} {{.Ports}}' |
-  awk -v p=":${MINIO_PORT}->" 'index($0, p) {print $1}'); do
+  awk -v p=":${MINIO_PORT}->" -v m=":${MQ_PORT}->" 'index($0, p) || index($0, m) {print $1}'); do
   podman rm -f "$holder" >/dev/null 2>&1 || true
 done
 podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" "$MQ_CONTAINER" >/dev/null 2>&1 || true
@@ -85,11 +86,11 @@ wait_for_dependency() {
   tail -25 "$STATE_DIR/deps.log" >&2
   exit 1
 }
-# Probed over the management API with the credentials the API container uses: the CLI
-# needs the node's Erlang cookie, and a check that fails on the probe rather than on the
-# broker would be worse than no check at all.
-wait_for_dependency "$MQ_CONTAINER" "management API" 120 \
-  podman exec "$MQ_CONTAINER" curl -fsS -u plane:plane http://localhost:15672/api/overview
+# Probed over a published port with a client the harness already needs: an in-container
+# probe would depend on which CLI the image happens to ship, and a readiness check that
+# fails on the probe rather than on the broker is worse than no check at all.
+mq_ready() { timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/${MQ_PORT}" >/dev/null 2>&1; }
+wait_for_dependency "$MQ_CONTAINER" "amqp port ${MQ_PORT}" 120 mq_ready
 compose exec -T test-db pg_isready -U plane -d plane >/dev/null 2>&1 ||
   wait_for_dependency test-db "pg_isready" 60 compose exec -T test-db pg_isready -U plane -d plane
 compose exec -T test-redis valkey-cli ping >/dev/null 2>&1 ||
