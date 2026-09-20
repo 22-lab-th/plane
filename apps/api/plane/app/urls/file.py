@@ -6,6 +6,8 @@ from django.urls import path
 
 from plane.app.views import (
     FileCopyEndpoint,
+    FilePurgeEndpoint,
+    FileRestoreEndpoint,
     FileDetailEndpoint,
     FileDownloadEndpoint,
     FileFolderDetailEndpoint,
@@ -63,11 +65,21 @@ urlpatterns = [
         FilePreviewEndpoint.as_view(),
         name="project-file-preview",
     ),
-    # File operations (T-106)
+    # File operations (T-106) and the trash lifecycle (T-107)
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/copy/",
         FileCopyEndpoint.as_view(),
         name="project-file-copy",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/restore/",
+        FileRestoreEndpoint.as_view(),
+        name="project-file-restore",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/purge/",
+        FilePurgeEndpoint.as_view(),
+        name="project-file-purge",
     ),
     # Detail (T-103)
     path(

@@ -116,6 +116,26 @@ def require_project_editor(request, project):
     require_writable_project(project)
 
 
+def require_project_admin(request, project):
+    """Require the project ADMIN role - the only role that may purge (ARCH-001 §4.5).
+
+    Membership first (a non-member learns nothing), then the role, then the project
+    state, mirroring :func:`require_project_editor`.
+    """
+    role = member_role(request, project)
+    if role is None:
+        raise ObjectDoesNotExist("The required object does not exist.")
+
+    if role != ROLE.ADMIN.value:
+        raise ProjectFileError(
+            "You don't have the required permissions.",
+            code="permission_denied",
+            status_code=403,
+        )
+
+    require_writable_project(project)
+
+
 def parse_bool(raw, field):
     """Parse a query/body boolean, refusing anything else with a 400."""
     value = str(raw).strip().lower()
@@ -229,9 +249,15 @@ def file_queryset(project, slug, *, include_trashed):
     return queryset
 
 
+#: The statuses the trash surface shows and ``restore``/``purge`` accept. A file
+#: whose purge failed stays here deliberately: it still holds its objects and its
+#: quota, so hiding it would drop a failed deletion out of sight (R3-02).
+TRASHED_STATUSES = (FileObject.Status.TRASHED, FileObject.Status.PURGE_FAILED)
+
+
 def trashed_files(project, slug):
-    """The trash surface: the rows whose status is ``trashed``, and only those."""
-    return file_queryset(project, slug, include_trashed=True).filter(status=FileObject.Status.TRASHED)
+    """The trash surface: the rows that are in the trash, and only those."""
+    return file_queryset(project, slug, include_trashed=True).filter(status__in=TRASHED_STATUSES)
 
 
 def is_on_default_surface(file_object):

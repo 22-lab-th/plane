@@ -5,7 +5,7 @@
 from .download import FileDownloadEndpoint, FilePreviewEndpoint
 from .folders import FileFolderDetailEndpoint, FileFolderListEndpoint
 from .listing import FileDetailEndpoint, FileListEndpoint
-from .operations import FileCopyEndpoint
+from .operations import FileCopyEndpoint, FilePurgeEndpoint, FileRestoreEndpoint
 from .upload import (
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,

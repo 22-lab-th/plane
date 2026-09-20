@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-"""File operations inside one project: rename, move and copy.
+"""File operations inside one project: rename, move, copy, trash, restore, purge.
 
 Three invariants shape this module:
 
@@ -41,23 +41,39 @@ from plane.app.serializers.file import (
     FileCopySerializer,
     FileObjectSerializer,
     FileOperationSerializer,
+    reject_unsupported_fields,
 )
 from plane.app.views.base import BaseAPIView
-from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.app.views.file.base import (
     GOOD_VERSION_STATUSES,
-    file_for_write,
+    TRASHED_STATUSES,
     available_display_name,
+    file_for_write,
+    file_queryset,
     folder_or_400,
+    parse_bool,
     project_or_404,
+    require_project_admin,
     require_project_editor,
     stored_name,
 )
-from plane.db.models import FileAccessLog, FileObject, FileVersion
+from plane.db.models import (
+    FileAccessLog,
+    FileFolder,
+    FileLink,
+    FileObject,
+    FileVersion,
+    Issue,
+    IssueComment,
+    Page,
+    Project,
+)
 from plane.settings.storage import S3Storage
+from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.file_storage.purge import purge_file as run_purge
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.object_key import build_object_key
 
@@ -377,3 +393,241 @@ class FileCopyEndpoint(BaseAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+#: Entity types this distribution can check for liveness when a link is revived.
+#: A type with no local table here (milestone, deliverable) is revived: nothing in
+#: this build can contradict the link, and dropping it would lose a real binding.
+LIVE_ENTITY_MODELS = {
+    FileLink.EntityType.PROJECT: Project,
+    FileLink.EntityType.ISSUE: Issue,
+    FileLink.EntityType.PAGE: Page,
+    FileLink.EntityType.COMMENT: IssueComment,
+}
+
+
+def _entity_is_live(link):
+    """True when the entity a link points at still exists."""
+    model = LIVE_ENTITY_MODELS.get(link.entity_type)
+    if model is None:
+        return True
+
+    return model.objects.filter(id=link.entity_id).exists()
+
+
+def _trashed_file_or_refuse(project, slug, file_id):
+    """Resolve a file for a trash operation, or refuse with the documented code.
+
+    Both ``restore`` and ``purge`` address rows the default surface hides, so they
+    read through ``file_queryset`` with the trash included - the same visibility
+    source the list and detail endpoints use, never a manager of their own - and
+    refuse anything that is not actually in the trash.
+    """
+    file_object = file_queryset(project, slug, include_trashed=True).get(id=file_id)
+
+    if file_object.status not in TRASHED_STATUSES:
+        raise ProjectFileError(
+            "This file is not in the trash.",
+            code="file_not_trashed",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
+    return file_object
+
+
+def _response_file(file_object):
+    """Serialise the file as the endpoints return it (link count included)."""
+    file_object.refresh_from_db()
+    return _serialize_file(file_object)
+
+
+def trash_file(request, slug, project_id, file_id):
+    """Move a file to the trash (R-DEL-1, AC-11).
+
+    Both markers move together - ``status='trashed'`` and ``deleted_at`` - because
+    the shared visibility predicate reads both, and the versions and their objects
+    are untouched: trashed files keep consuming quota until they are purged
+    (AD-09), which is why no counter moves here. Links are unlinked so an issue
+    stops showing a deleted attachment; their rows survive so a restore can revive
+    the ones whose entity is still there.
+    """
+    project = project_or_404(slug, project_id)
+    require_project_editor(request, project)
+
+    file_object = file_for_write(project, slug, file_id)
+    links = list(file_object.links.all())
+    versions = file_object.versions.count()
+
+    with transaction.atomic():
+        now = timezone.now()
+        # The links are marked inactive with an update rather than the model's
+        # ``delete()``: that helper queues a deferred hard-delete job through the
+        # broker, and trashing a file must not depend on a worker being reachable.
+        # The rows stay, so a restore can revive the links whose entity is alive.
+        if links:
+            FileLink.objects.filter(id__in=[link.id for link in links]).update(deleted_at=now, updated_at=now)
+
+        FileObject.all_objects.filter(pk=file_object.pk).update(
+            status=FileObject.Status.TRASHED,
+            deleted_at=now,
+            updated_at=now,
+        )
+
+        record_file_access(
+            request,
+            action=FileAccessLog.Action.TRASHED,
+            project=project,
+            file_name=file_object.name_display,
+            file_id=file_object.id,
+            metadata={
+                # The restore path reads these two back: which links this trash
+                # unlinked, and what the row's status was before it moved.
+                "link_ids": [str(link.id) for link in links],
+                "previous_status": file_object.status,
+                "folder_id": str(file_object.folder_id) if file_object.folder_id else None,
+                "versions": versions,
+            },
+        )
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def restore_file(request, slug, project_id, file_id):
+    """Restore a trashed file (R-DEL-2, AC-11).
+
+    Restoring clears both markers and returns the row to the status it had before
+    the trash. The folder is re-checked: a recursive folder delete trashes the
+    whole subtree, so a nested file whose folder is gone lands at the project root
+    instead of pointing at a hidden folder, and the audit row records which of the
+    two happened. Links the trash unlinked are revived when their entity is still
+    live; a link whose entity is gone stays unlinked.
+    """
+    project = project_or_404(slug, project_id)
+    require_project_editor(request, project)
+
+    file_object = _trashed_file_or_refuse(project, slug, file_id)
+    trash_audit = (
+        FileAccessLog.objects.filter(file_id=file_object.id, action=FileAccessLog.Action.TRASHED)
+        .order_by("-created_at")
+        .first()
+    )
+    trash_metadata = (trash_audit.metadata or {}) if trash_audit is not None else {}
+
+    folder = None
+    folder_fallback = False
+    if file_object.folder_id is not None:
+        folder = FileFolder.objects.filter(id=file_object.folder_id, project_id=project.id).first()
+        folder_fallback = folder is None
+
+    previous_status = trash_metadata.get("previous_status")
+    if previous_status not in FileObject.Status.values or previous_status in (
+        FileObject.Status.TRASHED,
+        FileObject.Status.PURGE_FAILED,
+    ):
+        previous_status = FileObject.Status.ACTIVE
+
+    restored_links = 0
+    try:
+        with transaction.atomic():
+            for raw_link_id in trash_metadata.get("link_ids", []):
+                link = FileLink.all_objects.filter(id=raw_link_id, file_id=file_object.id).first()
+                if link is None or link.deleted_at is None or not _entity_is_live(link):
+                    continue
+                FileLink.all_objects.filter(pk=link.pk).update(deleted_at=None, updated_at=timezone.now())
+                restored_links += 1
+
+            FileObject.all_objects.filter(pk=file_object.pk).update(
+                status=previous_status,
+                deleted_at=None,
+                folder=folder,
+                updated_at=timezone.now(),
+            )
+
+            record_file_access(
+                request,
+                action=FileAccessLog.Action.RESTORED,
+                project=project,
+                file_name=file_object.name_display,
+                file_id=file_object.id,
+                metadata={
+                    "restored_links": restored_links,
+                    "folder_fallback": folder_fallback,
+                    "folder_id": str(folder.id) if folder is not None else None,
+                },
+            )
+    except IntegrityError:
+        # The partial unique keeps one live name per folder: if something took the
+        # name while the file sat in the trash, the caller has to decide, exactly as
+        # a rename does - the same vocabulary, not a silent rename.
+        raise ProjectFileError(
+            "A file with this name already exists in that folder.",
+            code="file_name_conflict",
+            status_code=status.HTTP_409_CONFLICT,
+            name_normalized=file_object.name_normalized,
+        )
+
+    return Response(
+        {
+            "file": _response_file(file_object),
+            "restore": {"restored_links": restored_links, "folder_fallback": folder_fallback},
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+class FileRestoreEndpoint(BaseAPIView):
+    """Restore a file from the trash (ARCH-001 §4.1)."""
+
+    throttle_classes = [ProjectFileUploadThrottle]
+
+    def post(self, request, slug, project_id, file_id):
+        return restore_file(request, slug, project_id, file_id)
+
+
+class FilePurgeEndpoint(BaseAPIView):
+    """Purge a file for good: project ADMIN only, explicit confirmation (AC-12, AC-27).
+
+    The work itself is :func:`plane.utils.file_storage.purge.purge_file`, which the
+    scheduled task calls too - the endpoint must not have its own ordering, because
+    the ordering ("every object first, then the audit event, then the row") is what
+    keeps a row from disappearing while an object survives (R3-02).
+    """
+
+    throttle_classes = [ProjectFileUploadThrottle]
+
+    def delete(self, request, slug, project_id, file_id):
+        project = project_or_404(slug, project_id)
+        require_project_admin(request, project)
+
+        reject_unsupported_fields(request.data, ("confirm",))
+
+        raw_confirm = request.query_params.get("confirm")
+        if raw_confirm in (None, ""):
+            raw_confirm = request.data.get("confirm")
+        if raw_confirm in (None, ""):
+            raise ProjectFileError(
+                "Purging a file is irreversible; confirm it with confirm=true.",
+                code="confirmation_required",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                field="confirm",
+            )
+        if not parse_bool(raw_confirm, "confirm"):
+            raise ProjectFileError(
+                "Purging a file is irreversible; confirm it with confirm=true.",
+                code="confirmation_required",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                field="confirm",
+            )
+
+        file_object = _trashed_file_or_refuse(project, slug, file_id)
+
+        if not run_purge(file_object, request=request, trigger="manual"):
+            raise ProjectFileError(
+                "The storage provider could not delete every object; the file stays in the trash and the "
+                "purge will be retried.",
+                code="storage_unavailable",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                file_id=str(file_object.id),
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

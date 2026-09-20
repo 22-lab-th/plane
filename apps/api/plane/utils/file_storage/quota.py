@@ -216,6 +216,17 @@ def release(quota, usage, version):
     return True
 
 
+def subtract_used(quota, usage, *, used_bytes):
+    """Give ``used_bytes`` back to both counters after a purge.
+
+    Not clamped at zero on purpose: a purge can only remove bytes that were
+    counted (AD-09 keeps trashed files counted), so a negative result would be
+    evidence of drift rather than something to hide (T-102 F-5).
+    """
+    if used_bytes:
+        _bump_counters(quota, usage, used_bytes=-used_bytes)
+
+
 def _bump_counters(quota, usage, *, used_bytes=0, reserved_bytes=0, clamp_reserved=False):
     """Apply counter deltas to both rows and keep the in-memory copies in sync."""
     quota_used = quota.used_bytes + used_bytes

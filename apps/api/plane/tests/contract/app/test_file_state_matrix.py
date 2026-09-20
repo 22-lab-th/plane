@@ -33,6 +33,9 @@ state                   built by
                         the stored object
 ``superseded`` only,   **directly in the database** (``hand_built_...``): nothing
 no active version       deactivates a version yet, T-108 owns that
+``purge_failed``        the purge path with its object deletion made to fail (only
+                        the storage failure is injected)
+``purged``              the purge path: the row is gone, so every path 404s
 ``trashed``             **directly in the database** - see the test id
                         ``hand_built_trashed_row``. No API path deletes a file
                         yet (T-107 owns ``DELETE files/{file_id}/``), so the row
@@ -56,8 +59,10 @@ Neither may be added before an API path can produce the state.
 
 # Python imports
 from dataclasses import dataclass
+from unittest import mock
 
 # Django imports
+from django.conf import settings
 from django.utils import timezone
 
 # Third party imports
@@ -67,7 +72,16 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 # Module imports
-from plane.db.models import FileObject, FileVersion, Project, ProjectMember, User, Workspace, WorkspaceMember
+from plane.db.models import (
+    FileAccessLog,
+    FileObject,
+    FileVersion,
+    Project,
+    ProjectMember,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from plane.settings.storage import S3Storage
 
 PDF_BYTES = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n"
@@ -149,6 +163,10 @@ def copy_url(slug, project_id, file_id):
     return f"{files_url(slug, project_id)}{file_id}/copy/"
 
 
+def purge_url(slug, project_id, file_id):
+    return f"{files_url(slug, project_id)}{file_id}/purge/"
+
+
 @dataclass(frozen=True)
 class FileState:
     """What the four read paths must answer for one state, and how it was built."""
@@ -173,10 +191,15 @@ class FileState:
     requested_version_status: str | None = None
     #: an ADMIN may address a row the default surface hides (detail without a flag)
     admin_can_address_hidden_row: bool = False
-    #: whether ``POST {file_id}/copy/`` is allowed, and its code when it is not.
+    #: False once the row is purged: every path answers 404, not a refusal.
+    row_exists: bool = True
+    #: whether ``POST {file_id}/copy/`` is allowed, and how it refuses when not.
     #: It matches ``servable`` in every state today, and that is the point: a copy
     #: of a file nobody can download is a new row nobody can download.
     copy_allowed: bool = False
+    copy_refusal_status: int = 409
+    #: ``None`` means the generic "does not exist" body (the row is off the default
+    #: surface, so the write doors treat it as absent rather than as a refusal).
     copy_refusal_code: str | None = None
 
 
@@ -195,6 +218,7 @@ PENDING = FileState(
     requested_refusal_code="object_unavailable",
     requested_version_status=FileVersion.Status.UPLOADING,
     copy_allowed=False,
+    copy_refusal_status=409,
     copy_refusal_code="object_unavailable",
 )
 
@@ -235,6 +259,7 @@ FAILED = FileState(
     requested_refusal_code="object_unavailable",
     requested_version_status=FileVersion.Status.FAILED,
     copy_allowed=False,
+    copy_refusal_status=409,
     copy_refusal_code="object_unavailable",
 )
 
@@ -251,6 +276,7 @@ SUPERSEDED_ONLY = FileState(
     requested_version=2,
     requested_servable=True,
     copy_allowed=False,
+    copy_refusal_status=409,
     copy_refusal_code="object_unavailable",
 )
 
@@ -266,10 +292,48 @@ TRASHED = FileState(
     requested_refusal_code="file_trashed",
     admin_can_address_hidden_row=True,
     copy_allowed=False,
+    copy_refusal_status=409,
     copy_refusal_code="file_trashed",
 )
 
 
+PURGED = FileState(
+    id="purged_row_gone",
+    visible_in_list=False,
+    visible_in_trash=False,
+    servable=False,
+    row_exists=False,
+    copy_allowed=False,
+    copy_refusal_status=404,
+    copy_refusal_code=None,
+)
+
+PURGE_FAILED = FileState(
+    id="purge_failed_after_injected_object_deletion_failure",
+    visible_in_list=False,
+    # A failed purge stays visible in the trash, so the deletion cannot drop out
+    # of sight while it still holds objects and quota (R3-02).
+    visible_in_trash=True,
+    servable=False,
+    refusal_status=409,
+    refusal_code="object_unavailable",
+    # v1 is still the active version, so the file-level refusal names its status.
+    file_level_version_status=FileVersion.Status.PURGE_FAILED,
+    requested_version=1,
+    requested_servable=False,
+    requested_refusal_code="object_unavailable",
+    requested_version_status=FileVersion.Status.PURGE_FAILED,
+    copy_allowed=False,
+    # The row is soft-deleted, so the write doors treat it as absent (F-2) rather
+    # than as a copyable file: its remaining life is restore or purge.
+    copy_refusal_status=404,
+    copy_refusal_code=None,
+)
+
+
+# Every state builder has the same shape - ``(session_client, admin_client, project,
+# stored_objects)`` - so the walk can call them uniformly; only the two purge states
+# need the admin client, and the others name it ``_admin_client`` to say so.
 def _initiate(session_client, project, *, file_name, file_id=None):
     response = session_client.post(
         upload_url(project.workspace.slug, project.id),
@@ -289,13 +353,13 @@ def _put_bytes(initiated, stored_objects):
     stored_objects.append(initiated.data["file"]["object_key"])
 
 
-def build_pending(session_client, project, stored_objects):
+def build_pending(session_client, _admin_client, project, stored_objects):
     """An initiated upload: the row and its reservation exist, no bytes are stored."""
     initiated = _initiate(session_client, project, file_name="state-pending.pdf")
     return PENDING, initiated.data["file"]["id"]
 
 
-def build_active(session_client, project, stored_objects):
+def build_active(session_client, _admin_client, project, stored_objects):
     """A verified first version, through the real pipeline."""
     initiated = _initiate(session_client, project, file_name="state-active.pdf")
     file_id = initiated.data["file"]["id"]
@@ -312,9 +376,9 @@ def build_active(session_client, project, stored_objects):
     return ACTIVE, file_id
 
 
-def build_superseded(session_client, project, stored_objects):
+def build_superseded(session_client, _admin_client, project, stored_objects):
     """A second verified version that stays superseded while v1 remains active."""
-    _, file_id = build_active(session_client, project, stored_objects)
+    _, file_id = build_active(session_client, admin_client, project, stored_objects)
 
     revision = _initiate(session_client, project, file_name="state-active.pdf", file_id=file_id)
     assert revision.data["version_no"] == 2
@@ -332,7 +396,7 @@ def build_superseded(session_client, project, stored_objects):
     return SUPERSEDED, file_id
 
 
-def build_failed(session_client, project, stored_objects):
+def build_failed(session_client, _admin_client, project, stored_objects):
     """A version whose declared size contradicts the stored object."""
     initiated = _initiate(session_client, project, file_name="state-failed.pdf")
     file_id = initiated.data["file"]["id"]
@@ -349,13 +413,13 @@ def build_failed(session_client, project, stored_objects):
     return FAILED, file_id
 
 
-def build_superseded_only(session_client, project, stored_objects):
+def build_superseded_only(session_client, _admin_client, project, stored_objects):
     """Built directly in the database: nothing deactivates a version yet (T-108).
 
     The state F-1 was raised for: every version is stored, none is active, and the
     old copy path used to point the copy's active version at the newest one anyway.
     """
-    _, file_id = build_superseded(session_client, project, stored_objects)
+    _, file_id = build_superseded(session_client, _admin_client, project, stored_objects)
 
     FileVersion.objects.filter(file_id=file_id, version_no=1).update(
         status=FileVersion.Status.SUPERSEDED, is_active=False
@@ -365,9 +429,39 @@ def build_superseded_only(session_client, project, stored_objects):
     return SUPERSEDED_ONLY, file_id
 
 
-def build_trashed(session_client, project, stored_objects):
+def build_purged(session_client, admin_client, project, stored_objects):
+    """Trash then purge through the API; the row is gone for good (no hand-writing)."""
+    _, file_id = build_active(session_client, admin_client, project, stored_objects)
+    assert session_client.delete(detail_url(project.workspace.slug, project.id, file_id)).status_code == 204
+    purged = admin_client.delete(
+        purge_url(project.workspace.slug, project.id, file_id) + "?confirm=true"
+    )
+    assert purged.status_code == 204, purged.data
+
+    return PURGED, file_id
+
+
+def build_purge_failed(session_client, admin_client, project, stored_objects):
+    """Trash, then purge with the adapter's object deletion failing.
+
+    The state itself comes from the API path; only the storage failure is injected,
+    because that is the one thing a test cannot arrange for real.
+    """
+    _, file_id = build_active(session_client, admin_client, project, stored_objects)
+    assert session_client.delete(detail_url(project.workspace.slug, project.id, file_id)).status_code == 204
+
+    with mock.patch.object(S3Storage, "delete_files", return_value=False):
+        failed = admin_client.delete(
+            purge_url(project.workspace.slug, project.id, file_id) + "?confirm=true"
+        )
+    assert failed.status_code == 502, failed.data
+
+    return PURGE_FAILED, file_id
+
+
+def build_trashed(session_client, _admin_client, project, stored_objects):
     """Built directly in the database: no API path trashes a file yet (T-107)."""
-    _, file_id = build_active(session_client, project, stored_objects)
+    _, file_id = build_active(session_client, admin_client, project, stored_objects)
 
     FileObject.all_objects.filter(pk=file_id).update(
         status=FileObject.Status.TRASHED, deleted_at=timezone.now()
@@ -383,6 +477,8 @@ STATE_MATRIX = [
     pytest.param(build_failed, id=FAILED.id),
     pytest.param(build_superseded_only, id=SUPERSEDED_ONLY.id),
     pytest.param(build_trashed, id=TRASHED.id),
+    pytest.param(build_purge_failed, id=PURGE_FAILED.id),
+    pytest.param(build_purged, id=PURGED.id),
 ]
 
 @pytest.mark.contract
@@ -394,7 +490,7 @@ class TestStateMatrix:
     def test_every_read_path_agrees_for_each_state(
         self, session_client, admin_client, project, stored_objects, builder
     ):
-        state, file_id = builder(session_client, project, stored_objects)
+        state, file_id = builder(session_client, admin_client, project, stored_objects)
         slug = project.workspace.slug
 
         # 1. the listing, on both surfaces
@@ -407,6 +503,25 @@ class TestStateMatrix:
         assert trash.status_code == status.HTTP_200_OK
         trash_ids = [row["id"] for row in trash.data["results"]]
         assert (str(file_id) in trash_ids) is state.visible_in_trash, f"{state.id}: trash listing"
+
+        if not state.row_exists:
+            # A purged file has no row at all: every door answers 404 rather than a
+            # refusal, for every role, and the audit trail is what survives.
+            for client in (session_client, admin_client):
+                assert client.get(detail_url(slug, project.id, file_id)).status_code == status.HTTP_404_NOT_FOUND
+                assert (
+                    client.get(detail_url(slug, project.id, file_id), {"trashed": True}).status_code
+                    == status.HTTP_404_NOT_FOUND
+                )
+            for url in (download_url, preview_url):
+                assert session_client.get(url(slug, project.id, file_id)).status_code == status.HTTP_404_NOT_FOUND
+            gone_copy = session_client.post(copy_url(slug, project.id, file_id), {}, format="json")
+            assert gone_copy.status_code == status.HTTP_404_NOT_FOUND
+            assert gone_copy.data == {"error": "The required object does not exist."}
+            assert FileAccessLog.objects.filter(
+                file_id=file_id, action=FileAccessLog.Action.PURGED
+            ).exists(), f"{state.id}: the purged audit row must survive the file"
+            return
 
         # 2 + 3. detail and the permissions it advertises
         detail = session_client.get(detail_url(slug, project.id, file_id))
@@ -466,8 +581,11 @@ class TestStateMatrix:
             downloaded_copy = session_client.get(download_url(slug, project.id, copy_id))
             assert downloaded_copy.status_code == status.HTTP_200_OK, f"{state.id}: copy not servable"
         else:
-            assert copied.status_code == status.HTTP_409_CONFLICT, f"{state.id}: {copied.data}"
-            assert copied.data["code"] == state.copy_refusal_code, f"{state.id}: copy refusal code"
+            assert copied.status_code == state.copy_refusal_status, f"{state.id}: {copied.data}"
+            if state.copy_refusal_code is None:
+                assert copied.data == {"error": "The required object does not exist."}
+            else:
+                assert copied.data["code"] == state.copy_refusal_code, f"{state.id}: copy refusal code"
             assert FileObject.all_objects.filter(project=project).count() == 1, f"{state.id}: a copy was made"
 
         # and asking for a specific version never widens what may be served
@@ -484,7 +602,7 @@ class TestStateMatrix:
                 assert asked.data.get("version_status") == state.requested_version_status
 
     def test_hand_built_missing_active_version_row_refuses_rather_than_falling_back(
-        self, session_client, project, stored_objects
+        self, session_client, admin_client, project, stored_objects
     ):
         """The one state the matrix cannot build: the active version row is gone.
 
@@ -494,7 +612,7 @@ class TestStateMatrix:
         own ``object_key`` names the deleted version, so a URL signed for whatever
         was stored last is a URL for an object this file does not claim.
         """
-        _, file_id = build_superseded(session_client, project, stored_objects)
+        _, file_id = build_superseded(session_client, admin_client, project, stored_objects)
         active = FileVersion.objects.get(file_id=file_id, is_active=True)
         assert active.version_no == 1
         FileVersion.objects.filter(pk=active.pk).delete()

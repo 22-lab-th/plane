@@ -9,7 +9,10 @@ Every project-file endpoint that has to refuse answers with a stable ``code``:
 are the codes the architecture fixes for uploads; ``storage_unavailable``,
 ``verification_failed``, ``not_uploading``, ``upload_in_progress``,
 ``project_archived`` and ``invalid_request`` cover the remaining refusals across
-the upload and listing endpoints.
+the upload and listing endpoints. The operations tickets add ``file_trashed``,
+``file_not_trashed``, ``confirmation_required`` (a purge without ``confirm=true``),
+``unsupported_field``, ``object_unavailable`` (no stored or active version),
+``cross_project_not_supported`` and ``permission_denied``.
 
 Subclassing DRF's :class:`APIException` means a raised failure becomes the right
 response without every endpoint re-implementing the mapping, and the body stays

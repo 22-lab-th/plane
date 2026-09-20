@@ -118,6 +118,8 @@ from .asset.v2 import (
 )
 from .file import (
     FileCopyEndpoint,
+    FilePurgeEndpoint,
+    FileRestoreEndpoint,
     FileDetailEndpoint,
     FileDownloadEndpoint,
     FileFolderDetailEndpoint,

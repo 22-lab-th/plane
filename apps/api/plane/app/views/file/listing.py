@@ -409,7 +409,7 @@ class FileListEndpoint(BaseAPIView):
 
 
 class FileDetailEndpoint(BaseAPIView):
-    """Read, rename, move or pin one file (GET from T-103, PATCH from T-106).
+    """Read, rename, move, pin or trash one file (GET T-103, PATCH T-106, DELETE T-107).
 
     A live-only lookup is the default, so a trashed file is not found; the caller
     may address the trash explicitly with ``?trashed=true`` (the same flag the
@@ -429,6 +429,12 @@ class FileDetailEndpoint(BaseAPIView):
         from plane.app.views.file.operations import patch_file
 
         return patch_file(request, slug, project_id, file_id)
+
+    def delete(self, request, slug, project_id, file_id):
+        """Move the file to the trash (T-107); the work lives in operations.py."""
+        from plane.app.views.file.operations import trash_file
+
+        return trash_file(request, slug, project_id, file_id)
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def get(self, request, slug, project_id, file_id):

@@ -247,7 +247,7 @@ class FileFolderWriteSerializer(serializers.Serializer):
         return attrs
 
 
-def _reject_unsupported(payload, allowed):
+def reject_unsupported_fields(payload, allowed):
     """Refuse a payload field this endpoint does not implement.
 
     DRF drops unknown keys silently, which turns a caller's mistake - or a field
@@ -284,7 +284,7 @@ class FileOperationSerializer(serializers.Serializer):
         return name
 
     def validate(self, attrs):
-        _reject_unsupported(self.initial_data, self.PAYLOAD_FIELDS)
+        reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
         if not attrs:
             raise serializers.ValidationError("Provide name_display, folder_id or is_pinned.")
         return attrs
@@ -307,5 +307,5 @@ class FileCopySerializer(serializers.Serializer):
         return name
 
     def validate(self, attrs):
-        _reject_unsupported(self.initial_data, self.PAYLOAD_FIELDS)
+        reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
         return attrs
