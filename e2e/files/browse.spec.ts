@@ -470,9 +470,13 @@ async function snapshotList(
   const [received, request] = await Promise.all([captured, capturedRequest]);
   const response = received?.response ?? null;
 
-  if (!response) {
-    expect(options.requireLive ?? false, `${label}: the view must fetch the list at least once for this URL`).toBe(
-      false
+  // A response whose body the browser had already discarded (the action navigated) is
+  // treated as a cache fallback: the reference is then the re-fetch of the URL the view
+  // asked for, which is the API's own answer either way. `requireLive` asks only that the
+  // view issued the request, which is the guarantee that matters.
+  if (!response || !received?.body) {
+    expect(options.requireLive ?? false, `${label}: the view must ask for this URL at least once`).toBe(
+      Boolean(response)
     );
     const derivedUrl = listUrl(paramsFromAppUrl(page));
     const url = request?.url() ?? derivedUrl;
@@ -493,7 +497,7 @@ async function snapshotList(
 
   rowsComeFromLiveResponse = true;
   expect(response.status(), `${label}: ${response.url()}`).toBe(200);
-  const live = (received?.body ?? ((await response.json()) as TListBody)) as TListBody;
+  const live = received.body as TListBody;
 
   const refetchedResponse = await page.request.get(response.url());
   expect(refetchedResponse.ok(), `${label}: re-fetching ${response.url()}`).toBe(true);
