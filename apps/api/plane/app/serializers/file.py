@@ -1,0 +1,98 @@
+# Copyright (c) 2023-present Plane Software, Inc. and contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+# See the LICENSE file for details.
+
+"""Request validation for the project-file upload lifecycle (ARCH-001 §4.1)."""
+
+# Python imports
+import re
+
+# Django imports
+from django.conf import settings
+
+# Third party imports
+from rest_framework import serializers
+
+# Module imports
+from plane.db.models import FileLink
+from plane.utils.magic_bytes import normalize_mime_type
+from plane.utils.object_key import OBJECT_KEY_CATEGORIES
+
+CHECKSUM_SHA256_PATTERN = re.compile(r"\A[0-9a-fA-F]{64}\Z")
+
+
+class FileUploadInitiateSerializer(serializers.Serializer):
+    """`POST files/initiate-upload/` payload."""
+
+    file_name = serializers.CharField(max_length=255, trim_whitespace=True)
+    size_bytes = serializers.IntegerField(min_value=1)
+    mime_type = serializers.CharField(max_length=127)
+    folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    category = serializers.ChoiceField(choices=sorted(OBJECT_KEY_CATEGORIES), required=False, default=None)
+    file_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    checksum_sha256 = serializers.CharField(
+        max_length=64, required=False, allow_null=True, allow_blank=True, default=None
+    )
+    link = serializers.DictField(required=False, allow_null=True, default=None)
+
+    def validate_size_bytes(self, value):
+        if value > settings.PROJECT_FILE_MAX_BYTES:
+            raise serializers.ValidationError(
+                f"File exceeds the {settings.PROJECT_FILE_MAX_BYTES} byte limit for project files."
+            )
+        return value
+
+    def validate_mime_type(self, value):
+        mime_type = normalize_mime_type(value)
+        if mime_type not in settings.PROJECT_FILE_MIME_TYPES:
+            raise serializers.ValidationError(f"{value} is not an accepted project file type.")
+        return mime_type
+
+    def validate_checksum_sha256(self, value):
+        if value in (None, ""):
+            return None
+        if not CHECKSUM_SHA256_PATTERN.match(value):
+            raise serializers.ValidationError("checksum_sha256 must be a 64 character hex digest.")
+        return value.lower()
+
+    def validate_link(self, value):
+        if value in (None, {}):
+            return None
+
+        entity_type = value.get("entity_type")
+        entity_id = value.get("entity_id")
+
+        if entity_type not in FileLink.EntityType.values:
+            raise serializers.ValidationError("link.entity_type must be one of the supported entity types.")
+        if not entity_id:
+            raise serializers.ValidationError("link.entity_id is required.")
+
+        try:
+            entity_id = str(serializers.UUIDField().to_internal_value(entity_id))
+        except serializers.ValidationError:
+            raise serializers.ValidationError("link.entity_id must be a UUID.")
+
+        return {"entity_type": entity_type, "entity_id": entity_id}
+
+
+class FileUploadCompleteSerializer(serializers.Serializer):
+    """`POST files/{file_id}/complete-upload/` payload."""
+
+    version_no = serializers.IntegerField(min_value=1)
+    size_bytes = serializers.IntegerField(min_value=0)
+    checksum_sha256 = serializers.CharField(
+        max_length=64, required=False, allow_null=True, allow_blank=True, default=None
+    )
+
+    def validate_checksum_sha256(self, value):
+        if value in (None, ""):
+            return None
+        if not CHECKSUM_SHA256_PATTERN.match(value):
+            raise serializers.ValidationError("checksum_sha256 must be a 64 character hex digest.")
+        return value.lower()
+
+
+class FileUploadAbortSerializer(serializers.Serializer):
+    """`POST files/{file_id}/abort-upload/` payload."""
+
+    version_no = serializers.IntegerField(min_value=1)

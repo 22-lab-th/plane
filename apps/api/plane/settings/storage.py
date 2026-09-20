@@ -210,6 +210,38 @@ class S3Storage(S3Boto3Storage):
         # The response contains the presigned URL
         return response
 
+    def get_object_head_bytes(self, object_name, length=512):
+        """Read the first ``length`` bytes of an object with one ranged GET.
+
+        This is the magic-byte evidence for finalize (ARCH-001 §5.1): it is one
+        Class B operation and never reads the whole object. Returns ``None`` when
+        the object cannot be read, so the caller fails closed instead of
+        activating an object it could not verify (AD-05).
+        """
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.aws_storage_bucket_name,
+                Key=str(object_name),
+                Range=f"bytes=0-{max(int(length), 1) - 1}",
+            )
+        except ClientError as e:
+            log_exception(e)
+            return None
+
+        body = response.get("Body")
+        if body is None:
+            return None
+
+        try:
+            return body.read(length)
+        except Exception as e:  # pragma: no cover - stream failures are provider errors
+            log_exception(e)
+            return None
+        finally:
+            close = getattr(body, "close", None)
+            if close is not None:
+                close()
+
     def get_object_metadata(self, object_name):
         """Get the metadata for an S3 object"""
         try:

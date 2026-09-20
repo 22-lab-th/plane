@@ -116,6 +116,11 @@ from .asset.v2 import (
     WorkspaceAssetDownloadEndpoint,
     ProjectAssetDownloadEndpoint,
 )
+from .file import (
+    FileUploadAbortEndpoint,
+    FileUploadCompleteEndpoint,
+    FileUploadInitiateEndpoint,
+)
 from .issue.base import (
     IssueListEndpoint,
     IssueViewSet,

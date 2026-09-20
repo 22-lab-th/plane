@@ -152,6 +152,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": "30/minute",
         "asset_id": "5/minute",
+        # Project-file presign/finalize, keyed by user + project (R-UPL-5).
+        "project_file_upload": os.environ.get("PROJECT_FILE_UPLOAD_RATE_LIMIT", "60/minute"),
     },
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
