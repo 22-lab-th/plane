@@ -95,10 +95,24 @@ wait_for_dependency() {
 # fails on the probe rather than on the broker is worse than no check at all.
 mq_ready() { timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/${MQ_PORT}" >/dev/null 2>&1; }
 wait_for_dependency "$MQ_CONTAINER" "amqp port ${MQ_PORT}" 120 mq_ready
-compose exec -T test-db pg_isready -U plane -d plane >/dev/null 2>&1 ||
-  wait_for_dependency test-db "pg_isready" 60 compose exec -T test-db pg_isready -U plane -d plane
-compose exec -T test-redis valkey-cli ping >/dev/null 2>&1 ||
-  wait_for_dependency test-redis "valkey-cli ping" 60 compose exec -T test-redis valkey-cli ping
+# The compose health status, not `pg_isready`: Postgres's temporary initdb server answers
+# pg_isready and is then shut down, so a probe it satisfies can pass while the database the
+# API will talk to is not there yet.
+wait_for_health() {
+  local container="$1" tries="${2:-90}" status=""
+  for _ in $(seq 1 "$tries"); do
+    status="$(podman inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo missing)"
+    [[ "$status" == "healthy" ]] && { say "$container healthy"; return 0; }
+    sleep 1
+  done
+  say "dependency unhealthy: $container (state: $status)"
+  podman logs "$container" >>"$STATE_DIR/deps.log" 2>&1 || true
+  compose logs test-db test-redis >>"$STATE_DIR/deps.log" 2>&1 || true
+  tail -25 "$STATE_DIR/deps.log" >&2
+  exit 1
+}
+wait_for_health plane_test-db_1
+wait_for_health plane_test-redis_1
 say "broker and stores ready"
 
 # Django-side environment shared by every container command below.

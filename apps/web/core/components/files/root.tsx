@@ -151,29 +151,33 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   // asks is "did the request for the filter on screen produce this data?", which only the
   // fetcher can answer. With `keepPreviousData` a failed request for a new filter would
   // otherwise leave the previous filter's rows under the new filter's label.
-  const loadedQuery = useRef<string | null>(null);
+  // The filter the rendered data belongs to travels *with* the data rather than in a ref:
+  // this view remounts during a failed revalidation (observed in the browser), which wipes a
+  // component ref and would make the decision false for the rest of the session. With
+  // `keepPreviousData` the previous payload survives the failure, so the rows, the chip and
+  // the banner all read one source of truth. A fresh mount with no payload is the cold-load
+  // case and legitimately shows the error state.
   const currentQuery = JSON.stringify(listQuery);
 
   const fetchList = useCallback(async () => {
-    const query = listQuery;
-    const body = await fileService.listProjectFiles(workspaceSlug, projectId, query);
-    loadedQuery.current = JSON.stringify(query);
-    return body;
+    const query = JSON.stringify(listQuery);
+    const response = await fileService.listProjectFiles(workspaceSlug, projectId, listQuery);
+    return { query, response };
   }, [listQuery, projectId, workspaceSlug]);
 
-  const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(listKey, fetchList, {
-    keepPreviousData: true,
-    revalidateOnFocus: false,
-  });
-
+  const { data, error, isLoading, mutate } = useSWR<{ query: string; response: IProjectFileListResponse }>(
+    listKey,
+    fetchList,
+    { keepPreviousData: true, revalidateOnFocus: false }
+  );
   // The rows and the storage chip on screen speak for the filter that produced them, not
   // for the filter the URL now asks for: with an error they are withheld unless the failed
   // request was for the filter on screen, in which case the rows stay and the banner
   // announces the failure.
   const hasError = Boolean(error);
-  const dataIsCurrent = loadedQuery.current === currentQuery;
+  const dataIsCurrent = data?.query === currentQuery;
   const showErrorState = hasError && (!data || !dataIsCurrent);
-  const visibleData = !hasError || dataIsCurrent ? data : undefined;
+  const visibleData = !hasError || dataIsCurrent ? data?.response : undefined;
 
   const rows = useMemo(() => buildFilesRows(visibleData?.folders ?? [], visibleData?.results ?? []), [visibleData]);
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
@@ -277,18 +281,18 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   return (
     <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden">
       <FilesToolbar
-        storage={hasError && !dataIsCurrent ? undefined : data?.storage}
+        storage={hasError && !dataIsCurrent ? undefined : data?.response?.storage}
         searchValue={searchInput}
         onSearchChange={setSearchInput}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
       />
       <FilesBreadcrumbs
-        breadcrumbs={dataIsCurrent || !hasError ? (data?.breadcrumbs ?? []) : []}
+        breadcrumbs={dataIsCurrent || !hasError ? (data?.response?.breadcrumbs ?? []) : []}
         onNavigate={handleOpenFolder}
       />
       {isReadOnly && <FilesReadonlyNotice />}
-      {hasError && data && dataIsCurrent && <FilesErrorBanner onRetry={() => void mutate()} />}
+      {hasError && dataIsCurrent && <FilesErrorBanner onRetry={() => void mutate()} />}
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)]">
         <FilesQuickViews
           activeView={quickView}

@@ -887,7 +887,8 @@ test.describe("Project files tab (T-112)", () => {
     // --- a same-key refresh that fails keeps its rows and shows the banner -----
     await page.goto(APP_FILES_URL);
     await expect(page.locator(ROW_SELECTOR).first()).toBeVisible();
-    const rowsBeforeFailedRefresh = await page.locator(ROW_SELECTOR).count();
+    const rowsBeforeFailedRefresh = await readRows(page);
+    const chipBeforeFailedRefresh = await page.getByTestId("files-storage").getAttribute("data-used");
 
     // SWR dedupes a reconnect revalidation against the request that has just resolved, so
     // the trigger has to be outside that window and the request has to be observed going
@@ -908,9 +909,11 @@ test.describe("Project files tab (T-112)", () => {
       .toBeGreaterThan(requestsBefore);
 
     await expect(page.getByTestId("files-error-banner"), "a failed refresh is announced").toBeVisible();
-    expect(await page.locator(ROW_SELECTOR).count(), "and the rows it already had are kept").toBe(
-      rowsBeforeFailedRefresh
-    );
+    expect(await readRows(page), "and the rows it already had are kept, unchanged").toEqual(rowsBeforeFailedRefresh);
+    expect(
+      await page.getByTestId("files-storage").getAttribute("data-used"),
+      "and the chip still reports the usage of the listing it is showing"
+    ).toBe(chipBeforeFailedRefresh);
 
     await page.unroute(isListUrl);
     await page.getByTestId("files-retry").click();
