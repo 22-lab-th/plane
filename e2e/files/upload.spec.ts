@@ -83,6 +83,7 @@ type TVersion = {
   status: string;
   is_active: boolean;
   size_bytes: number;
+  etag: string;
 };
 
 type TFileDetail = { file: TFileRow; version: TVersion | null; versions: TVersion[] };
@@ -225,12 +226,30 @@ function signedObjectRequest(
   };
 }
 
-/** What the store holds under this key: the status and, when it exists, its length. */
-async function objectHead(page: Page, objectKey: string): Promise<{ status: number; length: number | null }> {
+/**
+ * The key an attempt's bytes go to, taken from the URL the API presigned. The initiation
+ * response's `file.object_key` is the **active** version's object — the file row names what
+ * the file currently stands for (ARCH-001 §2.2) — so for a revision it names the object the
+ * upload does not touch, and the presigned URL is what says where the bytes belong.
+ */
+function attemptedObjectKey(uploadUrl: string): string {
+  const { pathname } = new URL(uploadUrl);
+  return decodeURIComponent(pathname.slice(`/${MINIO_BUCKET}/`.length));
+}
+
+/** What the store holds under this key: the status and, when it exists, its size and ETag. */
+async function objectHead(
+  page: Page,
+  objectKey: string
+): Promise<{ status: number; length: number | null; etag: string | null }> {
   const { url, headers } = signedObjectRequest("HEAD", objectKey);
   const response = await page.request.fetch(url, { method: "HEAD", headers, failOnStatusCode: false });
   const length = response.headers()["content-length"];
-  return { status: response.status(), length: length === undefined ? null : Number(length) };
+  return {
+    status: response.status(),
+    length: length === undefined ? null : Number(length),
+    etag: response.headers()["etag"] ?? null,
+  };
 }
 
 async function objectBytes(page: Page, objectKey: string): Promise<{ status: number; body: Buffer }> {
@@ -519,7 +538,7 @@ test.describe("Project files upload (T-113)", () => {
       expect(listed.size_bytes, `${fixture.name}: the listing's own size_bytes`).toBe(fixture.sizeBytes);
       expect(listed.folder_id, `${fixture.name}: it landed in the folder the view was browsing`).toBeNull();
 
-      const head = await objectHead(page, signed.file.object_key);
+      const head = await objectHead(page, attemptedObjectKey(signed.upload.url));
       expect(head.status, `${fixture.name}: the object exists in the store`).toBe(200);
       expect(head.length, `${fixture.name}: the store holds exactly the bytes that were sent`).toBe(fixture.sizeBytes);
     }
@@ -531,7 +550,7 @@ test.describe("Project files upload (T-113)", () => {
         (body) => body.file.name_display === fixture.name,
         `the API signed an upload for ${fixture.name}`
       );
-      const object = await objectBytes(page, signed.file.object_key);
+      const object = await objectBytes(page, attemptedObjectKey(signed.upload.url));
       expect(object.status, `${fixture.name}: the object can be read back`).toBe(200);
       expect(sha256(object.body), `${fixture.name}: the stored bytes are the bytes this test sent`).toBe(
         sha256(fixture.buffer)
@@ -707,9 +726,10 @@ test.describe("Project files upload (T-113)", () => {
     expect(savedRow.message, "the row reports the version the API numbered").toContain(
       `Version ${revisionInitiation.version_no} saved`
     );
-    const revisionObject = await objectHead(page, revisionInitiation.file.object_key);
+    const revisionObject = await objectHead(page, attemptedObjectKey(revisionInitiation.upload.url));
     expect(revisionObject.status, "the revision's bytes reached the store").toBe(200);
     expect(revisionObject.length, "and hold exactly the revision's bytes").toBe(revision.sizeBytes);
+    expect(revisionObject.etag, "and the store reports an ETag for them").not.toBeNull();
 
     await page.getByTestId(`files-upload-dismiss-${savedRow.id}`).click();
     await waitForQueueEmpty(page, "collision-replace");
@@ -727,6 +747,10 @@ test.describe("Project files upload (T-113)", () => {
       detail.versions.filter((version) => version.version_no === 2).map((version) => version.status),
       "the new one is stored as superseded"
     ).toEqual(["superseded"]);
+    expect(
+      detail.versions.find((version) => version.version_no === 2)?.etag,
+      "and the evidence recorded for it is the object's own ETag"
+    ).toBe(revisionObject.etag);
 
     const afterReplace = await liveSnapshot(page, "collision-replace");
     await expectViewMatchesBody(page, afterReplace.live, "collision-replace");
@@ -810,7 +834,7 @@ test.describe("Project files upload (T-113)", () => {
     expect(completions.length, "a cancelled attempt is never finalized").toBe(0);
 
     const initiation = await singleBody<TInitiation>(initiations, "the cancelled attempt was signed exactly once");
-    const orphan = await objectHead(page, initiation.file.object_key);
+    const orphan = await objectHead(page, attemptedObjectKey(initiation.upload.url));
     expect(orphan.status, "the interrupted PUT left no object behind").toBe(404);
 
     // The bytes were never stored, so the usage is where it was — and the listing is
@@ -884,7 +908,7 @@ test.describe("Project files upload (T-113)", () => {
     await expect(page.getByTestId(`files-upload-retry-${failedRow.id}`), "the row offers the retry").toBeVisible();
 
     const firstAttempt = await singleBody<TInitiation>(initiations, "the failed attempt was signed exactly once");
-    const orphan = await objectHead(page, firstAttempt.file.object_key);
+    const orphan = await objectHead(page, attemptedObjectKey(firstAttempt.upload.url));
     expect(orphan.status, "the failed PUT stored nothing").toBe(404);
 
     // A quick view refetches the listing without rebuilding the view, so the failed row is
@@ -929,8 +953,16 @@ test.describe("Project files upload (T-113)", () => {
     expect(attempts, "two PUTs: the failed one and the retry").toBe(2);
 
     const stored = await singleBody<TCompletion>(completions, "the retry was the only attempt finalized");
-    const storedObject = await objectHead(page, stored.file.object_key);
-    expect(storedObject.status, "the retried bytes are in the store").toBe(200);
+    expect(stored.file.id, "the finalize names the same file").toBe(firstAttempt.file.id);
+    expect(stored.version.version_no, "as its second version").toBe(2);
+    const retryInitiation = bodyFor<TInitiation>(
+      await bodiesOf(initiations),
+      (body) => body.version_no === 2,
+      "the retry was presigned as version 2"
+    );
+    expect(retryInitiation.file.id, "of the file the failed attempt created").toBe(firstAttempt.file.id);
+    const storedObject = await objectHead(page, attemptedObjectKey(retryInitiation.upload.url));
+    expect(storedObject.status, "the retried bytes are in the store where the presign sent them").toBe(200);
     expect(storedObject.length).toBe(fixture.sizeBytes);
     expect(
       afterRetry.live.storage.project_used_bytes - before.live.storage.project_used_bytes,
