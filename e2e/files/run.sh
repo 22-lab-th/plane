@@ -71,7 +71,11 @@ fi
 podman exec "$MINIO_CONTAINER" /bin/sh -c "mc mb local/uploads -p" >>"$STATE_DIR/minio.log" 2>&1 || true
 say "minio ready at http://127.0.0.1:${MINIO_PORT}"
 
-podman run --rm -d --name "$MQ_CONTAINER" --network "$NETWORK"   -e RABBITMQ_DEFAULT_USER=plane -e RABBITMQ_DEFAULT_PASS=plane -e RABBITMQ_DEFAULT_VHOST=plane   --tmpfs /var/lib/rabbitmq:rw,mode=1777   rabbitmq:3.13.6-management-alpine >/dev/null 2>>"$STATE_DIR/mq.log"
+podman run --rm -d --name "$MQ_CONTAINER" --network "$NETWORK" \
+  -e RABBITMQ_DEFAULT_USER=plane -e RABBITMQ_DEFAULT_PASS=plane -e RABBITMQ_DEFAULT_VHOST=plane \
+  --tmpfs /var/lib/rabbitmq:rw,mode=1777 \
+  -p "${MQ_PORT}:5672" \
+  rabbitmq:3.13.6-management-alpine >/dev/null 2>>"$STATE_DIR/mq.log"
 
 # Every dependency is checked before anything is started on top of it: a broker that is
 # down makes endpoints that enqueue Celery work answer 500, and a harness that proceeds
