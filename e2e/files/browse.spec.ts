@@ -319,6 +319,10 @@ async function expectRowsMatchBody(page: Page, body: TListBody, label: string): 
         Date.parse(rendered?.updated ?? ""),
         `${label}: ${row.name_display} was rendered before this response, so it cannot be newer`
       ).toBeLessThanOrEqual(Date.parse(row.updated_at));
+      expect(
+        mutatedFileIds.has(row.id) || Date.parse(rendered?.updated ?? "") === Date.parse(row.updated_at),
+        `${label}: ${row.name_display} may carry an older timestamp only if this spec wrote to it`
+      ).toBe(true);
     }
     expect(rendered?.pinned, `${label}: ${row.name_display} data-pinned`).toBe(String(row.is_pinned));
     // `data-kind` is a display kind derived from the mime type, not an API field:
@@ -877,6 +881,22 @@ test.describe("Project files tab (T-112)", () => {
     const recoveredCold = await snapshotList(page, "error-retry-cold", () => page.getByTestId("files-retry").click());
     await expect(page.getByTestId("files-state-error")).toBeHidden();
     await expectViewMatchesBody(page, recoveredCold.live, "error-retry-cold");
+
+    // --- a same-key refresh that fails keeps its rows and shows the banner -----
+    await page.goto(APP_FILES_URL);
+    await expect(page.locator(ROW_SELECTOR).first()).toBeVisible();
+    const rowsBeforeFailedRefresh = await page.locator(ROW_SELECTOR).count();
+    await page.route(isListUrl, (route) => route.abort("failed"));
+    // A revalidation of the key already on screen, which is what the app does on reconnect.
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(page.getByTestId("files-error-banner"), "a failed refresh is announced").toBeVisible();
+    expect(await page.locator(ROW_SELECTOR).count(), "and the rows it already had are kept").toBe(
+      rowsBeforeFailedRefresh
+    );
+
+    await page.unroute(isListUrl);
+    await page.getByTestId("files-retry").click();
+    await expect(page.getByTestId("files-error-banner")).toBeHidden();
 
     // --- a filter whose request failed keeps no stale rows --------------------
     await page.route(isListUrl, (route) => route.abort("failed"));

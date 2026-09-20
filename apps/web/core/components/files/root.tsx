@@ -8,7 +8,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { usePathname, useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { unstable_serialize } from "swr";
 // plane imports
 import { EUserPermissions } from "@plane/constants";
 import type { IProjectFileListResponse, TProjectFileOrdering } from "@/services/project-file.service";
@@ -150,7 +150,9 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   // a new filter would otherwise leave the previous filter's rows under the new filter's
   // label, which is the state the design forbids.
   const [dataKey, setDataKey] = useState<string | null>(null);
-  const currentKey = JSON.stringify(listKey);
+  // SWR hands `onSuccess` the hashed cache key and serialises the input key the same way,
+  // so the two are comparable only through its own serialiser.
+  const currentKey = unstable_serialize(listKey);
 
   const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(
     listKey,
@@ -159,7 +161,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
       keepPreviousData: true,
       revalidateOnFocus: false,
       onSuccess: (_response, key) => {
-        setDataKey(JSON.stringify(key));
+        setDataKey(key);
       },
     }
   );
