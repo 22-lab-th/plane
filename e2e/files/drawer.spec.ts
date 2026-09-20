@@ -39,6 +39,7 @@ import {
   APP_FILES_URL,
   createFolder,
   expectViewMatchesBody,
+  folderQueryFromAppUrl,
   getListBody,
   GUEST_EMAIL,
   GUEST_PASSWORD,
@@ -366,8 +367,7 @@ async function snapshotListing(page: Page, label: string, url: string): Promise<
     const snapshot = await snapshotList(page, label, () => openFilesTab(page, url));
     const app = new URL(url).searchParams;
     const asked = new URL(snapshot.url).searchParams;
-    const folder = app.get("folder");
-    const expectedFolder = folder && folder !== "root" ? folder : null;
+    const expectedFolder = folderQueryFromAppUrl(url);
     const expectedTrashed = app.get("view") === "trash";
 
     if ((asked.get("folder_id") ?? null) === expectedFolder && (asked.get("trashed") === "true") === expectedTrashed) {
@@ -451,7 +451,10 @@ test.describe("File detail drawer (T-114)", () => {
   test("the_deep_link_opens_the_drawer_and_escape_closes_it", async ({ page }) => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
 
-    const listing = await getListBody(page, { ordering: "-created" });
+    // The listing the view at the root shows, so the target is a row the DOM behind the
+    // drawer actually carries: an unfiltered `getListBody()` answers with every file in
+    // the project at any depth, including rows the root view does not show (DEFECT-005).
+    const listing = await getListBody(page, { folder_id: "root", ordering: "-created" });
     const row = listing.results[0];
     expect(row, "the harness must seed a file for the deep link to name").toBeDefined();
     const target = row as TFileRow;

@@ -427,15 +427,26 @@ export async function expectViewMatchesBody(page: Page, body: TListBody, label: 
 
 // --- capturing a list request and its body ----------------------------------
 
-/** The API query the app URL is currently asking for. */
+/**
+ * The `folder_id` the view asks for when the app URL lives at `url`.
+ *
+ * The view always scopes to one folder and names the root explicitly (`folder_id=root`,
+ * DEFECT-005): an app URL with no `folder` - or with `folder=root` - is the project root,
+ * which is a different question from an absent `folder_id` ("every file in the project, at
+ * any depth"). One definition, so the mapping below and the drawer spec's capture check
+ * cannot disagree about which listing an app URL names.
+ */
+export function folderQueryFromAppUrl(url: string): string {
+  const folder = new URL(url).searchParams.get("folder");
+  return folder && folder !== "root" ? folder : "root";
+}
+
 function paramsFromAppUrl(page: Page): Record<string, string> {
   const app = new URL(page.url()).searchParams;
   const params: Record<string, string> = {};
-  const folder = app.get("folder");
-  // The view always asks for one folder, the root included (`folder_id=root`): an app
-  // URL with no `folder` is the project root, not "every file in the project"
-  // (DEFECT-005). An absent `folder_id` is a different question, so it is never sent.
-  params.folder_id = folder && folder !== "root" ? folder : "root";
+  // The query the view actually issues for this app URL, root included; an absent
+  // `folder_id` is a different question, so it is never what this derives.
+  params.folder_id = folderQueryFromAppUrl(page.url());
   const q = app.get("q");
   if (q) params.q = q;
   // The app always sends an ordering; with none in the URL it sends its own default,
