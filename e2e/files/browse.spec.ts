@@ -479,9 +479,11 @@ async function snapshotList(
   // asked for, which is the API's own answer either way. `requireLive` asks only that the
   // view issued the request, which is the guarantee that matters.
   if (!response || !received?.body) {
-    expect(options.requireLive ?? false, `${label}: the view must ask for this URL at least once`).toBe(
-      Boolean(response)
-    );
+    // Only a snapshot that insists on a live fetch may fail here; for every other one a
+    // discarded body is just another reason to fall back to the re-fetch below.
+    if (options.requireLive) {
+      expect(response, `${label}: the view must ask for this URL at least once`).not.toBeNull();
+    }
     const derivedUrl = listUrl(paramsFromAppUrl(page));
     const url = request?.url() ?? derivedUrl;
     if (request) {
@@ -886,9 +888,25 @@ test.describe("Project files tab (T-112)", () => {
     await page.goto(APP_FILES_URL);
     await expect(page.locator(ROW_SELECTOR).first()).toBeVisible();
     const rowsBeforeFailedRefresh = await page.locator(ROW_SELECTOR).count();
+
+    // SWR dedupes a reconnect revalidation against the request that has just resolved, so
+    // the trigger has to be outside that window and the request has to be observed going
+    // out before anything is asserted about the banner.
+    await page.waitForTimeout(2_500);
+    const listRequests: string[] = [];
+    const recordRequest = (request: Request) => {
+      if (isListUrl(new URL(request.url()))) listRequests.push(request.url());
+    };
+    page.on("request", recordRequest);
+    const requestsBefore = listRequests.length;
     await page.route(isListUrl, (route) => route.abort("failed"));
-    // A revalidation of the key already on screen, which is what the app does on reconnect.
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect
+      .poll(() => listRequests.length, {
+        message: "the revalidation must actually be issued before the banner is judged",
+      })
+      .toBeGreaterThan(requestsBefore);
+
     await expect(page.getByTestId("files-error-banner"), "a failed refresh is announced").toBeVisible();
     expect(await page.locator(ROW_SELECTOR).count(), "and the rows it already had are kept").toBe(
       rowsBeforeFailedRefresh
@@ -897,6 +915,7 @@ test.describe("Project files tab (T-112)", () => {
     await page.unroute(isListUrl);
     await page.getByTestId("files-retry").click();
     await expect(page.getByTestId("files-error-banner")).toBeHidden();
+    page.off("request", recordRequest);
 
     // --- a filter whose request failed keeps no stale rows --------------------
     await page.route(isListUrl, (route) => route.abort("failed"));

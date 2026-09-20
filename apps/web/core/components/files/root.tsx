@@ -8,7 +8,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { usePathname, useSearchParams } from "next/navigation";
-import useSWR, { unstable_serialize } from "swr";
+import useSWR from "swr";
 // plane imports
 import { EUserPermissions } from "@plane/constants";
 import type { IProjectFileListResponse, TProjectFileOrdering } from "@/services/project-file.service";
@@ -146,31 +146,32 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
     [listQuery, projectId, workspaceSlug]
   );
 
-  // The key the rows on screen belong to. With `keepPreviousData` a failed request for
-  // a new filter would otherwise leave the previous filter's rows under the new filter's
-  // label, which is the state the design forbids.
-  const [dataKey, setDataKey] = useState<string | null>(null);
-  // SWR hands `onSuccess` the hashed cache key and serialises the input key the same way,
-  // so the two are comparable only through its own serialiser.
-  const currentKey = unstable_serialize(listKey);
+  // The filter the rendered data belongs to, recorded where the request is made. SWR's
+  // cache keys are hashed and its cache is its own concern; the question the view actually
+  // asks is "did the request for the filter on screen produce this data?", which only the
+  // fetcher can answer. With `keepPreviousData` a failed request for a new filter would
+  // otherwise leave the previous filter's rows under the new filter's label.
+  const loadedQuery = useRef<string | null>(null);
+  const currentQuery = JSON.stringify(listQuery);
 
-  const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(
-    listKey,
-    () => fileService.listProjectFiles(workspaceSlug, projectId, listQuery),
-    {
-      keepPreviousData: true,
-      revalidateOnFocus: false,
-      onSuccess: (_response, key) => {
-        setDataKey(key);
-      },
-    }
-  );
+  const fetchList = useCallback(async () => {
+    const query = listQuery;
+    const body = await fileService.listProjectFiles(workspaceSlug, projectId, query);
+    loadedQuery.current = JSON.stringify(query);
+    return body;
+  }, [listQuery, projectId, workspaceSlug]);
+
+  const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(listKey, fetchList, {
+    keepPreviousData: true,
+    revalidateOnFocus: false,
+  });
 
   // The rows and the storage chip on screen speak for the filter that produced them, not
-  // for the filter the URL now asks for: both are withheld when the request for the
-  // current filter failed, so a failed change shows the retryable error and no stale data.
+  // for the filter the URL now asks for: with an error they are withheld unless the failed
+  // request was for the filter on screen, in which case the rows stay and the banner
+  // announces the failure.
   const hasError = Boolean(error);
-  const dataIsCurrent = dataKey === currentKey;
+  const dataIsCurrent = loadedQuery.current === currentQuery;
   const showErrorState = hasError && (!data || !dataIsCurrent);
   const visibleData = !hasError || dataIsCurrent ? data : undefined;
 
