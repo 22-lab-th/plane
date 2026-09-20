@@ -448,7 +448,9 @@ async function snapshotList(
   // against. A repeat of a key the view recently fetched can be served from its own
   // cache, in which case the reference is the same URL the view is showing,
   // re-fetched — the API's own output for the exact query either way.
-  const captured = page.waitForResponse(isListResponse, { timeout: 12_000 }).catch(() => null);
+  // Long enough for any warmed transition to answer, short enough that the fallbacks
+  // below do not dominate the run.
+  const captured = page.waitForResponse(isListResponse, { timeout: 8_000 }).catch(() => null);
   await action();
   const response = await captured;
 
@@ -562,6 +564,14 @@ async function openFilesTab(page: Page): Promise<void> {
 test.describe("Project files tab (T-112)", () => {
   test("browse_breadcrumbs_filters_and_states_match_the_api", async ({ page }) => {
     await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
+
+    // The dev server compiles the Files route on its first hit and the app boots its
+    // workspace and project stores before the view mounts, so the first navigation of a
+    // run is far slower than any measured transition (observed well past the live
+    // window on a cold server). Prime with one unmeasured visit so the measured root
+    // snapshot is a warm, live fetch rather than a race with the compiler.
+    await openFilesTab(page);
+    await expect(page.getByTestId("files-root"), "the primed view is on screen before the measurement").toBeVisible();
 
     // The default view at the project root ("All", no filter, default ordering).
     const root = await snapshotList(page, "root-all", () => openFilesTab(page), { requireLive: true });
