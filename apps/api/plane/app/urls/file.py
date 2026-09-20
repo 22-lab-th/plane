@@ -6,7 +6,9 @@ from django.urls import path
 
 from plane.app.views import (
     FileDetailEndpoint,
+    FileDownloadEndpoint,
     FileListEndpoint,
+    FilePreviewEndpoint,
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,
     FileUploadInitiateEndpoint,
@@ -35,6 +37,17 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/abort-upload/",
         FileUploadAbortEndpoint.as_view(),
         name="project-file-abort-upload",
+    ),
+    # Delivery (T-104)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/download/",
+        FileDownloadEndpoint.as_view(),
+        name="project-file-download",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/preview/",
+        FilePreviewEndpoint.as_view(),
+        name="project-file-preview",
     ),
     # Detail (T-103)
     path(

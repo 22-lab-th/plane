@@ -118,7 +118,9 @@ from .asset.v2 import (
 )
 from .file import (
     FileDetailEndpoint,
+    FileDownloadEndpoint,
     FileListEndpoint,
+    FilePreviewEndpoint,
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,
     FileUploadInitiateEndpoint,

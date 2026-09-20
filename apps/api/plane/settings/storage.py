@@ -187,19 +187,31 @@ class S3Storage(S3Boto3Storage):
         http_method="GET",
         disposition="inline",
         filename=None,
+        response_content_type=None,
     ):
-        """Generate a presigned URL to share an S3 object"""
+        """Generate a presigned URL to share an S3 object
+
+        ``response_content_type`` (optional) pins the ``Content-Type`` the provider
+        must serve, signed into the URL. Project-file delivery uses it so a
+        mislabelled object cannot be rendered as a type the server did not
+        verify (RSCH-002 T3); a presigned response cannot carry
+        ``X-Content-Type-Options``, so pinning the type is the control available.
+        """
         if expiration is None:
             expiration = self.signed_url_expiration
         content_disposition = self._get_content_disposition(disposition, filename)
+        params = {
+            "Bucket": self.aws_storage_bucket_name,
+            "Key": str(object_name),
+            "ResponseContentDisposition": content_disposition,
+        }
+        if response_content_type:
+            params["ResponseContentType"] = response_content_type
+
         try:
             response = self.presign_s3_client.generate_presigned_url(
                 "get_object",
-                Params={
-                    "Bucket": self.aws_storage_bucket_name,
-                    "Key": str(object_name),
-                    "ResponseContentDisposition": content_disposition,
-                },
+                Params=params,
                 ExpiresIn=expiration,
                 HttpMethod=http_method,
             )
