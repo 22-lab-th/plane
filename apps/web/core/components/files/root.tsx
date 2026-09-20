@@ -41,6 +41,7 @@ import {
 } from "./states";
 import { FilesTable } from "./table-view";
 import { FilesToolbar } from "./toolbar";
+import { FilesUploadSurface, filesUploadTargetName, useFilesUpload } from "./upload";
 // hooks
 import { useUserPermissions } from "@/hooks/store/user";
 import { useAppRouter } from "@/hooks/use-app-router";
@@ -278,22 +279,48 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const hasNoFiles = !!visibleData && visibleData.results.length === 0;
   const hasNoRows = hasNoFiles && visibleData.folders.length === 0;
 
+  // The storage block the header chip shows, withheld from a failed request that was not
+  // for the filter on screen — the upload surface reads the same one, so the quota
+  // notices and the chip can never disagree about what the response said.
+  const visibleStorage = hasError && !dataIsCurrent ? undefined : data?.response?.storage;
+  const listedFiles = useMemo(() => visibleData?.results ?? [], [visibleData]);
+  const handleStored = useCallback(() => {
+    void mutate();
+  }, [mutate]);
+
+  const upload = useFilesUpload({
+    workspaceSlug,
+    projectId,
+    folderId,
+    folderName: filesUploadTargetName(visibleData?.breadcrumbs ?? [], folderId),
+    listedFiles,
+    storage: visibleStorage,
+    canUpload: !isReadOnly,
+    onStored: handleStored,
+  });
+
   return (
-    <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden">
+    <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden" {...upload.dropHandlers}>
       <FilesToolbar
-        storage={hasError && !dataIsCurrent ? undefined : data?.response?.storage}
+        storage={visibleStorage}
         searchValue={searchInput}
         onSearchChange={setSearchInput}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
+        onUpload={isReadOnly ? undefined : upload.openPicker}
+        uploadDisabledReason={upload.isFull ? (upload.quota?.exceeded ?? undefined) : undefined}
       />
       <FilesBreadcrumbs
         breadcrumbs={dataIsCurrent || !hasError ? (data?.response?.breadcrumbs ?? []) : []}
         onNavigate={handleOpenFolder}
       />
       {isReadOnly && <FilesReadonlyNotice />}
+      <FilesUploadSurface upload={upload} />
       {hasError && dataIsCurrent && <FilesErrorBanner onRetry={() => void mutate()} />}
-      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)]">
+      <div
+        data-testid={isReadOnly ? undefined : "files-upload-dropzone"}
+        className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)]"
+      >
         <FilesQuickViews
           activeView={quickView}
           onSelect={handleQuickView}
@@ -332,7 +359,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
               <FilesNoMatchState onClearFilters={handleClearFilters} />
             </>
           ) : hasNoRows ? (
-            <FilesEmptyState variant={folderId ? "folder" : "project"} />
+            <FilesEmptyState
+              variant={folderId ? "folder" : "project"}
+              onUpload={isReadOnly ? undefined : upload.openPicker}
+            />
           ) : viewMode === "grid" ? (
             <FilesGrid
               rows={rows}

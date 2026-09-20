@@ -7,6 +7,7 @@
 import { observer } from "mobx-react";
 // plane imports
 import { GridLayoutIcon, ListLayoutIcon, SearchIcon } from "@plane/propel/icons";
+import { Button } from "@plane/propel/button";
 import { IconButton } from "@plane/propel/icon-button";
 import { cn } from "@plane/utils";
 import type { IProjectFileStorage } from "@/services/project-file.service";
@@ -19,6 +20,10 @@ type Props = {
   onSearchChange: (value: string) => void;
   viewMode: TFilesViewMode;
   onViewModeChange: (mode: TFilesViewMode) => void;
+  /** Omitted for a GUEST: the header then offers no upload affordance at all. */
+  onUpload?: () => void;
+  /** The quota has no room left, so the action names why it cannot be used (DESIGN §3). */
+  uploadDisabledReason?: string;
 };
 
 /** The empty storage block a first paint uses before the listing answers. */
@@ -38,7 +43,7 @@ const EMPTY_STORAGE: IProjectFileStorage = {
  * separately and never recomputes the counts.
  */
 export const FilesToolbar = observer(function FilesToolbar(props: Props) {
-  const { storage, searchValue, onSearchChange, viewMode, onViewModeChange } = props;
+  const { storage, searchValue, onSearchChange, viewMode, onViewModeChange, onUpload, uploadDisabledReason } = props;
 
   // The numbers are the listing's; with no listing answer the chip says so instead of
   // reporting a usage of zero it has no basis for.
@@ -55,6 +60,19 @@ export const FilesToolbar = observer(function FilesToolbar(props: Props) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-body-md-medium text-primary">Files</h1>
         <div className="flex items-center gap-3">
+          {onUpload && (
+            <Button
+              data-testid="files-upload-action"
+              variant="primary"
+              size="base"
+              className={FILES_FOCUS_RING}
+              disabled={Boolean(uploadDisabledReason)}
+              title={uploadDisabledReason}
+              onClick={onUpload}
+            >
+              Upload
+            </Button>
+          )}
           <div
             data-testid="files-storage"
             data-used={hasStorage ? String(resolvedStorage.project_used_bytes) : undefined}

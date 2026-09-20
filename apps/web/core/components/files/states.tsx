@@ -8,6 +8,7 @@
 import { InfoIcon } from "@plane/propel/icons";
 import { Button } from "@plane/propel/button";
 import { Skeleton } from "@plane/propel/skeleton";
+import { cn } from "@plane/utils";
 // helpers
 import { FILES_FOCUS_RING } from "./helpers";
 
@@ -33,9 +34,13 @@ const EMPTY_COPY = {
   },
 } as const;
 
-/** The empty state of a folder, or of a project that has no files at all (DES-001 §7). */
-export function FilesEmptyState(props: { variant?: keyof typeof EMPTY_COPY }) {
-  const { variant = "folder" } = props;
+/**
+ * The empty state of a folder, or of a project that has no files at all (DES-001 §7).
+ * `onUpload` is what a member gets and a GUEST does not: the read-only view carries no
+ * upload affordance at all, rather than a disabled one.
+ */
+export function FilesEmptyState(props: { variant?: keyof typeof EMPTY_COPY; onUpload?: () => void }) {
+  const { variant = "folder", onUpload } = props;
   return (
     <div
       data-testid="files-state-empty"
@@ -44,6 +49,17 @@ export function FilesEmptyState(props: { variant?: keyof typeof EMPTY_COPY }) {
     >
       <p className="text-body-sm-medium text-primary">{EMPTY_COPY[variant].headline}</p>
       <p className="text-caption-md-regular text-tertiary">{EMPTY_COPY[variant].hint}</p>
+      {onUpload && (
+        <Button
+          data-testid="files-upload-empty-action"
+          variant="primary"
+          size="base"
+          className={cn(FILES_FOCUS_RING, "mt-2")}
+          onClick={onUpload}
+        >
+          Upload files
+        </Button>
+      )}
     </div>
   );
 }
