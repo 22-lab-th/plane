@@ -361,6 +361,7 @@ CELERY_IMPORTS = (
     "plane.bgtasks.exporter_expired_task",
     "plane.bgtasks.file_asset_task",
     "plane.bgtasks.file_purge_task",
+    "plane.bgtasks.file_sweep_task",
     "plane.bgtasks.file_quota_task",
     "plane.bgtasks.file_audit_task",
     "plane.bgtasks.email_notification_task",
@@ -582,6 +583,11 @@ SCRIPT_CAPABLE_MIME_TYPES: frozenset[str] = frozenset(
 # FILE_SIZE_LIMIT above; these values apply to the project-scoped file store.
 PROJECT_FILE_MAX_BYTES = int(os.environ.get("PROJECT_FILE_MAX_BYTES", 26214400))
 PROJECT_FILE_UPLOAD_URL_TTL_SECONDS = int(os.environ.get("PROJECT_FILE_UPLOAD_URL_TTL_SECONDS", 900))
+# The grace the unverified-object sweep adds to the upload URL's TTL before it may
+# delete an attempt's object: a presigned URL expires exactly at its TTL and the
+# provider validates the signature when the request starts, so deleting at the TTL
+# would race a PUT that began a moment before it (ARCH-001 §4.4).
+PROJECT_FILE_SWEEP_MARGIN_SECONDS = int(os.environ.get("PROJECT_FILE_SWEEP_MARGIN_SECONDS", 900))
 PROJECT_FILE_QUOTA_TOLERANCE_BYTES = int(os.environ.get("PROJECT_FILE_QUOTA_TOLERANCE_BYTES", 1048576))
 PROJECT_FILE_WORKSPACE_QUOTA_BYTES = int(os.environ.get("PROJECT_FILE_WORKSPACE_QUOTA_BYTES", 26843545600))
 

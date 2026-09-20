@@ -72,6 +72,16 @@ app.conf.beat_schedule = {
         "task": "plane.bgtasks.file_purge_task.purge_expired_files",
         "schedule": crontab(hour=2, minute=15),  # UTC 02:15
     },
+    # Hourly: an object with no verified version exists for at most one sweep
+    # interval past the upload URL's TTL plus the sweep margin (AC-20).
+    "check-every-hour-to-clean-up-unverified-objects": {
+        "task": "plane.bgtasks.file_sweep_task.cleanup_unverified_objects",
+        "schedule": crontab(minute=40),  # UTC :40 of every hour
+    },
+    "check-every-day-to-recheck-deleted-objects": {
+        "task": "plane.bgtasks.file_sweep_task.recheck_deleted_objects",
+        "schedule": crontab(hour=2, minute=45),  # UTC 02:45
+    },
     "check-every-day-to-reconcile-storage-usage": {
         "task": "plane.bgtasks.file_quota_task.reconcile_storage_usage",
         "schedule": crontab(hour=3, minute=0),  # UTC 03:00
