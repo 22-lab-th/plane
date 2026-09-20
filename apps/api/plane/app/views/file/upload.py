@@ -26,7 +26,7 @@ from uuid import uuid4
 
 # Django imports
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max, Q
 from django.utils import timezone
 
@@ -323,13 +323,22 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
             )
 
             if link is not None:
-                FileLink.objects.create(
-                    project=project,
-                    file=file_object,
-                    entity_type=link["entity_type"],
-                    entity_id=link["entity_id"],
-                    entity_identifier=link["entity_identifier"],
-                )
+                # A revision may re-declare the link its file already carries (the
+                # client sends the same payload shape), and the partial unique allows
+                # one live row per (file, entity, entity_id): an existing live link is
+                # left alone, a soft-deleted one is re-created, and a concurrent
+                # duplicate loses the race harmlessly.
+                try:
+                    with transaction.atomic():
+                        FileLink.objects.create(
+                            project=project,
+                            file=file_object,
+                            entity_type=link["entity_type"],
+                            entity_id=link["entity_id"],
+                            entity_identifier=link["entity_identifier"],
+                        )
+                except IntegrityError:
+                    pass
 
             record_file_access(
                 request,

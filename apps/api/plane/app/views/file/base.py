@@ -31,6 +31,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from plane.app.permissions import ROLE
 from plane.db.models import FileFolder, FileObject, FileVersion, Project, ProjectMember
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.file_storage.verdicts import GOOD_VERSION_STATUSES, delivery_refusal, is_on_default_surface
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.path_validator import sanitize_filename
 
@@ -260,17 +261,6 @@ def trashed_files(project, slug):
     return file_queryset(project, slug, include_trashed=True).filter(status__in=TRASHED_STATUSES)
 
 
-def is_on_default_surface(file_object):
-    """True when the default surface shows this row.
-
-    The predicate ``file_queryset(include_trashed=False)`` applies in SQL: a row
-    must be live (``deleted_at IS NULL``) **and** not carry the trashed status.
-    Trashing sets both (R-FOLD-4); the two can still disagree after a partial
-    write, and when they do every path has to agree they mean "not visible".
-    """
-    return file_object.deleted_at is None and file_object.status != FileObject.Status.TRASHED
-
-
 def include_trashed(request, project):
     """True when the caller may address rows the default surface hides.
 
@@ -328,58 +318,6 @@ def permissions_for(request, project, file_object, *, version=None):
         "can_delete": write_allowed,
         "can_download": delivery_refusal(file_object, version) is None,
     }
-
-
-def delivery_refusal(file_object, version):
-    """Return the refusal the delivery endpoints would apply, or ``None``.
-
-    Kept in one place so the ``permissions`` block a detail response advertises
-    and the answer download/preview actually give can never disagree.
-
-    ``version`` is the version the caller resolved (the active one unless a
-    specific ``?version=`` was asked for). A file with **no** active version is
-    not servable and arrives here as ``None``: there is no fallback to the newest
-    stored version, because that would sign a URL for an object the file's own
-    pointer no longer claims - reachable as soon as a purge removes the active
-    version (ADV-001 §5.1, T-104 F-4).
-    """
-    if file_object.status == FileObject.Status.TRASHED:
-        return ProjectFileError(
-            "This file is in the trash; restore it before downloading it.",
-            code="file_trashed",
-            status_code=409,
-        )
-
-    if file_object.status == FileObject.Status.QUARANTINED:
-        return ProjectFileError(
-            "This file is quarantined and cannot be served.",
-            code="file_quarantined",
-            status_code=409,
-        )
-
-    if not is_on_default_surface(file_object):
-        # A row the default surface hides (soft-deleted without the trashed status,
-        # or a partial write that left the two markers disagreeing) is not servable
-        # either: it is absent from the listing and 404 on detail for a MEMBER, so
-        # signing a URL for it would be a third, contradictory answer (P-1).
-        return ProjectFileError(
-            "This file is not available.",
-            code="object_unavailable",
-            status_code=409,
-            version_no=version.version_no if version is not None else None,
-            version_status=version.status if version is not None else None,
-        )
-
-    if version is None or version.object_deleted_at is not None or version.status not in GOOD_VERSION_STATUSES:
-        return ProjectFileError(
-            "This version has no stored object to serve.",
-            code="object_unavailable",
-            status_code=409,
-            version_no=version.version_no if version is not None else None,
-            version_status=version.status if version is not None else None,
-        )
-
-    return None
 
 
 def breadcrumbs(project, folder):

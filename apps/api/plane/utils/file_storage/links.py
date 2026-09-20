@@ -65,6 +65,37 @@ CATEGORY_BY_ENTITY_TYPE = {
 }
 
 
+def normalize_entity_type(entity_type):
+    """Return the value this link is *stored* as, for any accepted spelling.
+
+    Every door that accepts a link calls this (and :func:`resolve_link` calls it
+    again), so ``module`` and ``milestone`` cannot be accepted by one endpoint and
+    refused by another - the shape check and the resolver share one vocabulary.
+    """
+    return ENTITY_TYPE_ALIASES.get(str(entity_type), entity_type)
+
+
+def entity_ref_for_entity(entity_type, entity_id, entity_identifier):
+    """Return the key segment a link of this type contributes (DEC-001).
+
+    **One rule for creating and reading the segment**: a new file's key is built with
+    this value and a revision inherits it through :func:`entity_ref_for`, so the
+    segment is frozen at creation as DEC-001 requires.
+
+    An issue contributes its human key (``CBUTR-11``) because that is what the
+    segment is for; a page and a module contribute their id. The module's *name* is
+    the row's ``entity_identifier`` (for search and display) and is deliberately not
+    a segment: a module can be renamed, and a key must not change with it.
+    """
+    if entity_type in (FileLink.EntityType.PROJECT, FileLink.EntityType.COMMENT):
+        return None
+
+    if entity_type == FileLink.EntityType.ISSUE:
+        return entity_identifier or str(entity_id)
+
+    return str(entity_id)
+
+
 def category_for_entity(entity_type):
     """Return the category a file linked to this entity type belongs in."""
     return CATEGORY_BY_ENTITY_TYPE.get(entity_type, FileObject.Category.ASSETS)
@@ -82,7 +113,7 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
     entity type this repository has no table for, or for a project link that names
     another project.
     """
-    entity_type = ENTITY_TYPE_ALIASES.get(str(entity_type), entity_type)
+    entity_type = normalize_entity_type(entity_type)
 
     if entity_type not in SUPPORTED_ENTITY_TYPES:
         raise ProjectFileError(
@@ -118,8 +149,8 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
                 field=field,
             )
         identifier = f"{project.identifier}-{issue.sequence_id}"
-        resolved["entity_ref"] = identifier
         resolved["entity_identifier"] = identifier
+        resolved["entity_ref"] = entity_ref_for_entity(entity_type, entity_id, identifier)
         return resolved
 
     if entity_type == FileLink.EntityType.PAGE:
@@ -130,7 +161,7 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
                 code="invalid_request",
                 field=field,
             )
-        resolved["entity_ref"] = entity_id
+        resolved["entity_ref"] = entity_ref_for_entity(entity_type, entity_id, entity_id)
         return resolved
 
     if entity_type == FileLink.EntityType.MILESTONE:
@@ -141,8 +172,8 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
                 code="invalid_request",
                 field=field,
             )
-        resolved["entity_ref"] = entity_id
         resolved["entity_identifier"] = module.name[:64]
+        resolved["entity_ref"] = entity_ref_for_entity(entity_type, entity_id, module.name)
         return resolved
 
     # The comment's own ``project_id`` is denormalised, so the parent issue is what
@@ -176,7 +207,6 @@ def entity_ref_for(file_object):
     if link is None:
         return None
 
-    if link.entity_type in (FileLink.EntityType.PROJECT, FileLink.EntityType.COMMENT):
-        return None
-
-    return link.entity_identifier or str(link.entity_id)
+    # The same function that built the segment at creation reads it back, so a
+    # revision cannot inherit a different segment than the version it succeeds.
+    return entity_ref_for_entity(link.entity_type, link.entity_id, link.entity_identifier)

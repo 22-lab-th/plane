@@ -45,7 +45,6 @@ from plane.app.serializers.file import (
 )
 from plane.app.views.base import BaseAPIView
 from plane.app.views.file.base import (
-    GOOD_VERSION_STATUSES,
     TRASHED_STATUSES,
     available_display_name,
     file_for_write,
@@ -73,6 +72,7 @@ from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.file_storage.verdicts import GOOD_VERSION_STATUSES
 from plane.utils.file_storage.purge import purge_file as run_purge
 from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage.naming import extension_of, normalize_name

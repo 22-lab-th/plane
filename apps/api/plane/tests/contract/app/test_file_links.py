@@ -324,6 +324,35 @@ class TestAttachLink:
         assert refused.data["code"] == "invalid_request"
         assert FileLink.objects.filter(file_id=file_id).count() == 1
 
+    def test_both_spellings_work_on_both_doors(self, session_client, project, stored_objects):
+        """F-5: the alias is one vocabulary, not one per endpoint."""
+        module = Module.objects.create(
+            name="Aliased", project=project, workspace=project.workspace, created_by_id=project.created_by_id
+        )
+
+        for spelling in ("milestone", "module"):
+            file_name = f"Upload-{spelling}.pdf"
+            file_id, _ = upload_file(
+                session_client, project, name=file_name, link=(spelling, module.id), stored_objects=stored_objects
+            )
+            assert FileLink.objects.get(file_id=file_id).entity_type == FileLink.EntityType.MILESTONE
+
+            # The revision door shares the upload serializer, so it answers the same
+            # spelling and does not duplicate the link the file already carries.
+            revision = session_client.post(
+                f"{detail_url(project.workspace.slug, project.id, file_id)}versions/",
+                {
+                    "file_name": file_name,
+                    "size_bytes": len(PDF_BYTES),
+                    "mime_type": "application/pdf",
+                    "link": {"entity_type": spelling, "entity_id": str(module.id)},
+                },
+                format="json",
+            )
+            assert revision.status_code == status.HTTP_200_OK, (spelling, revision.data)
+            assert revision.data["version_no"] == 2
+            assert FileLink.objects.filter(file_id=file_id).count() == 1
+
     def test_a_deliverable_link_is_refused_on_both_doors(
         self, session_client, project, stored_objects
     ):
@@ -660,3 +689,69 @@ class TestLinksAcrossPointerMovement:
         assert refused.data["code"] == "object_unavailable"
         assert "url" not in refused.data
         assert object_exists(independent_store, object_key) is False
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+class TestMilestoneKeySegment:
+    """F-6 / DEC-001: the segment is frozen at creation, for every link type."""
+
+    def test_the_segment_is_the_module_id_and_survives_a_revision_and_an_activation(
+        self, session_client, project, stored_objects
+    ):
+        module = Module.objects.create(
+            name="Renamable module",
+            project=project,
+            workspace=project.workspace,
+            created_by_id=project.created_by_id,
+        )
+        file_id, first_key = upload_file(
+            session_client, project, link=("milestone", module.id), stored_objects=stored_objects
+        )
+        assert f"/{module.id}/" in first_key
+        assert "Renamable" not in first_key and "renamable" not in first_key
+
+        revision = session_client.post(
+            f"{detail_url(project.workspace.slug, project.id, file_id)}versions/",
+            {"file_name": "Report.pdf", "size_bytes": len(PDF_BYTES), "mime_type": "application/pdf"},
+            format="json",
+        )
+        assert revision.status_code == status.HTTP_200_OK, revision.data
+        upload = revision.data["upload"]
+        assert requests.put(upload["url"], data=PDF_BYTES, headers=upload["headers"], timeout=30).status_code == 200
+        completed = session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 2, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+        assert completed.status_code == status.HTTP_200_OK, completed.data
+        second_key = FileVersion.objects.get(file_id=file_id, version_no=2).object_key
+        stored_objects.append(second_key)
+
+        # Same segment in both keys: the revision inherits it, it does not recompute it.
+        assert f"/{module.id}/" in second_key
+
+        def up_to_segment(key):
+            """Everything up to and including the entityRef segment."""
+            return key.split(f"/{module.id}/")[0] + f"/{module.id}/"
+
+        assert up_to_segment(first_key) == up_to_segment(second_key)
+
+        activated = session_client.post(activate_url(project.workspace.slug, project.id, file_id, 2))
+        assert activated.status_code == status.HTTP_200_OK, activated.data
+        assert FileObject.objects.get(pk=file_id).object_key == second_key
+
+        # The row keeps the human name for search; the key keeps the id (a rename
+        # must not move a key).
+        link = FileLink.objects.get(file_id=file_id)
+        assert link.entity_identifier == "Renamable module"
+        Module.objects.filter(pk=module.pk).update(name="Renamed later")
+        third = session_client.post(
+            f"{detail_url(project.workspace.slug, project.id, file_id)}versions/",
+            {"file_name": "Report.pdf", "size_bytes": len(PDF_BYTES), "mime_type": "application/pdf"},
+            format="json",
+        )
+        assert third.status_code == status.HTTP_200_OK, third.data
+        planned = FileVersion.objects.get(file_id=file_id, version_no=3).object_key
+        assert f"/{module.id}/" in planned
+        assert "Renamed" not in planned and "renamed" not in planned

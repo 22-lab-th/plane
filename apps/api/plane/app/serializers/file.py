@@ -14,10 +14,10 @@ from django.conf import settings
 from rest_framework import serializers
 
 # Module imports
-from plane.app.views.file.base import delivery_refusal
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage.errors import ProjectFileError
-from plane.utils.file_storage.links import SUPPORTED_ENTITY_TYPES
+from plane.utils.file_storage.links import SUPPORTED_ENTITY_TYPES, normalize_entity_type
+from plane.utils.file_storage.verdicts import delivery_refusal
 from plane.utils.magic_bytes import normalize_mime_type
 from plane.utils.object_key import OBJECT_KEY_CATEGORIES
 
@@ -80,7 +80,7 @@ class FileUploadInitiateSerializer(serializers.Serializer):
         if value in (None, {}):
             return None
 
-        entity_type = value.get("entity_type")
+        entity_type = normalize_entity_type(value.get("entity_type"))
         entity_id = value.get("entity_id")
 
         if entity_type not in SUPPORTED_ENTITY_TYPES:
