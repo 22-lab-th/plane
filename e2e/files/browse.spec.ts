@@ -520,7 +520,9 @@ async function apiWrite(
     data,
     headers: { "X-CSRFToken": csrfToken, Origin: WEB_URL, Referer: `${WEB_URL}/` },
   });
-  expect(response.status(), `${method.toUpperCase()} ${url}`).toBe(200);
+  // A create answers 201, a patch 200: what matters is that the write succeeded.
+  expect(response.status(), `${method.toUpperCase()} ${url}`).toBeGreaterThanOrEqual(200);
+  expect(response.status(), `${method.toUpperCase()} ${url}`).toBeLessThan(300);
   return response;
 }
 
