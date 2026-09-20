@@ -164,6 +164,51 @@ export interface IProjectFileDetail {
   activity: IProjectFileActivity[];
 }
 
+/** The file summary the upload endpoints return (ARCH-001 §4.1). */
+export interface IProjectFileUploadFile {
+  id: string;
+  name_display: string;
+  category: string;
+  object_key: string;
+  folder_id: string | null;
+}
+
+/** The presigned PUT the initiate endpoint signs for the exact key and content type. */
+export interface IProjectFilePresignedUpload {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  expires_at: string;
+}
+
+/** `POST files/initiate-upload/` response: the pending file, its version and the URL. */
+export interface IProjectFileUploadInitiation {
+  file: IProjectFileUploadFile;
+  version_no: number;
+  upload: IProjectFilePresignedUpload;
+}
+
+/** The version summary finalize returns; the checksum stays advisory. */
+export interface IProjectFileUploadVersion {
+  version_no: number;
+  size_bytes: number;
+  checksum_sha256: string | null;
+  etag: string | null;
+  status: string;
+}
+
+/**
+ * `POST files/{id}/complete-upload/` response. `activation_required` is true when
+ * the stored version is not active — a revision never becomes active without the
+ * user confirming it (AD-18, AC-43).
+ */
+export interface IProjectFileUploadCompletion {
+  file: IProjectFileUploadFile;
+  version: IProjectFileUploadVersion;
+  activation_required: boolean;
+  storage_usage: { project_used_bytes: number; limit_bytes: number };
+}
+
 /** The list query parameters the endpoint documents. */
 export type TProjectFileListQuery = {
   /** Omit for the project root; a folder UUID browses that folder. */
@@ -236,4 +281,118 @@ export class ProjectFileService extends APIService {
         throw error?.response?.data ?? error;
       });
   }
+
+  /**
+   * Reserve quota and get the presigned PUT for one file (R-UPL-1).
+   *
+   * `file_id` is what makes an upload a **retry** (the same file row, a fresh
+   * version) or a replacement (the id of the file the user chose to replace):
+   * without it the server creates a new file row and suffixes the display name
+   * when that name is taken in the folder.
+   */
+  async initiateFileUpload(
+    workspaceSlug: string,
+    projectId: string,
+    payload: {
+      file_name: string;
+      size_bytes: number;
+      mime_type: string;
+      folder_id?: string | null;
+      file_id?: string | null;
+      checksum_sha256?: string | null;
+    }
+  ): Promise<IProjectFileUploadInitiation> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/initiate-upload/`, payload)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Verify the stored object and settle the attempt (R-UPL-3, R-UPL-4). */
+  async completeFileUpload(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    payload: { version_no: number; size_bytes: number; checksum_sha256?: string | null }
+  ): Promise<IProjectFileUploadCompletion> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/complete-upload/`, payload)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * End a pending attempt and release its reservation exactly once.
+   *
+   * Called when an upload is cancelled or fails: a live reservation makes the next
+   * presign for the same file a 409 `upload_in_progress`, so a retry has to give
+   * the attempt up before it can ask for a new URL (ARCH-001 §2.4).
+   */
+  async abortFileUpload(workspaceSlug: string, projectId: string, fileId: string, versionNo: number): Promise<void> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/abort-upload/`, {
+      version_no: versionNo,
+    })
+      .then(() => undefined)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
 }
+
+// The `on*` assignments below are the idiomatic form for XHR progress and are the whole
+// point of using XMLHttpRequest here; `addEventListener` reads no better for a handler this
+// object never re-binds.
+/* oxlint-disable prefer-add-event-listener */
+
+/** A running presigned PUT, with the abort a cancel needs. */
+export type TPresignedUploadHandle = {
+  /** Resolves when the store accepted the bytes; rejects `{cancelled: true}` when aborted. */
+  promise: Promise<void>;
+  abort: () => void;
+};
+
+/**
+ * Send the bytes straight to the object store with `XMLHttpRequest`.
+ *
+ * Not the axios client: this request goes to the storage host, not the API, and it
+ * carries no session. It is an `XMLHttpRequest` because per-file progress and
+ * cancellation are the two things the row needs and `fetch` reports neither. The
+ * `Content-Type` the URL was signed for is set from the presigned headers, so the
+ * signature matches whatever the browser would otherwise infer from the file.
+ */
+export const putPresignedFile = (params: {
+  url: string;
+  file: File;
+  headers?: Record<string, string>;
+  onProgress?: (percentage: number) => void;
+}): TPresignedUploadHandle => {
+  const { url, file, headers, onProgress } = params;
+  const request = new XMLHttpRequest();
+
+  const promise = new Promise<void>((resolve, reject) => {
+    request.open("PUT", url, true);
+    Object.entries(headers ?? {}).forEach(([key, value]) => request.setRequestHeader(key, value));
+
+    request.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable || event.total <= 0) return;
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(100);
+        resolve();
+        return;
+      }
+      reject({ error: `The storage service refused this upload (${request.status}).` });
+    };
+    request.onerror = () => reject({ error: "The upload could not reach the storage service." });
+    request.ontimeout = () => reject({ error: "The upload timed out." });
+    request.onabort = () => reject({ cancelled: true });
+
+    request.send(file);
+  });
+
+  return { promise, abort: () => request.abort() };
+};
