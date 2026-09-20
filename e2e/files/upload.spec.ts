@@ -656,7 +656,7 @@ test.describe("Project files upload (T-113)", () => {
     const variant = textFixture(base.name, 700, "collision-2");
     await page.getByTestId("files-upload-input").setInputFiles([variant]);
     await expect(modal, "a name already in the folder opens the collision decision").toBeVisible();
-    await expect(modal).toContainText(`"${base.name}" already exists in Project root`);
+    await expect(modal).toContainText(`“${base.name}” already exists in Project root`);
     const keepBothLabel = (await page.getByTestId("files-upload-collision-keep-both").textContent()) ?? "";
     const predictedName = /Keep both \((.+?)\)Adds/.exec(keepBothLabel)?.[1] ?? "";
     expect(keepBothLabel, "the modal offers the three ways out").toContain("Replace as new version");
@@ -789,7 +789,9 @@ test.describe("Project files upload (T-113)", () => {
     await expect(page.getByTestId(`files-upload-progress-${row.id}`), "the row shows its own progress").toBeVisible();
     await expect(page.getByTestId(`files-upload-progress-${row.id}`)).toHaveAttribute("aria-valuenow", /^\d+$/);
     await expect(page.getByTestId(`files-upload-message-${row.id}`)).toContainText("Uploading to Project root");
-    expect(held, "the attempt reached the store").toBe(1);
+    // The row says "uploading" from the moment the attempt starts, which is before the
+    // presign has answered: the PUT has to be waited for rather than assumed.
+    await expect.poll(() => held, { message: "the attempt must reach the store" }).toBe(1);
 
     await page.getByTestId(`files-upload-cancel-${row.id}`).click();
 
@@ -807,11 +809,13 @@ test.describe("Project files upload (T-113)", () => {
     expect(orphan.status, "the interrupted PUT left no object behind").toBe(404);
 
     // The bytes were never stored, so the usage is where it was — and the listing is
-    // whatever the API answers, which is what the DOM is compared against. A file row whose
+    // whatever the API answers, which is what the DOM is compared against. The live fetch
+    // is triggered by a quick view rather than by a navigation: navigating would rebuild the
+    // view and throw away the cancelled row this test is about to retry. A file row whose
     // only version failed is still listed by the API until T-118's sweep removes it
     // (DEFECT-001, another ticket's); the row it answers with is recorded here, not
     // asserted away.
-    const afterCancel = await liveSnapshot(page, "cancel-after");
+    const afterCancel = await snapshotList(page, "cancel-after", () => page.getByTestId("files-quick-recent").click());
     await expectViewMatchesBody(page, afterCancel.live, "cancel-after");
     expect(afterCancel.live.storage.project_used_bytes, "a cancelled attempt stores no bytes and holds none").toBe(
       before.live.storage.project_used_bytes
@@ -878,7 +882,9 @@ test.describe("Project files upload (T-113)", () => {
     const orphan = await objectHead(page, firstAttempt.file.object_key);
     expect(orphan.status, "the failed PUT stored nothing").toBe(404);
 
-    const afterFailure = await liveSnapshot(page, "retry-failed");
+    // A quick view refetches the listing without rebuilding the view, so the failed row is
+    // still there to retry after this snapshot.
+    const afterFailure = await snapshotList(page, "retry-failed", () => page.getByTestId("files-quick-recent").click());
     await expectViewMatchesBody(page, afterFailure.live, "retry-failed");
     expect(afterFailure.live.storage.project_used_bytes, "a failed attempt counts as unused storage").toBe(
       before.live.storage.project_used_bytes
