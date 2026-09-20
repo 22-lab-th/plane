@@ -10,7 +10,7 @@ import { Button } from "@plane/propel/button";
 import { CloseIcon } from "@plane/propel/icons";
 import { IconButton } from "@plane/propel/icon-button";
 import { EPillSize, EPillVariant, Pill } from "@plane/propel/pill";
-import { cn, calculateTimeAgo, renderFormattedDate } from "@plane/utils";
+import { cn, calculateTimeAgo, renderFormattedDate, renderFormattedTime } from "@plane/utils";
 // services
 import type { IProjectFileAccessUrl, IProjectFileDetail, IProjectFileVersion } from "@/services/project-file.service";
 import { ProjectFileService } from "@/services/project-file.service";
@@ -52,8 +52,23 @@ const PANEL_CLASS_NAME = "rounded-md border border-subtle bg-layer-1 px-2 py-1";
 /** Used only when the refusal carries no message of its own. */
 const FALLBACK_PREVIEW_FAILURE = "We could not prepare a preview for this file.";
 
-/** A version timestamp reads better with the time than with the day alone. */
-const formatVersionTimestamp = (iso: string): string => renderFormattedDate(iso, "MMM dd, yyyy, HH:mm") ?? iso;
+/**
+ * A version's timestamp: the calendar date the rest of the panel prints, and the
+ * version's real local time beside it.
+ *
+ * The two parts have to come from two helpers. `renderFormattedDate` reads a string's
+ * first ten characters - the API's own UTC calendar date, the same day `Created` and
+ * `Updated` print - so the date never shifts a day under the reader's timezone, but it
+ * cannot carry a clock: passing `HH:mm` in the format still yields midnight, because its
+ * `getDate` rebuilds the string as local midnight (DEFECT-004). `renderFormattedTime`
+ * formats the instant itself, which is exactly the half that was missing. Composing the
+ * pair is what the rest of the app does (`comments/card/display.tsx`).
+ */
+const formatVersionTimestamp = (iso: string): string => {
+  const date = renderFormattedDate(iso) ?? iso;
+  const time = renderFormattedTime(iso);
+  return time ? `${date}, ${time}` : date;
+};
 
 /** The status colour a version's chip carries; text always says which status it is. */
 const versionStatusVariant = (version: IProjectFileVersion): EPillVariant => {
