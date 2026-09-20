@@ -32,11 +32,15 @@ class FileUploadError(APIException):
         if status_code is not None:
             self.status_code = status_code
         self.details = details
-        # ``detail`` is what DRF serialises into the response body, and DRF's
-        # ``APIException.__init__`` overwrites it, so the whole payload goes in
-        # there rather than being assigned beforehand.
-        super().__init__(detail={"error": message, "code": self.code, **details})
+        self.body = {"error": message, "code": self.code, **details}
+        # ``detail`` is what DRF serialises into the response body, and
+        # ``APIException.__init__`` overwrites it, so the payload goes in there
+        # and is then replaced with the original mapping: DRF wraps every scalar
+        # in an ``ErrorDetail`` string, which would turn byte counts into
+        # strings in the quota responses.
+        super().__init__(detail=dict(self.body))
+        self.detail = self.body
 
     def as_response(self):
-        """Return the JSON body for this failure."""
-        return self.detail
+        """Return the JSON body for this failure, with its original value types."""
+        return dict(self.body)

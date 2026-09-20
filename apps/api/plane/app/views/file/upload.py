@@ -27,7 +27,7 @@ from uuid import uuid4
 # Django imports
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
 # Third party imports
@@ -218,6 +218,39 @@ def _next_version_no(file_object):
     return (latest or 0) + 1
 
 
+def _refuse_live_attempt(file_object):
+    """Refuse a new upload while this file still holds a live reservation.
+
+    A presigned URL is refused while the version it belongs to is ``uploading``
+    with a reservation that has not expired, so one member cannot park several
+    reservations for the same file up to the ceiling (ARCH-001 §2.4). The row is
+    locked so a committed attempt cannot be passed twice.
+    """
+    live_attempts = list(
+        FileVersion.objects.select_for_update()
+        .filter(
+            file_id=file_object.id,
+            status=FileVersion.Status.UPLOADING,
+            reservation_released_at__isnull=True,
+        )
+        .filter(Q(reservation_expires_at__isnull=True) | Q(reservation_expires_at__gt=timezone.now()))
+        .order_by("created_at")[:1]
+    )
+    if not live_attempts:
+        return
+
+    attempt = live_attempts[0]
+    raise FileUploadError(
+        "Another upload for this file is already in progress.",
+        code="upload_in_progress",
+        status_code=status.HTTP_409_CONFLICT,
+        version_no=attempt.version_no,
+        reservation_expires_at=attempt.reservation_expires_at.isoformat()
+        if attempt.reservation_expires_at
+        else None,
+    )
+
+
 def _stored_name(file_name):
     """Return the name stored for display: the uploader's name without path tricks."""
     return sanitize_filename(file_name) or file_name
@@ -293,7 +326,7 @@ def _completion_payload(file_object, version, usage):
     return {
         "file": _file_payload(file_object),
         "version": _version_payload(version),
-        "activation_required": version.version_no > 1,
+        "activation_required": not version.is_active,
         "storage_usage": _usage_payload(usage),
     }
 
@@ -379,6 +412,9 @@ class FileUploadInitiateEndpoint(BaseAPIView):
             # commit is what makes the presigned URL valid (ARCH-001 §2.8 item 1).
             with transaction.atomic():
                 quota_row, usage_row = quota.lock_usage_rows(project)
+
+                if file_object is not None:
+                    _refuse_live_attempt(file_object)
 
                 if file_object is None:
                     file_object = FileObject.objects.create(
@@ -519,6 +555,7 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 version,
                 code="object_missing",
                 message="The uploaded object does not exist in storage.",
+                declared_size=payload["size_bytes"],
             )
 
         observed_size = int(metadata.get("ContentLength") or 0)
@@ -534,6 +571,7 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 message="The uploaded object does not match the declared size.",
                 observed_size=observed_size,
                 declared_size=payload["size_bytes"],
+                etag=metadata.get("ETag"),
             )
 
         reserved_bytes = version.reserved_bytes or 0
@@ -551,6 +589,7 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 reason="exceeds_reservation",
                 observed_size=observed_size,
                 reserved_bytes=reserved_bytes,
+                etag=metadata.get("ETag"),
             )
 
         if observed_type != normalize_mime_type(version.mime_type):
@@ -563,6 +602,8 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 message="The stored object's content type does not match the declaration.",
                 observed_mime_type=observed_type,
                 declared_mime_type=version.mime_type,
+                observed_size=observed_size,
+                etag=metadata.get("ETag"),
             )
 
         head = storage.get_object_head_bytes(version.object_key, HEAD_BYTES)
@@ -588,9 +629,17 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 message="The object's content does not match the declared content type.",
                 reason="magic_bytes_mismatch",
                 observed_mime_type=observed_type,
+                observed_size=observed_size,
+                etag=metadata.get("ETag"),
+                # The bytes that contradicted the declaration are the evidence.
+                observed_head_hex=head[:32].hex(),
             )
 
-        activate = version.version_no == 1
+        # Activate on a verified upload when the file has no active version yet,
+        # which covers a genuine v1 and a retry of a first upload that failed;
+        # only a revision that would displace a live version is stored
+        # superseded and asks the client to confirm (AD-18).
+        activate = not FileVersion.objects.filter(file_id=file_object.id, is_active=True).exists()
         evidence = {
             "mime_type": observed_type,
             # The finalize declaration may repeat the advisory checksum; it is

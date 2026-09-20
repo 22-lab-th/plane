@@ -12,6 +12,7 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import IntegrityError, models
 from django.db.models import Q
+from django.utils import timezone
 
 # Module imports
 from plane.db.mixins import AuditModel
@@ -196,30 +197,42 @@ class Project(BaseModel):
 
         The key is ``{identifier}-{slugified name}`` (DEC-001), truncated so the
         whole key fits the column and uniquified inside the workspace with
-        ``-2``, ``-3``, … on collision. It is written exactly once: a project
-        that already has a key returns it unchanged, so renaming the project or
-        editing its identifier never re-keys an object that already exists.
+        ``-2``, ``-3``, … on collision. It is written exactly once: the write is
+        a conditional update on ``storage_key IS NULL``, so a caller holding a
+        stale instance can never overwrite a key another writer already
+        committed — it simply adopts the stored value instead.
         """
         if self.storage_key:
             return self.storage_key
 
         taken = set(
             Project.all_objects.filter(workspace_id=self.workspace_id)
+            .exclude(pk=self.pk)
             .exclude(storage_key__isnull=True)
             .values_list("storage_key", flat=True)
         )
+        candidate = build_project_storage_key(self.identifier, self.name, taken)
 
-        for _ in range(3):
-            self.storage_key = build_project_storage_key(self.identifier, self.name, taken)
-            try:
-                self.save(update_fields=["storage_key", "updated_at"])
-                return self.storage_key
-            except IntegrityError:
-                # A concurrent first use claimed this key between the read and
-                # the write; derive the next prefix and try again.
-                taken.add(self.storage_key)
+        try:
+            assigned = Project.all_objects.filter(pk=self.pk, storage_key__isnull=True).update(
+                storage_key=candidate,
+                updated_at=timezone.now(),
+            )
+        except IntegrityError:
+            # A simultaneous first use derived the same candidate: the winner's
+            # key is the stored one, and this call never writes over it.
+            assigned = 0
 
-        raise IntegrityError(f"could not assign a unique storage key to project {self.id}")
+        if assigned:
+            self.storage_key = candidate
+            return candidate
+
+        stored = Project.all_objects.filter(pk=self.pk).values_list("storage_key", flat=True).first()
+        if not stored:
+            raise IntegrityError(f"could not assign a storage key to project {self.id}")
+
+        self.storage_key = stored
+        return stored
 
 
 class ProjectBaseModel(BaseModel):

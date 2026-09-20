@@ -400,12 +400,116 @@ class TestFinalizeVerification:
         assert complete.status_code == status.HTTP_400_BAD_REQUEST
         assert complete.data["code"] == "mime_mismatch"
         assert complete.data["reason"] == "magic_bytes_mismatch"
+        # The evidence that contradicted the declaration is recorded, not only
+        # the failure code.
+        assert complete.data["observed_head_hex"] == zip_bytes[:32].hex()
+        assert complete.data["etag"]
 
         version = FileVersion.objects.get(file_id=file_id, version_no=1)
         assert version.status == FileVersion.Status.FAILED
         assert version.magic_bytes_checked_at is None
         assert version.is_active is False
+        assert version.reserved_bytes == 0
+        assert version.storage_metadata["failure"]["observed_head_hex"] == zip_bytes[:32].hex()
+        assert version.storage_metadata["failure"]["etag"] == complete.data["etag"]
         assert FileObject.objects.get(id=file_id).current_version_no == 0
+
+    def test_no_second_attempt_while_a_reservation_is_live(self, session_client, project, stored_objects):
+        """ARCH-001 §2.4: presigning is refused while a live reservation exists."""
+        first = _initiate(session_client, project)
+        file_id = first.data["file"]["id"]
+        stored_objects.append(first.data["file"]["object_key"])
+
+        second = _initiate(session_client, project, file_id=file_id)
+
+        assert second.status_code == status.HTTP_409_CONFLICT
+        assert second.data["code"] == "upload_in_progress"
+        assert second.data["version_no"] == 1
+        assert FileVersion.objects.filter(file_id=file_id).count() == 1
+        assert ProjectStorageUsage.objects.get(project=project).reserved_bytes == len(PDF_BYTES)
+
+        # The refused call must not have disturbed the live attempt.
+        _put(first.data["upload"]["url"], first.data["upload"]["headers"])
+        complete = session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 1, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+
+        assert complete.status_code == status.HTTP_200_OK, complete.data
+        assert complete.data["version"]["status"] == FileVersion.Status.ACTIVE
+        assert ProjectStorageUsage.objects.get(project=project).reserved_bytes == 0
+
+    def test_retry_of_a_failed_first_upload_activates(self, session_client, project, stored_objects):
+        """A retried first upload must be able to complete and become active."""
+        first = _initiate(session_client, project)
+        file_id = first.data["file"]["id"]
+
+        failed = session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 1, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+        assert failed.data["code"] == "object_missing"
+
+        retry = _initiate(session_client, project, file_id=file_id)
+        assert retry.status_code == status.HTTP_200_OK, retry.data
+        assert retry.data["version_no"] == 2
+
+        retry_key = FileVersion.objects.get(file_id=file_id, version_no=2).object_key
+        stored_objects.append(retry_key)
+        _put(retry.data["upload"]["url"], retry.data["upload"]["headers"])
+
+        complete = session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 2, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+
+        assert complete.status_code == status.HTTP_200_OK, complete.data
+        assert complete.data["activation_required"] is False
+        assert complete.data["version"]["status"] == FileVersion.Status.ACTIVE
+
+        file_object = FileObject.objects.get(id=file_id)
+        assert file_object.status == FileObject.Status.ACTIVE
+        assert file_object.current_version_no == 2
+        assert FileVersion.objects.get(file_id=file_id, version_no=2).is_active is True
+        assert ProjectStorageUsage.objects.get(project=project).used_bytes == len(PDF_BYTES)
+
+    def test_a_revision_of_an_active_file_waits_for_activation(self, session_client, project, stored_objects):
+        """A revision must not displace the active version without confirmation."""
+        first = _initiate(session_client, project)
+        file_id = first.data["file"]["id"]
+        first_key = first.data["file"]["object_key"]
+        stored_objects.append(first_key)
+        _put(first.data["upload"]["url"], first.data["upload"]["headers"])
+        session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 1, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+
+        revision = _initiate(session_client, project, file_id=file_id)
+        assert revision.data["version_no"] == 2
+        stored_objects.append(FileVersion.objects.get(file_id=file_id, version_no=2).object_key)
+        _put(revision.data["upload"]["url"], revision.data["upload"]["headers"])
+
+        complete = session_client.post(
+            complete_url(project.workspace.slug, project.id, file_id),
+            {"version_no": 2, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+
+        assert complete.status_code == status.HTTP_200_OK, complete.data
+        assert complete.data["activation_required"] is True
+        assert complete.data["version"]["status"] == FileVersion.Status.SUPERSEDED
+        assert FileVersion.objects.get(file_id=file_id, version_no=1).is_active is True
+        assert FileVersion.objects.get(file_id=file_id, version_no=2).is_active is False
+
+        file_object = FileObject.objects.get(id=file_id)
+        assert file_object.current_version_no == 1
+        assert file_object.object_key == first_key
+        assert ProjectStorageUsage.objects.get(project=project).used_bytes == 2 * len(PDF_BYTES)
 
     def test_repeated_finalize_after_failure_replays_the_stored_failure(
         self, session_client, project, stored_objects
@@ -590,6 +694,9 @@ class TestQuotaEnforcement:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data["code"] == "quota_exceeded"
         assert response.data["level"] == "workspace"
+        # Byte counts stay numbers, not strings.
+        assert response.data["limit_bytes"] == 100
+        assert isinstance(response.data["projected_bytes"], int)
         assert FileObject.objects.filter(project=project).count() == 0
         assert FileVersion.objects.filter(project=project).count() == 0
         assert FileAccessLog.objects.filter(

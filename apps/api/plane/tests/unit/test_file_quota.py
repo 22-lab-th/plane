@@ -146,6 +146,8 @@ class TestSettle:
         assert version.is_active is True
         assert version.size_bytes == 2000
         assert version.reservation_released_at is not None
+        # A settled row must not keep holding counter space (T-118 carry-forward).
+        assert version.reserved_bytes == 0
         assert quota_row.used_bytes == 2000
         assert quota_row.reserved_bytes == 0
         assert usage_row.used_bytes == 2000
@@ -221,8 +223,32 @@ class TestRelease:
         assert quota.release(quota_row, usage_row, version) is True
         assert quota.release(quota_row, usage_row, version) is False
 
+        version.refresh_from_db()
         quota_row.refresh_from_db()
         usage_row.refresh_from_db()
+        assert version.reserved_bytes == 0
+        assert quota_row.reserved_bytes == 0
+        assert usage_row.reserved_bytes == 0
+
+    @pytest.mark.django_db
+    def test_release_cannot_drive_the_counters_negative(self, project):
+        """A release whose counters were already spent clamps at zero."""
+        quota_row, usage_row = quota.lock_usage_rows(project)
+        version = make_version(project)
+        quota.reserve(quota_row, usage_row, version, requested_bytes=512, expires_at=timezone.now())
+
+        # Simulate a lost update: the counters no longer hold this reservation.
+        StorageQuota.objects.filter(pk=quota_row.pk).update(reserved_bytes=0)
+        ProjectStorageUsage.objects.filter(pk=usage_row.pk).update(reserved_bytes=0)
+        quota_row.reserved_bytes = 0
+        usage_row.reserved_bytes = 0
+
+        assert quota.release(quota_row, usage_row, version) is True
+
+        version.refresh_from_db()
+        quota_row.refresh_from_db()
+        usage_row.refresh_from_db()
+        assert version.reserved_bytes == 0
         assert quota_row.reserved_bytes == 0
         assert usage_row.reserved_bytes == 0
 

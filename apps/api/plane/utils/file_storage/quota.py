@@ -144,6 +144,9 @@ def settle(quota, usage, version, *, observed_bytes, activate, fields=None):
         is_active=activate,
         size_bytes=observed_bytes,
         reservation_released_at=settled_at,
+        # The reservation is consumed: the row must never keep holding counter
+        # space after it was settled (T-118 carry-forward).
+        reserved_bytes=0,
         **(fields or {}),
     )
     if not settled:
@@ -174,36 +177,46 @@ def release(quota, usage, version):
 
     Returns ``True`` only for the caller whose guarded statement matched a row;
     every later caller (abort retry, failed finalize, cleanup sweep) matches zero
-    rows and leaves the counters untouched (ARCH-001 §2.8 item 3).
+    rows and leaves the counters untouched (ARCH-001 §2.8 item 3). The guarded
+    statement also zeroes the row's ``reserved_bytes``, so a released row never
+    keeps holding counter space, and the counters are clamped at zero so a
+    release can never drive them negative.
     """
     if version.reservation_released_at is not None:
         return False
 
     released = FileVersion.objects.filter(pk=version.pk, reservation_released_at__isnull=True).update(
-        reservation_released_at=timezone.now()
+        reservation_released_at=timezone.now(),
+        reserved_bytes=0,
     )
     if not released:
         return False
 
+    # Read the amount this row held before the guarded statement zeroed it.
     reserved_bytes = version.reserved_bytes or 0
     if reserved_bytes:
-        _bump_counters(quota, usage, reserved_bytes=-reserved_bytes)
+        _bump_counters(quota, usage, reserved_bytes=-reserved_bytes, clamp_reserved=True)
 
+    version.reserved_bytes = 0
+    version.reservation_released_at = timezone.now()
     return True
 
 
-def _bump_counters(quota, usage, *, used_bytes=0, reserved_bytes=0):
+def _bump_counters(quota, usage, *, used_bytes=0, reserved_bytes=0, clamp_reserved=False):
     """Apply counter deltas to both rows and keep the in-memory copies in sync."""
-    StorageQuota.objects.filter(pk=quota.pk).update(
-        used_bytes=quota.used_bytes + used_bytes,
-        reserved_bytes=quota.reserved_bytes + reserved_bytes,
-    )
-    ProjectStorageUsage.objects.filter(pk=usage.pk).update(
-        used_bytes=usage.used_bytes + used_bytes,
-        reserved_bytes=usage.reserved_bytes + reserved_bytes,
-    )
+    quota_used = quota.used_bytes + used_bytes
+    usage_used = usage.used_bytes + used_bytes
+    quota_reserved = quota.reserved_bytes + reserved_bytes
+    usage_reserved = usage.reserved_bytes + reserved_bytes
 
-    quota.used_bytes += used_bytes
-    quota.reserved_bytes += reserved_bytes
-    usage.used_bytes += used_bytes
-    usage.reserved_bytes += reserved_bytes
+    if clamp_reserved:
+        quota_reserved = max(quota_reserved, 0)
+        usage_reserved = max(usage_reserved, 0)
+
+    StorageQuota.objects.filter(pk=quota.pk).update(used_bytes=quota_used, reserved_bytes=quota_reserved)
+    ProjectStorageUsage.objects.filter(pk=usage.pk).update(used_bytes=usage_used, reserved_bytes=usage_reserved)
+
+    quota.used_bytes = quota_used
+    quota.reserved_bytes = quota_reserved
+    usage.used_bytes = usage_used
+    usage.reserved_bytes = usage_reserved
