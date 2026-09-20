@@ -148,6 +148,50 @@ class FileObject(ProjectBaseModel):
     def __str__(self):
         return f"{self.name_display} <{self.project_id}>"
 
+    def reconcile_pointer(self, *, save=True):
+        """Point ``object_key``/``current_version_no`` at what this file still has.
+
+        The pair names the file's current version (ARCH-001 §2.3), and a purge or a
+        repair can leave it naming a version whose object was just deleted. It is
+        reconciled to the active version when there is one, otherwise to the newest
+        version whose object is still stored, with ``current_version_no = 0`` - the
+        value a file with no active version carries, which is what tells a client
+        not to read the pair as naming the active version. ``object_key`` cannot be
+        nulled (the column is unique and not null), so it keeps naming the best key
+        the file has rather than a deleted one.
+
+        Called by the purge's failure path and the activation path's repair, so a
+        partially purged file never displays data its objects no longer back.
+        """
+        active = FileVersion.objects.filter(file_id=self.id, is_active=True).first()
+        if active is not None:
+            self.current_version_no = active.version_no
+            self.object_key = active.object_key
+            self.size_bytes = active.size_bytes
+            self.mime_type = active.mime_type
+        else:
+            self.current_version_no = 0
+            stored = (
+                FileVersion.objects.filter(file_id=self.id, object_deleted_at__isnull=True)
+                .order_by("-version_no")
+                .first()
+            )
+            if stored is not None:
+                self.object_key = stored.object_key
+                self.size_bytes = stored.size_bytes
+                self.mime_type = stored.mime_type
+
+        if save:
+            FileObject.all_objects.filter(pk=self.pk).update(
+                current_version_no=self.current_version_no,
+                object_key=self.object_key,
+                size_bytes=self.size_bytes,
+                mime_type=self.mime_type,
+                updated_at=timezone.now(),
+            )
+
+        return active
+
 
 class FileVersion(ProjectBaseModel):
     """One stored object of a file. This table names every object in the bucket."""

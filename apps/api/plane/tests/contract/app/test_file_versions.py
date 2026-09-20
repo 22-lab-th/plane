@@ -67,6 +67,10 @@ def download_url(slug, project_id, file_id):
     return f"{detail_url(slug, project_id, file_id)}download/"
 
 
+def restore_url(slug, project_id, file_id):
+    return f"{detail_url(slug, project_id, file_id)}restore/"
+
+
 def upload_url(slug, project_id):
     return f"{files_url(slug, project_id)}initiate-upload/"
 
@@ -515,6 +519,18 @@ class TestPurgedVersionsStayUnselectable:
         assert remaining.status == FileVersion.Status.PURGE_FAILED
         assert S3Storage().get_object_metadata(first_key) is not None  # its deletion failed
 
+        # The file row's display pointer follows the versions (F-2): it must not keep
+        # naming the version whose object this run removed.
+        reconciled = FileObject.all_objects.get(pk=file_id)
+        assert reconciled.current_version_no == 0, "no version is active, so the pointer says so"
+        assert reconciled.object_key == first_key, "the pointer names the object that is still stored"
+        detail = session_client.get(
+            detail_url(project.workspace.slug, project.id, file_id), {"trashed": True}
+        )
+        assert detail.status_code == status.HTTP_200_OK
+        assert detail.data["file"]["current_version_no"] == 0
+        assert detail.data["file"]["object_key"] == first_key
+
         # Nothing can be activated onto this row (the shared write verdict).
         assert (
             session_client.post(activate_url(project.workspace.slug, project.id, file_id, 1)).status_code
@@ -576,3 +592,126 @@ class TestPurgedVersionsStayUnselectable:
         assert FileVersion.objects.filter(file_id=file_id).count() == 1
         assert usage_bytes(project) == after_failure_usage
         assert FileVersion.objects.filter(file_id=file_id, status=FileVersion.Status.PURGED, is_active=True).count() == 0
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+class TestRestoreActivationSeam:
+    """F-1: a partially purged file that survives its rows must be repairable."""
+
+    def _partially_purged(self, session_client, project, stored_objects, *, active_version_no):
+        """Trash + partially purge, with the *active* version's object removed first.
+
+        Returns the file id: the active version's object is gone (status purged,
+        pointer cleared), the other version's status is purge_failed with its object
+        still in the store.
+        """
+        file_id = make_versioned_file(session_client, project, stored_objects=stored_objects, revisions=1)
+        assert (
+            session_client.post(activate_url(project.workspace.slug, project.id, file_id, active_version_no))
+            .status_code
+            == status.HTTP_200_OK
+        )
+        other_version_no = 1 if active_version_no == 2 else 2
+        surviving_key = version_key(file_id, other_version_no)
+        assert session_client.delete(detail_url(project.workspace.slug, project.id, file_id)).status_code == 204
+
+        real_delete = S3Storage.delete_files
+        failure = EndpointConnectionError(endpoint_url="http://test-minio:9000")
+
+        def flaky_delete(self, object_names):
+            if surviving_key in object_names:
+                raise failure
+            return real_delete(self, object_names)
+
+        with mock.patch.object(S3Storage, "delete_files", flaky_delete):
+            failed = session_client.delete(
+                f"{detail_url(project.workspace.slug, project.id, file_id)}purge/?confirm=true"
+            )
+        assert failed.status_code == status.HTTP_502_BAD_GATEWAY
+        assert FileObject.all_objects.get(pk=file_id).status == FileObject.Status.PURGE_FAILED
+
+        return file_id
+
+    def test_a_restored_file_repairs_a_row_whose_object_is_still_stored(
+        self, session_client, project, stored_objects
+    ):
+        file_id = self._partially_purged(session_client, project, stored_objects, active_version_no=2)
+        surviving = FileVersion.objects.get(file_id=file_id, version_no=1)
+        assert surviving.status == FileVersion.Status.PURGE_FAILED
+        assert S3Storage().get_object_metadata(surviving.object_key) is not None
+
+        # The row survives the purge and T-107 lets it be restored; before the fix
+        # this file could then never be served or repaired through the API.
+        restored = session_client.post(restore_url(project.workspace.slug, project.id, file_id))
+        assert restored.status_code == status.HTTP_200_OK, restored.data
+        refused = session_client.get(download_url(project.workspace.slug, project.id, file_id))
+        assert refused.status_code == status.HTTP_409_CONFLICT
+        assert refused.data["code"] == "object_unavailable"
+
+        response = session_client.post(activate_url(project.workspace.slug, project.id, file_id, 1))
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.data["repaired"] is True
+        assert response.data["activated"] is True
+        repaired = FileVersion.objects.get(file_id=file_id, version_no=1)
+        assert repaired.status == FileVersion.Status.ACTIVE
+        assert repaired.is_active is True
+        assert repaired.object_deleted_at is None
+        assert FileVersion.objects.filter(file_id=file_id, is_active=True).count() == 1
+        file_object = FileObject.objects.get(pk=file_id)
+        assert file_object.current_version_no == 1
+        assert file_object.object_key == repaired.object_key
+        assert FileVersion.objects.get(file_id=file_id, version_no=2).status == FileVersion.Status.PURGED
+
+        signed = session_client.get(download_url(project.workspace.slug, project.id, file_id))
+        assert signed.status_code == status.HTTP_200_OK, signed.data
+        assert signed.data["version_no"] == 1
+        assert signed.data["url"].split("?")[0].endswith(repaired.object_key)
+        audit = FileAccessLog.objects.filter(
+            file_id=file_id, action=FileAccessLog.Action.VERSION_ACTIVATED
+        ).latest("created_at")
+        assert audit.metadata["repaired"] is True
+
+    def test_a_repeat_activation_still_checks_the_store_and_reports_a_repair(
+        self, session_client, project, stored_objects
+    ):
+        """F-1 (ii): is_active alone must not short-circuit into a success shape."""
+        file_id = self._partially_purged(session_client, project, stored_objects, active_version_no=2)
+        assert session_client.post(restore_url(project.workspace.slug, project.id, file_id)).status_code == 200
+
+        # The surviving version's row says purge_failed *and* it is not the active
+        # one, so activating it is a real swap with a repair in front of it.
+        first = session_client.post(activate_url(project.workspace.slug, project.id, file_id, 1))
+        assert first.status_code == status.HTTP_200_OK
+        assert first.data["repaired"] is True and first.data["activated"] is True
+
+        # Now it is active with the object present: the repeat is a genuine no-op
+        # that still proves the object is there.
+        again = session_client.post(activate_url(project.workspace.slug, project.id, file_id, 1))
+        assert again.status_code == status.HTTP_200_OK
+        assert again.data["activated"] is False
+        assert again.data["repaired"] is False
+        assert FileAccessLog.objects.filter(
+            file_id=file_id, action=FileAccessLog.Action.VERSION_ACTIVATED
+        ).count() == 2  # the swap and the repair, not the no-op
+
+    def test_activating_a_version_whose_bytes_are_gone_clears_the_pointer(
+        self, session_client, project, stored_objects
+    ):
+        """F-1 (second shape): never leave is_active on a version with no bytes."""
+        file_id = make_versioned_file(session_client, project, stored_objects=stored_objects)
+        active_key = version_key(file_id, 1)
+        assert S3Storage().delete_files([active_key]) is True
+        stored_objects.remove(active_key)
+
+        response = session_client.post(activate_url(project.workspace.slug, project.id, file_id, 1))
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["code"] == "object_unavailable"
+        assert FileVersion.objects.filter(file_id=file_id, is_active=True).count() == 0
+        file_object = FileObject.objects.get(pk=file_id)
+        assert file_object.current_version_no == 0
+        assert session_client.get(
+            download_url(project.workspace.slug, project.id, file_id)
+        ).status_code == status.HTTP_409_CONFLICT

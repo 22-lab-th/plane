@@ -184,13 +184,20 @@ def purge_file(file_object, *, request=None, trigger="manual"):
 
 
 def _mark_purge_failed(file_object, version):
-    """Record a failed attempt on the rows the next run will retry."""
+    """Record a failed attempt on the rows the next run will retry.
+
+    The file row's display pointer is reconciled in the same step: the loop deletes
+    newest first, so the version that failed may well not be the one the pointer
+    names, and the pointer must never keep naming a version whose object this run
+    removed (the detail response exposes it).
+    """
     version.mark_status(FileVersion.Status.PURGE_FAILED)
     FileObject.all_objects.filter(pk=file_object.pk).update(
         status=FileObject.Status.PURGE_FAILED,
         updated_at=timezone.now(),
     )
     file_object.status = FileObject.Status.PURGE_FAILED
+    file_object.reconcile_pointer()
 
 
 def purge_expired_batch(*, limit=PURGE_BATCH_SIZE):

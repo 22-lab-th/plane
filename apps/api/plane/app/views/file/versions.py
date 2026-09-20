@@ -50,48 +50,90 @@ from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
 
 
-def _store_refusal(version, *, request=None):
-    """Return a refusal when the version's object is not in the store, or ``None``.
+#: Version statuses that only say a purge looked at this object. When an
+#: independent store check proves the object is still there, the row is what is
+#: wrong and the status can be repaired - a file can be left in this shape by a
+#: partial purge (one object removed, another deletion failed) or by a restore that
+#: brought the rows back.
+REPAIRABLE_VERSION_STATUSES = (FileVersion.Status.PURGED, FileVersion.Status.PURGE_FAILED)
+
+
+def _store_missing_refusal(version):
+    """The refusal for a version whose object is not in the store.
 
     A row says an object was stored; only the store says it is still there. A
     deletion performed outside this application (a console ``DELETE``, a lifecycle
     rule somebody added) leaves the row intact, and activating such a version would
     move the file's pointer onto bytes nobody can serve.
     """
-    if S3Storage(request=request).get_object_metadata(version.object_key) is None:
-        return ProjectFileError(
-            "This version's object is no longer in the store.",
-            code="object_unavailable",
-            status_code=status.HTTP_409_CONFLICT,
-            version_no=version.version_no,
-            version_status=version.status,
-        )
-
-    return None
+    return ProjectFileError(
+        "This version's object is no longer in the store.",
+        code="object_unavailable",
+        status_code=status.HTTP_409_CONFLICT,
+        version_no=version.version_no,
+        version_status=version.status,
+    )
 
 
 def activate_version(request, project, file_object, version):
     """Move the active pointer to ``version``; return the response payload.
 
-    The file row is locked for the whole swap so two concurrent activations cannot
-    interleave, and the previous active version is demoted before the new one is
-    promoted because the partial unique constraint allows exactly one ``is_active``
-    row per file (ARCH-001 §2.4).
+    The decision is made from two sources in a fixed order: the recorded predicate
+    (``delivery_refusal``) and then the object store, because a row can say an object
+    is stored while the store disagrees, and the other way round. A version whose
+    recorded status says a purge took its object while the store still holds it is
+    repaired rather than refused - that is the shape a partial purge or a restore
+    leaves behind, and without the repair such a file could never be served again.
+
+    The file row is locked for the swap itself, so two concurrent activations cannot
+    interleave; the previous active version is demoted before the new one is promoted
+    because the partial unique allows exactly one ``is_active`` row per file
+    (ARCH-001 §2.4). Both repairs happen in their own short transaction, because a
+    refusal raised from inside the swap's transaction would roll its own repair back.
     """
-    previous_version_no = None
+    version.refresh_from_db()
+    object_present = S3Storage(request=request).get_object_metadata(version.object_key) is not None
+    repaired = False
+
+    refusal = delivery_refusal(file_object, version)
+    if refusal is not None and version.status in REPAIRABLE_VERSION_STATUSES and object_present:
+        # The row says the purge took this object; the store says otherwise. The
+        # store wins: put the version back into the status its pointer deserves.
+        with transaction.atomic():
+            version.object_deleted_at = None
+            version.mark_status(
+                # The status has to agree with the pointer: a version that carries
+                # ``is_active`` is the active one, and one that does not is stored.
+                FileVersion.Status.ACTIVE if version.is_active else FileVersion.Status.SUPERSEDED,
+                save=False,
+            )
+            version.save(update_fields=["status", "status_changed_at", "object_deleted_at", "updated_at"])
+        repaired = True
+        refusal = None
+
+    if refusal is None and not object_present:
+        refusal = _store_missing_refusal(version)
+
+    if refusal is not None:
+        if version.is_active:
+            # Never leave the active pointer on a version whose bytes are gone: the
+            # file row is reconciled with it, so no response can claim a version that
+            # cannot be served. Its own transaction, so the repair commits and the
+            # refusal below still reaches the client.
+            with transaction.atomic():
+                version.is_active = False
+                version.save(update_fields=["is_active", "updated_at"])
+                file_object.reconcile_pointer()
+        raise refusal
+
     activated = False
+    previous_version_no = None
 
     with transaction.atomic():
         FileObject.objects.select_for_update().filter(pk=file_object.pk).get()
-
         version.refresh_from_db()
-        if not version.is_active:
-            refusal = delivery_refusal(file_object, version)
-            if refusal is None:
-                refusal = _store_refusal(version, request=request)
-            if refusal is not None:
-                raise refusal
 
+        if not version.is_active:
             previous = FileVersion.objects.select_for_update().filter(file=file_object, is_active=True).first()
             if previous is not None:
                 # Demote first: the partial unique allows exactly one ``is_active``
@@ -114,6 +156,12 @@ def activate_version(request, project, file_object, version):
             )
             activated = True
 
+        if activated or repaired:
+            if repaired and not activated:
+                # No swap happened, but the row's status changed, so the file row's
+                # pointer has to follow it.
+                file_object.reconcile_pointer()
+
             record_file_access(
                 request,
                 action=FileAccessLog.Action.VERSION_ACTIVATED,
@@ -125,6 +173,9 @@ def activate_version(request, project, file_object, version):
                     "previous_version_no": previous_version_no,
                     "size_bytes": version.size_bytes,
                     "mime_type": version.mime_type,
+                    # A repair is a status change with no pointer movement; the action
+                    # vocabulary has no separate value for it (ARCH-001 §2.6).
+                    "repaired": repaired,
                 },
             )
 
@@ -138,6 +189,9 @@ def activate_version(request, project, file_object, version):
         #: False for a repeated activation: the end state is the same and no second
         #: audit row or status change was written (R-NFR-6 idempotency).
         "activated": activated,
+        #: True when the request found a version whose recorded status said its object
+        #: was gone while the store still held it, and put the row back.
+        "repaired": repaired,
     }
 
 
