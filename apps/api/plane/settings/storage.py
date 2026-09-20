@@ -119,6 +119,42 @@ class S3Storage(S3Boto3Storage):
 
         return response
 
+    def generate_presigned_put(self, object_name, content_type, expires_in=None):
+        """Generate a presigned PUT URL for an exact object key and content type.
+
+        R2 does not implement presigned POST form uploads, so project-file
+        uploads use a presigned PUT instead. ``ContentType`` is part of the
+        signature, so a PUT that declares a different type is rejected by the
+        storage provider with ``403 SignatureDoesNotMatch``; the returned
+        ``headers`` are what the browser must send verbatim.
+        """
+        if expires_in is None:
+            # Upload URLs are short-lived: the TTL also expires the quota
+            # reservation that was taken for this attempt.
+            expires_in = self.signed_url_expiration
+
+        try:
+            response = self.presign_s3_client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": self.aws_storage_bucket_name,
+                    "Key": str(object_name),
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expires_in,
+                HttpMethod="PUT",
+            )
+        except ClientError as e:
+            log_exception(e)
+            return None
+
+        return {
+            "url": response,
+            "method": "PUT",
+            "headers": {"Content-Type": content_type},
+            "expires_in": expires_in,
+        }
+
     def _get_content_disposition(self, disposition, filename=None):
         """Helper method to generate Content-Disposition header value"""
         if filename is None:

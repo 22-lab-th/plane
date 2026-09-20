@@ -573,6 +573,39 @@ SCRIPT_CAPABLE_MIME_TYPES: frozenset[str] = frozenset(
     ]
 )
 
+# Project file storage (ARCH-001 §3). The legacy FileAsset paths keep using
+# FILE_SIZE_LIMIT above; these values apply to the project-scoped file store.
+PROJECT_FILE_MAX_BYTES = int(os.environ.get("PROJECT_FILE_MAX_BYTES", 26214400))
+PROJECT_FILE_UPLOAD_URL_TTL_SECONDS = int(os.environ.get("PROJECT_FILE_UPLOAD_URL_TTL_SECONDS", 900))
+PROJECT_FILE_QUOTA_TOLERANCE_BYTES = int(os.environ.get("PROJECT_FILE_QUOTA_TOLERANCE_BYTES", 1048576))
+PROJECT_FILE_WORKSPACE_QUOTA_BYTES = int(os.environ.get("PROJECT_FILE_WORKSPACE_QUOTA_BYTES", 26843545600))
+
+# Retention windows go through _retention_days so an unparseable or negative
+# value falls back to the documented default instead of deleting everything.
+PROJECT_FILE_TRASH_DAYS = _retention_days("PROJECT_FILE_TRASH_DAYS", 30)
+AUDIT_PII_RETENTION_DAYS = _retention_days("AUDIT_PII_RETENTION_DAYS", 90)
+
+# MIME allowlist for project files: every type the legacy attachment flow
+# accepts, plus the document, archive and structured-text types a project file
+# store needs. ATTACHMENT_MIME_TYPES itself is unchanged.
+PROJECT_FILE_MIME_TYPES = tuple(
+    dict.fromkeys(
+        ATTACHMENT_MIME_TYPES
+        + [
+            # Office document types (already accepted by the attachment flow)
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            # Archives and structured text
+            "application/zip",
+            "text/csv",
+            "text/markdown",
+            "application/json",
+            "text/plain",
+        ]
+    )
+)
+
 # Seed directory path
 SEED_DIR = os.path.join(BASE_DIR, "seeds")
 

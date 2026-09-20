@@ -17,6 +17,16 @@ from .draft import (
 )
 from .estimate import Estimate, EstimatePoint
 from .exporter import ExporterHistory
+from .file import (
+    FileAccessLog,
+    FileFolder,
+    FileJob,
+    FileLink,
+    FileObject,
+    FileVersion,
+    ProjectStorageUsage,
+    StorageQuota,
+)
 from .importer import Importer
 from .intake import Intake, IntakeIssue
 from .integration import (

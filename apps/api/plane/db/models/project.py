@@ -10,11 +10,12 @@ from enum import Enum
 # Django imports
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import IntegrityError, models
 from django.db.models import Q
 
 # Module imports
 from plane.db.mixins import AuditModel
+from plane.utils.object_key import MAX_PROJECT_STORAGE_KEY_CHARS, build_project_storage_key
 
 from .base import BaseModel
 
@@ -118,6 +119,12 @@ class Project(BaseModel):
     # external_id for imports
     external_source = models.CharField(max_length=255, null=True, blank=True)
     external_id = models.CharField(max_length=255, blank=True, null=True)
+    # Immutable, human-readable project prefix used in project-file object keys
+    # (DEC-001). Assigned on first use and never regenerated, so an object's key
+    # survives a rename of the project.
+    storage_key = models.CharField(max_length=MAX_PROJECT_STORAGE_KEY_CHARS, null=True, blank=True, db_index=True)
+    # Per-project file retention period; null means "use the workspace default".
+    retention_days = models.PositiveIntegerField(null=True, blank=True)
 
     def __init__(self, *args, **kwargs):
         # Track if timezone is provided, if so, don't override it with the workspace timezone when saving
@@ -158,6 +165,14 @@ class Project(BaseModel):
                 condition=Q(deleted_at__isnull=True),
                 name="project_unique_name_workspace_when_deleted_at_null",
             ),
+            # Storage keys are the immutable project prefix of every object key,
+            # so two projects in one workspace may never share one — including a
+            # soft-deleted project, whose objects may still exist in the bucket.
+            models.UniqueConstraint(
+                fields=["workspace", "storage_key"],
+                condition=Q(storage_key__isnull=False),
+                name="project_unique_storage_key_workspace_when_not_null",
+            ),
         ]
         verbose_name = "Project"
         verbose_name_plural = "Projects"
@@ -175,6 +190,36 @@ class Project(BaseModel):
             self.timezone = workspace.timezone
 
         return super().save(*args, **kwargs)
+
+    def ensure_storage_key(self):
+        """Return this project's immutable storage key, assigning it on first use.
+
+        The key is ``{identifier}-{slugified name}`` (DEC-001), truncated so the
+        whole key fits the column and uniquified inside the workspace with
+        ``-2``, ``-3``, … on collision. It is written exactly once: a project
+        that already has a key returns it unchanged, so renaming the project or
+        editing its identifier never re-keys an object that already exists.
+        """
+        if self.storage_key:
+            return self.storage_key
+
+        taken = set(
+            Project.all_objects.filter(workspace_id=self.workspace_id)
+            .exclude(storage_key__isnull=True)
+            .values_list("storage_key", flat=True)
+        )
+
+        for _ in range(3):
+            self.storage_key = build_project_storage_key(self.identifier, self.name, taken)
+            try:
+                self.save(update_fields=["storage_key", "updated_at"])
+                return self.storage_key
+            except IntegrityError:
+                # A concurrent first use claimed this key between the read and
+                # the write; derive the next prefix and try again.
+                taken.add(self.storage_key)
+
+        raise IntegrityError(f"could not assign a unique storage key to project {self.id}")
 
 
 class ProjectBaseModel(BaseModel):
