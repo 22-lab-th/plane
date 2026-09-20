@@ -385,6 +385,9 @@ class TestActivityReadApi:
         future = caller_agent.get(activity_url(project.workspace.slug, project.id), {"created_from": tomorrow})
         assert future.data["page"]["total_results"] == 0
         today = timezone.now().date().isoformat()
+        # A bare date must mean the *whole* day: Django's parse_datetime accepts a
+        # bare date and returns midnight, which made created_to exclude the very day
+        # it named before this ticket (the T-103 bug the shared helper now pins).
         to_today = caller_agent.get(activity_url(project.workspace.slug, project.id), {"created_to": today})
         assert to_today.data["page"]["total_results"] == 4, f"created_to today: {to_today.data}"
 

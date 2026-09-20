@@ -16,6 +16,15 @@ window **and** still holding personal data", so a masked row is never selected a
 and no row is rewritten twice. The counts it returns are operational - the user-facing
 trail records user actions, not maintenance runs (the same reason the quota
 reconciliation's drift numbers stay out of it).
+
+**Known residual exposure, left deliberately untouched.** R-NFR-13 names exactly four
+columns, and this job masks exactly those. ``metadata`` is not among them, yet some rows
+carry a name inside it - a rename row stores ``previous_name``, and a link row stores
+the human ``entity_identifier`` - so that text survives the masking window even though
+the same information in ``file_name_snapshot`` does not. That inconsistency is a
+residual personal-data exposure inside the window, not an oversight: narrowing it is a
+change to the retention contract, so it belongs to a requirements revision (R-LEG-2 /
+R-NFR-13) rather than to this task. Until then this docstring is the record of it.
 """
 
 # Python imports
