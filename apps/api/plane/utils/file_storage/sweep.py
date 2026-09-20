@@ -120,9 +120,11 @@ def sweep_version(version, *, storage):
     matches zero rows here and reports False, so the single-fire guarantee holds
     across every actor (ARCH-001 §2.8 item 3, N-02c).
 
-    Taking the attempt over moves the row to ``failed`` in the same transaction that
-    marks the object deleted, so a later finalize cannot match the settle predicate
-    (``status='uploading'``) and cannot settle a row whose bytes are gone.
+    Taking the attempt over - the terminal ``failed`` status, the object-deleted
+    marker and the guarded release - is one database transaction, and it runs only
+    after the object is gone: a later finalize therefore cannot match the settle
+    predicate (``status='uploading'``) and cannot settle a row whose bytes were
+    removed.
     """
     try:
         deleted = storage.delete_files([version.object_key])
