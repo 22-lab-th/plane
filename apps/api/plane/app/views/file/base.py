@@ -24,13 +24,20 @@ what went wrong when the list showed a row that detail 404ed, or when
 ``can_download`` advertised a file every delivery endpoint refused.
 """
 
+# Python imports
+import uuid
+from datetime import datetime, time
+
 # Django imports
 from django.core.exceptions import ObjectDoesNotExist
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 
 # Module imports
 from plane.app.permissions import ROLE
 from plane.db.models import FileFolder, FileObject, FileVersion, Project, ProjectMember
 from plane.utils.file_storage.errors import ProjectFileError
+from plane.utils.global_paginator import PaginateCursor
 from plane.utils.file_storage.verdicts import GOOD_VERSION_STATUSES, delivery_refusal, is_on_default_surface
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.path_validator import sanitize_filename
@@ -135,6 +142,115 @@ def require_project_admin(request, project):
         )
 
     require_writable_project(project)
+
+
+#: Page sizes shared by every file listing, so a caller cannot ask for more.
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+def parse_int(raw, field, *, minimum=0):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        invalid_param(field, f"{field} must be a whole number.")
+
+    if value < minimum:
+        invalid_param(field, f"{field} must be at least {minimum}.")
+
+    return value
+
+
+    parsed = parse_datetime(value)
+    if parsed is None:
+        date_value = parse_date(value)
+        if date_value is None:
+            invalid_param(field, f"{field} must be an ISO date or datetime.")
+
+        parsed = datetime.combine(date_value, time.max if end_of_day else time.min)
+
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed)
+
+    return parsed
+
+
+def parse_uuid(raw, field):
+    try:
+        return uuid.UUID(str(raw))
+    except (TypeError, ValueError, AttributeError):
+        invalid_param(field, f"{field} must be a UUID.")
+
+
+def page_size(request):
+    raw = (request.GET.get("page_size") or "").strip()
+    if not raw:
+        return DEFAULT_PAGE_SIZE
+
+    return min(max(parse_int(raw, "page_size", minimum=1), 1), MAX_PAGE_SIZE)
+
+
+def cursor_token(request):
+    """Return a validated cursor string, clamping the page size it carries.
+
+    The cursor is client-supplied, so it is parsed and rebuilt rather than passed
+    through: an unparseable value is a 400 and a zero or oversized page size
+    cannot reach the paginator.
+    """
+    raw = (request.GET.get("cursor") or "").strip()
+    if not raw:
+        return str(PaginateCursor(page_size(request), 0, 0))
+
+    try:
+        parsed = PaginateCursor.from_string(raw)
+    except (ValueError, TypeError):
+        raise ProjectFileError(
+            "cursor is not a valid pagination cursor.",
+            code="invalid_request",
+            field="cursor",
+        )
+
+    return str(
+        PaginateCursor(
+            min(max(parsed.current_page_size, 1), MAX_PAGE_SIZE),
+            max(parsed.current_page, 0),
+            0,
+        )
+    )
+
+
+def invalid_param(field, message):
+    """Refuse a query parameter with the shared 400 and the field it named."""
+    raise ProjectFileError(message, code="invalid_request", field=field)
+
+
+def parse_time_bound(raw, field, *, end_of_day):
+    """Parse a date or datetime bound; a bare date covers the whole day.
+
+    ``end_of_day`` decides whether a bare date means 00:00:00 or 23:59:59.999999,
+    so ``created_to=2026-09-20`` includes that whole day. A naive value is made
+    aware in the project timezone before it reaches the query.
+    """
+    value = raw.strip()
+    if not value:
+        return None
+
+    # A bare date is handled first on purpose: Django's ``parse_datetime`` accepts
+    # "2026-09-20" (it leans on ``datetime.fromisoformat``) and returns midnight, so
+    # testing for a datetime first would quietly make every date-only bound mean
+    # 00:00 and ``created_to=2026-09-20`` would exclude the day it names.
+    bare_date = "T" not in value and " " not in value
+    parsed = None if bare_date else parse_datetime(value)
+    if parsed is None:
+        date_value = parse_date(value)
+        if date_value is None:
+            invalid_param(field, f"{field} must be an ISO date or datetime.")
+        parsed = datetime.combine(date_value, time.max if end_of_day else time.min)
+
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+
+    return parsed
 
 
 def parse_bool(raw, field):

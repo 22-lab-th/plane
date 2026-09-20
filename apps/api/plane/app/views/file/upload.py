@@ -362,7 +362,15 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
             project=project,
             file_name=display_name,
             file_id=file_object.id if file_object is not None else None,
-            metadata={"size_bytes": payload["size_bytes"], "level": exc.level},
+            metadata={
+                "size_bytes": payload["size_bytes"],
+                "level": exc.level,
+                # The attempt's own figures, so an operator can read the ceiling from
+                # the trail: never a usage reading, so nothing here can disagree with
+                # the version rows (T-110's carry-forward).
+                "limit_bytes": exc.limit_bytes,
+                "projected_bytes": exc.projected_bytes,
+            },
         )
         return Response(exc.as_response(), status=exc.status_code)
 

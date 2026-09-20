@@ -117,6 +117,7 @@ from .asset.v2 import (
     ProjectAssetDownloadEndpoint,
 )
 from .file import (
+    FileActivityEndpoint,
     FileCopyEndpoint,
     FilePurgeEndpoint,
     FileRestoreEndpoint,

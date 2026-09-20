@@ -356,6 +356,10 @@ class FileAccessLog(BaseModel):
         PURGED = "purged", "Purged"
         PERMISSION_DENIED = "permission_denied", "Permission denied"
         QUOTA_REJECTED = "quota_rejected", "Quota rejected"
+        FOLDER_CREATED = "folder_created", "Folder created"
+        FOLDER_RENAMED = "folder_renamed", "Folder renamed"
+        FOLDER_MOVED = "folder_moved", "Folder moved"
+        FOLDER_DELETED = "folder_deleted", "Folder deleted"
 
     workspace = models.ForeignKey("db.Workspace", on_delete=models.CASCADE, related_name="file_access_logs")
     #: Nullable and SET_NULL: the audit row outlives its project.

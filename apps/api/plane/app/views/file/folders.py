@@ -177,6 +177,17 @@ class FileFolderListEndpoint(BaseAPIView):
         try:
             with transaction.atomic():
                 folder.save(force_insert=True, created_by_id=request.user.id)
+                record_file_access(
+                    request,
+                    action=FileAccessLog.Action.FOLDER_CREATED,
+                    project=project,
+                    file_name=folder.name,
+                    metadata={
+                        "folder_id": str(folder.id),
+                        "parent_id": str(parent.id) if parent is not None else None,
+                        "depth": depth,
+                    },
+                )
         except IntegrityError as exc:
             raise folder_conflict(exc, name_normalized=folder.name_normalized)
 
@@ -201,6 +212,9 @@ class FileFolderDetailEndpoint(BaseAPIView):
         )
 
         try:
+            previous_name = folder.name
+            previous_parent_id = folder.parent_id
+
             with transaction.atomic():
                 if parent_moved:
                     if parent is not None and is_self_or_descendant(project, folder, parent.id):
@@ -234,6 +248,31 @@ class FileFolderDetailEndpoint(BaseAPIView):
                 folder.name = name
                 folder.name_normalized = normalize_name(name)
                 folder.save(update_fields=["parent", "depth", "name", "name_normalized", "updated_at"])
+
+                if folder.name != previous_name:
+                    record_file_access(
+                        request,
+                        action=FileAccessLog.Action.FOLDER_RENAMED,
+                        project=project,
+                        file_name=folder.name,
+                        metadata={
+                            "folder_id": str(folder.id),
+                            "previous_name": previous_name,
+                        },
+                    )
+
+                if folder.parent_id != previous_parent_id:
+                    record_file_access(
+                        request,
+                        action=FileAccessLog.Action.FOLDER_MOVED,
+                        project=project,
+                        file_name=folder.name,
+                        metadata={
+                            "folder_id": str(folder.id),
+                            "previous_parent_id": str(previous_parent_id) if previous_parent_id else None,
+                            "parent_id": str(folder.parent_id) if folder.parent_id else None,
+                        },
+                    )
         except IntegrityError as exc:
             raise folder_conflict(exc, name_normalized=folder.name_normalized)
 
@@ -289,6 +328,22 @@ class FileFolderDetailEndpoint(BaseAPIView):
                 )
 
             FileFolder.objects.filter(id__in=subtree).update(deleted_at=deleted_at, updated_at=deleted_at)
+
+            # One row for the folder itself, then one per file it trashed: the folder
+            # delete is one mutation with a per-file consequence, and both are part of
+            # the file platform's history.
+            record_file_access(
+                request,
+                action=FileAccessLog.Action.FOLDER_DELETED,
+                project=project,
+                file_name=folder.name,
+                metadata={
+                    "folder_id": str(folder.id),
+                    "parent_id": str(folder.parent_id) if folder.parent_id else None,
+                    "deleted_files": len(trashed_files),
+                    "deleted_folders": len(subtree),
+                },
+            )
 
             for file_object in trashed_files:
                 record_file_access(

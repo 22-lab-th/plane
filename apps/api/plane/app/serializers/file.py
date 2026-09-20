@@ -14,7 +14,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 # Module imports
-from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
+from plane.db.models import FileAccessLog, FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.links import SUPPORTED_ENTITY_TYPES, normalize_entity_type
 from plane.utils.file_storage.verdicts import delivery_refusal
@@ -226,6 +226,43 @@ class FileVersionSerializer(serializers.ModelSerializer):
         deletion made outside this application leaves no trace in the row.
         """
         return not obj.is_active and delivery_refusal(obj.file, obj) is None
+
+
+class FileAccessLogSerializer(serializers.ModelSerializer):
+    """One audit row as the activity surfaces return it (R-AUD-1, R-AUD-3).
+
+    The personal-data columns are reported as the row holds them: the masking task
+    (R-NFR-13) clears ``ip_address``, ``user_agent``, ``actor_display`` and
+    ``file_name_snapshot`` once they pass ``AUDIT_PII_RETENTION_DAYS``, and the actor
+    id, action, target and timestamps survive for the project's lifetime. ``metadata``
+    never carries a presigned URL (AD-15, R-AUD-2).
+    """
+
+    actor = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FileAccessLog
+        fields = [
+            "id",
+            "action",
+            "actor",
+            "actor_display",
+            "file_id",
+            "file_name_snapshot",
+            "version_no",
+            "ip_address",
+            "user_agent",
+            "metadata",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor(self, obj):
+        """The actor's id (which always survives) with the display snapshot."""
+        return {
+            "id": str(obj.actor_id) if obj.actor_id else None,
+            "display_name": obj.actor_display,
+        }
 
 
 class FileLinkSerializer(serializers.ModelSerializer):

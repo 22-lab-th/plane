@@ -19,7 +19,6 @@ from datetime import datetime, time
 from django.db.models import Count, Exists, IntegerField, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from django.utils.dateparse import parse_date, parse_datetime
 
 # Third party imports
 from rest_framework import status
@@ -28,6 +27,7 @@ from rest_framework.response import Response
 # Module imports
 from plane.app.permissions import ROLE, allow_permission
 from plane.app.serializers.file import (
+    FileAccessLogSerializer,
     FileFolderSerializer,
     FileLinkSerializer,
     FileObjectSerializer,
@@ -36,19 +36,27 @@ from plane.app.serializers.file import (
 from plane.app.views.base import BaseAPIView
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.app.views.file.base import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
     breadcrumbs,
     file_queryset,
     include_trashed,
+    cursor_token,
+    invalid_param,
+    page_size,
     parse_bool,
+    parse_int,
+    parse_time_bound,
+    parse_uuid,
     permissions_for,
     project_or_404,
     require_project_member,
     trashed_files,
 )
-from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
+from plane.db.models import FileAccessLog, FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.errors import ProjectFileError
-from plane.utils.global_paginator import PaginateCursor, paginate
+from plane.utils.global_paginator import paginate
 from plane.utils.magic_bytes import normalize_mime_type
 
 #: Sort keys the clients may ask for; every key ends with ``id`` so paging is
@@ -67,12 +75,6 @@ DEFAULT_ORDERING = "-created"
 
 #: The folder browsing anchor that means "the project root".
 ROOT_FOLDER = "root"
-
-DEFAULT_PAGE_SIZE = 50
-MAX_PAGE_SIZE = 200
-
-def _invalid(field, message):
-    raise ProjectFileError(message, code="invalid_request", field=field)
 
 
 def link_count_expression():
@@ -98,45 +100,6 @@ def link_count_expression():
     )
 
 
-def _parse_int(raw, field, *, minimum=0):
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        _invalid(field, f"{field} must be a whole number.")
-
-    if value < minimum:
-        _invalid(field, f"{field} must be at least {minimum}.")
-
-    return value
-
-
-def _parse_bound(raw, field, *, end_of_day):
-    """Parse a date or datetime bound; a bare date covers the whole day."""
-    value = raw.strip()
-    if not value:
-        return None
-
-    parsed = parse_datetime(value)
-    if parsed is None:
-        date_value = parse_date(value)
-        if date_value is None:
-            _invalid(field, f"{field} must be an ISO date or datetime.")
-
-        parsed = datetime.combine(date_value, time.max if end_of_day else time.min)
-
-    if timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed)
-
-    return parsed
-
-
-def _parse_uuid(raw, field):
-    try:
-        return uuid.UUID(str(raw))
-    except (TypeError, ValueError, AttributeError):
-        _invalid(field, f"{field} must be a UUID.")
-
-
 def parse_filters(request):
     """Validate the list query parameters into a filter description."""
     query = request.GET
@@ -160,7 +123,7 @@ def parse_filters(request):
 
     raw_folder = (query.get("folder_id") or "").strip()
     if raw_folder:
-        filters["folder"] = ROOT_FOLDER if raw_folder.lower() == ROOT_FOLDER else _parse_uuid(raw_folder, "folder_id")
+        filters["folder"] = ROOT_FOLDER if raw_folder.lower() == ROOT_FOLDER else parse_uuid(raw_folder, "folder_id")
 
     if raw_q := (query.get("q") or "").strip():
         filters["q"] = raw_q
@@ -178,24 +141,24 @@ def parse_filters(request):
             filters["uploader_text"] = raw_uploader
 
     if raw_from := query.get("created_from"):
-        filters["created_from"] = _parse_bound(raw_from, "created_from", end_of_day=False)
+        filters["created_from"] = parse_time_bound(raw_from, "created_from", end_of_day=False)
 
     if raw_to := query.get("created_to"):
-        filters["created_to"] = _parse_bound(raw_to, "created_to", end_of_day=True)
+        filters["created_to"] = parse_time_bound(raw_to, "created_to", end_of_day=True)
 
     if (raw_size_min := query.get("size_min")) is not None and raw_size_min != "":
-        filters["size_min"] = _parse_int(raw_size_min, "size_min")
+        filters["size_min"] = parse_int(raw_size_min, "size_min")
 
     if (raw_size_max := query.get("size_max")) is not None and raw_size_max != "":
-        filters["size_max"] = _parse_int(raw_size_max, "size_max")
+        filters["size_max"] = parse_int(raw_size_max, "size_max")
 
     if raw_entity_type := (query.get("entity_type") or "").strip():
         if raw_entity_type not in FileLink.EntityType.values:
-            _invalid("entity_type", "entity_type must be one of the supported entity types.")
+            invalid_param("entity_type", "entity_type must be one of the supported entity types.")
         filters["entity_type"] = raw_entity_type
 
     if raw_entity_id := (query.get("entity_id") or "").strip():
-        filters["entity_id"] = _parse_uuid(raw_entity_id, "entity_id")
+        filters["entity_id"] = parse_uuid(raw_entity_id, "entity_id")
 
     if query.get("pinned") is not None and query.get("pinned") != "":
         filters["pinned"] = parse_bool(query.get("pinned"), "pinned")
@@ -206,7 +169,7 @@ def parse_filters(request):
     ordering = (query.get("ordering") or "").strip()
     if ordering:
         if ordering not in ORDERINGS:
-            _invalid("ordering", f"ordering must be one of: {', '.join(sorted(ORDERINGS))}.")
+            invalid_param("ordering", f"ordering must be one of: {', '.join(sorted(ORDERINGS))}.")
         filters["ordering"] = ordering
 
     return filters
@@ -294,6 +257,20 @@ def _folders_for(project, folder):
     return FileFolder.objects.filter(project_id=project.id, parent_id=parent_id).order_by("name_normalized", "id")
 
 
+#: How many audit rows a file's own history carries in the detail payload. Bounded
+#: so a file with a long life cannot make the detail response unbounded; the full
+#: trail is the project activity endpoint (R-AUD-3).
+DETAIL_ACTIVITY_LIMIT = 20
+
+
+def activity_for_file(file_id, *, limit=DETAIL_ACTIVITY_LIMIT):
+    """The most recent audit rows for one file, newest first (R-AUD-3)."""
+    return FileAccessLogSerializer(
+        FileAccessLog.objects.filter(file_id=file_id).select_related("actor").order_by("-created_at", "-id")[:limit],
+        many=True,
+    ).data
+
+
 def storage_summary(project):
     """Return the storage block of the list response (ARCH-001 §4.1, §2.8).
 
@@ -315,43 +292,6 @@ def storage_summary(project):
         "file_count": FileObject.all_objects.filter(project_id=project.id).count(),
         "version_count": version_count,
     }
-
-
-def _page_size(request):
-    raw = (request.GET.get("page_size") or "").strip()
-    if not raw:
-        return DEFAULT_PAGE_SIZE
-
-    return min(max(_parse_int(raw, "page_size", minimum=1), 1), MAX_PAGE_SIZE)
-
-
-def _cursor(request):
-    """Return a validated cursor string, clamping the page size it carries.
-
-    The cursor is client-supplied, so it is parsed and rebuilt rather than passed
-    through: an unparseable value is a 400 and a zero or oversized page size
-    cannot reach the paginator.
-    """
-    raw = (request.GET.get("cursor") or "").strip()
-    if not raw:
-        return str(PaginateCursor(_page_size(request), 0, 0))
-
-    try:
-        parsed = PaginateCursor.from_string(raw)
-    except (ValueError, TypeError):
-        raise ProjectFileError(
-            "cursor is not a valid pagination cursor.",
-            code="invalid_request",
-            field="cursor",
-        )
-
-    return str(
-        PaginateCursor(
-            min(max(parsed.current_page_size, 1), MAX_PAGE_SIZE),
-            max(parsed.current_page, 0),
-            0,
-        )
-    )
 
 
 class FileListEndpoint(BaseAPIView):
@@ -388,7 +328,7 @@ class FileListEndpoint(BaseAPIView):
         page = paginate(
             queryset,
             queryset,
-            _cursor(request),
+            cursor_token(request),
             on_result=lambda rows: FileObjectSerializer(rows, many=True).data,
         )
 
@@ -492,6 +432,9 @@ class FileDetailEndpoint(BaseAPIView):
                 "links": FileLinkSerializer(links, many=True).data,
                 "link_count": file_object.link_count,
                 "permissions": permissions_for(request, project, file_object, version=version),
+                # The file's own audit history (R-AUD-3), the same rows the project
+                # activity endpoint filters by file_id - one store, two views.
+                "activity": activity_for_file(file_object.id),
             },
             status=status.HTTP_200_OK,
         )

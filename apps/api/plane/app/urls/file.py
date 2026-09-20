@@ -5,6 +5,7 @@
 from django.urls import path
 
 from plane.app.views import (
+    FileActivityEndpoint,
     FileCopyEndpoint,
     FileStorageEndpoint,
     FileLinkDetailEndpoint,
@@ -85,6 +86,13 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/purge/",
         FilePurgeEndpoint.as_view(),
         name="project-file-purge",
+    ),
+    # Audit trail (T-111). A literal segment, declared before the parameterised
+    # detail patterns.
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/activity/",
+        FileActivityEndpoint.as_view(),
+        name="project-file-activity",
     ),
     # Storage usage (T-110). A literal segment, so it is declared before the
     # parameterised detail patterns.
