@@ -432,8 +432,9 @@ function paramsFromAppUrl(page: Page): Record<string, string> {
   if (folder && folder !== "root") params.folder_id = folder;
   const q = app.get("q");
   if (q) params.q = q;
-  // The app always sends an ordering, defaulting to the listing's own default.
-  params.ordering = app.get("ordering") ?? "created";
+  // The app always sends an ordering; with none in the URL it sends its own default,
+  // which is the listing's "newest first" (the service's PROJECT_FILE_DEFAULT_ORDERING).
+  params.ordering = app.get("ordering") ?? "-created";
   const view = app.get("view");
   if (view === "pinned") params.pinned = "true";
   if (view === "trash") params.trashed = "true";
