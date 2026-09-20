@@ -33,6 +33,11 @@ UPLOAD_NAME = "smoke-audit.pdf"
 USER_AGENT = "audit-smoke/1.0"
 #: Anything that would leak the signed URL into the trail.
 FORBIDDEN = ("Signature=", "X-Amz-Signature", "test-minio", "http://", "https://")
+#: The raw object-key prefix. One row is *allowed* to carry keys - the purged row's
+#: ``object_keys``, which are the forensic record R-LEG-2 needs and are not
+#: credentials - so this token is scanned everywhere else: if a key starts appearing
+#: in another action's metadata, the smoke says so.
+RAW_KEY_TOKEN = "workspace/"
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +183,8 @@ class TestFileAuditSmoke:
             serialised = json.dumps(row)
             for forbidden in FORBIDDEN:
                 assert forbidden not in serialised, f"{row['action']}: {serialised}"
+            if row["action"] != "purged":
+                assert RAW_KEY_TOKEN not in serialised, f"unexpected keys in {row['action']}: {serialised}"
 
         # --- the filter, and the detail's own history
         renamed_rows = request(session, plane_server, "get", activity_path, token, params={"action": "renamed"})

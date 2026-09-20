@@ -42,8 +42,9 @@ from plane.utils.file_storage.verdicts import GOOD_VERSION_STATUSES, delivery_re
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.path_validator import sanitize_filename
 
-#: Version states whose object exists and was verified, so it can be served.
-GOOD_VERSION_STATUSES = (FileVersion.Status.ACTIVE, FileVersion.Status.SUPERSEDED)
+#: ``GOOD_VERSION_STATUSES`` is imported above from the verdicts module and re-exported
+#: here for the endpoints that already read this one; it must not be redefined, or a
+#: change to what counts as servable would silently miss base.py's readers.
 
 #: Guard against a folder cycle or a corrupted tree while walking breadcrumbs.
 MAX_BREADCRUMB_DEPTH = 64

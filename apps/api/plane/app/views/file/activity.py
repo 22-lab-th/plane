@@ -13,6 +13,15 @@ plain id and every purge path leaves ``file_access_logs`` alone (AD-08, AD-15).
 Who may read it: the project-wide trail is the audit *export* the RBAC table reserves
 for ADMIN, while a file's own history travels with that file (R-AUD-3) and is returned
 by the detail endpoint to anyone who may read the file.
+
+What is *not* recorded, said out loud: capacity events are audited (``quota_rejected``,
+and ``upload_failed`` for an attempt that ended badly), while a refusal that changes
+nothing - a 404, a duplicate link, a trashed file, a validation error - writes no row,
+because the trail records what happened to the file's bytes rather than what a client
+asked for and was told no. ``FileAccessLog.Action.PERMISSION_DENIED`` is consequently
+unwritten today: every denial on this surface is answered by the project RBAC before a
+row could name the file, so the value is reserved for the authorization layer that can
+see the file, and dropping it would cost a migration for a value the next layer needs.
 """
 
 # Python imports

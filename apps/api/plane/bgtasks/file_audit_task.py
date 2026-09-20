@@ -18,13 +18,19 @@ trail records user actions, not maintenance runs (the same reason the quota
 reconciliation's drift numbers stay out of it).
 
 **Known residual exposure, left deliberately untouched.** R-NFR-13 names exactly four
-columns, and this job masks exactly those. ``metadata`` is not among them, yet some rows
-carry a name inside it - a rename row stores ``previous_name``, and a link row stores
-the human ``entity_identifier`` - so that text survives the masking window even though
-the same information in ``file_name_snapshot`` does not. That inconsistency is a
-residual personal-data exposure inside the window, not an oversight: narrowing it is a
-change to the retention contract, so it belongs to a requirements revision (R-LEG-2 /
-R-NFR-13) rather than to this task. Until then this docstring is the record of it.
+columns, and this job masks exactly those. ``metadata`` is not among them, yet rows
+carry three things inside it that the four columns would otherwise have covered:
+
+* a rename row stores ``previous_name`` and a link row stores the human
+  ``entity_identifier`` - names, so this is a residual personal-data exposure inside the
+  window, and narrowing it is a change to the retention contract (a requirements
+  revision under R-LEG-2 / R-NFR-13), not a task-level decision;
+* a purged row stores ``object_keys``, and those are **kept on purpose**: a key alone
+  grants nothing (a URL is what would), and the keys are the forensic record R-LEG-2
+  needs to show that every version object of an erased file was covered. Replacing them
+  with a digest would destroy exactly the evidence the erasure claim rests on.
+
+Until a requirements revision says otherwise, this docstring is the record of all three.
 """
 
 # Python imports
