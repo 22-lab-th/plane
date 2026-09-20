@@ -122,7 +122,14 @@ def activate_version(request, project, file_object, version):
             # refusal below still reaches the client.
             with transaction.atomic():
                 version.is_active = False
-                version.save(update_fields=["is_active", "updated_at"])
+                version.mark_status(
+                    # The status has to agree with the pointer, exactly as in the
+                    # repair branch: this version no longer carries the file, so it
+                    # cannot claim to be the active one while the pointer is gone.
+                    FileVersion.Status.SUPERSEDED,
+                    save=False,
+                )
+                version.save(update_fields=["is_active", "status", "status_changed_at", "updated_at"])
                 file_object.reconcile_pointer()
         raise refusal
 

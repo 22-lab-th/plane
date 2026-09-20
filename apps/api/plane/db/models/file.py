@@ -154,10 +154,12 @@ class FileObject(ProjectBaseModel):
         **The contract these two columns hold** (ARCH-001 §2.3), which the quota
         recompute and the file UI both read:
 
-        * ``object_key`` always names a key that is actually stored - never a key
-          whose object a purge, a sweep or a repair removed. The column is unique
-          and not null, so it cannot be cleared; it is the key that is stored, and
-          it is not by itself a statement that the file can be served.
+        * ``object_key`` names a key **the recorded rows say is stored** - never one
+          this method watched a purge or a repair remove. Reconciling is a database
+          operation and never calls the store, so a deletion made outside this
+          application still leaves a key named here until a job that talks to the
+          store (the recheck) notices. The column is unique and not null, so it
+          cannot be cleared, and it says nothing about servability.
         * ``current_version_no == 0`` means **no version is active**. That is the
           signal that ``object_key`` names a stored key rather than the active
           version's, and it is the same value a file that has never been finalised

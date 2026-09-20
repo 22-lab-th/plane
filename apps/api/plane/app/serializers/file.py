@@ -223,6 +223,13 @@ class FileObjectSerializer(serializers.ModelSerializer):
     ``uploader`` is the file's **creator** — the person who started the file —
     which is what the list endpoint's ``uploader`` filter matches. A version's
     uploader is a separate field on the version payload.
+
+    ``current_version_no``/``object_key`` are a **display pointer**, not an
+    answer: they name what the recorded rows say the file currently holds, and a
+    deletion made outside this application still leaves a key named here until the
+    recheck job notices. Whether the file can actually be served is
+    ``permissions.can_download`` in the detail payload, and the delivery endpoints
+    are the ones that sign.
     """
 
     link_count = serializers.IntegerField(read_only=True)

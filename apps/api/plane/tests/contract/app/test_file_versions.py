@@ -710,6 +710,11 @@ class TestRestoreActivationSeam:
         assert response.status_code == status.HTTP_409_CONFLICT
         assert response.data["code"] == "object_unavailable"
         assert FileVersion.objects.filter(file_id=file_id, is_active=True).count() == 0
+        # The status must not contradict the pointer it just lost (F-4): a version
+        # with no bytes and no pointer is not the active version, and does not say it is.
+        stranded = FileVersion.objects.get(file_id=file_id, version_no=1)
+        assert stranded.status == FileVersion.Status.SUPERSEDED
+        assert stranded.is_active is False
         file_object = FileObject.objects.get(pk=file_id)
         assert file_object.current_version_no == 0
         assert session_client.get(
