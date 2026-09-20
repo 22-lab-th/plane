@@ -19,7 +19,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 // Playwright imports
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type CDPSession, type Page, type Route } from "@playwright/test";
 // harness
 import {
   APP_FILES_URL,
@@ -385,8 +385,12 @@ async function renderedUploadRows(page: Page): Promise<TRenderedUploadRow[]> {
 }
 
 /** The queue is empty once every attempt has settled and left it. */
-async function waitForQueueEmpty(page: Page, label: string): Promise<void> {
-  await expect(page.getByTestId("files-upload-rows"), `${label}: the queue must be empty`).toHaveCount(0);
+async function waitForQueueEmpty(
+  page: Page,
+  label: string,
+  options: { timeout?: number } = {}
+): Promise<void> {
+  await expect(page.getByTestId("files-upload-rows"), `${label}: the queue must be empty`).toHaveCount(0, options);
 }
 
 /** The one row the queue is showing for a file, or a failure naming what is on screen. */
@@ -410,11 +414,47 @@ async function uploadRowFor(page: Page, name: string): Promise<TRenderedUploadRo
 }
 
 /**
- * The lifecycle the queue painted for one file: it was uploading, it drew its own progress
- * bar, the bar reached 100%, and the attempt left the queue when it was stored. Nothing
- * here is derived from the file's own bytes — it is what the DOM showed, in order.
+ * The upload link the queue is observed over, in bytes per second.
+ *
+ * The per-file progress the ticket claims is painted by the real
+ * ``upload.onprogress`` events, and on a loopback link the whole body arrives in one
+ * burst: the only values the DOM then shows are the row's initial 0 and the 100 the
+ * ``finalizing`` transition sets (T-113 verification §2.1). Holding the link open is
+ * what makes the intermediate value `expectProgressThenCompletion` requires
+ * observable, and it is the same technique that hand verification used (CDP link
+ * throttling, §3.2).
  */
-function expectProgressThenCompletion(records: TQueueRecord[], name: string): void {
+const EVIDENCE_UPLOAD_BYTES_PER_SECOND = 1_500_000;
+
+/** A body at least this large cannot be written in one chunk over that link. */
+const PROGRESS_OBSERVABLE_MIN_BYTES = 1024 * 1024;
+
+/** Hold the page's upload link open (``-1`` restores it), so the PUTs paint progress. */
+async function setUploadThroughput(session: CDPSession, bytesPerSecond: number): Promise<void> {
+  await session.send("Network.emulateNetworkConditions", {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: bytesPerSecond,
+    connectionType: "cellular4g",
+  });
+}
+
+/**
+ * The lifecycle the queue painted for one file: it was uploading, it drew its own
+ * progress bar, its own progress values never went backwards, and the attempt left the
+ * queue when it was stored. Nothing here is derived from the file's own bytes - it is
+ * what the DOM showed, in order.
+ *
+ * The clause DEFECT-003 item 3 added is the intermediate step: a value strictly between
+ * the row's initial 0 and completion, painted while the PUT was still running. Without
+ * it the 100 half is satisfied by the `finalizing` transition - a row whose PUT never
+ * painted a single progress event would pass. It is required of the files whose body a
+ * throttled link can hold open; a body the browser writes in one chunk (the 4 KiB drop)
+ * has no intermediate value to observe, and demanding one would only make the run flaky.
+ */
+function expectProgressThenCompletion(records: TQueueRecord[], fixture: TFixture): void {
+  const { name, sizeBytes } = fixture;
   const rows = records.filter((record) => record.name === name);
   expect(rows.length, `${name}: the queue rendered this file`).toBeGreaterThan(0);
 
@@ -424,6 +464,28 @@ function expectProgressThenCompletion(records: TQueueRecord[], name: string): vo
     rows.some((record) => record.ariaNow !== ""),
     `${name}: the uploading row drew its own progress bar (aria-valuenow)`
   ).toBe(true);
+
+  const uploading = rows
+    .filter((record) => record.status === "uploading")
+    .map((record) => Number(record.progress));
+  expect(
+    uploading.every(Number.isFinite),
+    `${name}: every progress value is a number (${uploading.join(", ")})`
+  ).toBe(true);
+  expect(
+    uploading,
+    `${name}: the upload's own progress never goes backwards (${uploading.join(", ")})`
+  ).toEqual([...uploading].toSorted((a, b) => a - b));
+
+  if (sizeBytes >= PROGRESS_OBSERVABLE_MIN_BYTES) {
+    const incremental = uploading.filter((value) => value > 0 && value < 100);
+    expect(
+      incremental.length,
+      `${name}: the PUT painted an intermediate progress value below 100% before the finalize (saw ${uploading.join(
+        ", "
+      )})`
+    ).toBeGreaterThan(0);
+  }
 
   const steps = rows
     .filter((record) => record.status === "uploading" || record.status === "finalizing")
@@ -469,6 +531,12 @@ test.describe("Project files upload (T-113)", () => {
     const completions = captureUploads(page, "/complete-upload/");
     await recordUploadQueue(page);
 
+    // Hold the upload link open for the whole batch, so each PUT lasts long enough to
+    // paint incremental progress (the clause DEFECT-003 item 3 added). `page.request`
+    // is a separate context and is unaffected, so the object-store reads below stay fast.
+    const throttle = await page.context().newCDPSession(page);
+    await setUploadThroughput(throttle, EVIDENCE_UPLOAD_BYTES_PER_SECOND);
+
     // One picker selection carrying more than one file: each gets its own row, its own
     // presign, its own PUT and its own progress.
     await page.getByTestId("files-upload-input").setInputFiles(picked);
@@ -484,14 +552,20 @@ test.describe("Project files upload (T-113)", () => {
     await page.dispatchEvent(FILES_ROOT, "drop", { dataTransfer: transfer });
     await expect(page.getByTestId("files-upload-drop-overlay")).toBeHidden();
 
+    // The throttle makes this batch a two-figure number of seconds, past the default
+    // expectation timeout; the uploads are the work being asserted, so they get a budget.
+    const uploadBudget = { timeout: 120_000 };
     await expect
-      .poll(() => completions.length, { message: "every attempt must be finalized by the API" })
+      .poll(() => completions.length, { message: "every attempt must be finalized by the API", ...uploadBudget })
       .toBe(fixtures.length);
-    await waitForQueueEmpty(page, "upload");
+    await waitForQueueEmpty(page, "upload", uploadBudget);
+
+    await setUploadThroughput(throttle, -1);
+    await throttle.detach();
 
     // --- what the queue painted ---------------------------------------------
     const records = await uploadRecords(page);
-    for (const fixture of fixtures) expectProgressThenCompletion(records, fixture.name);
+    for (const fixture of fixtures) expectProgressThenCompletion(records, fixture);
 
     // --- what the API answered ----------------------------------------------
     expect(initiations.length, "one presign per file").toBe(fixtures.length);

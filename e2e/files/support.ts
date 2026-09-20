@@ -432,7 +432,10 @@ function paramsFromAppUrl(page: Page): Record<string, string> {
   const app = new URL(page.url()).searchParams;
   const params: Record<string, string> = {};
   const folder = app.get("folder");
-  if (folder && folder !== "root") params.folder_id = folder;
+  // The view always asks for one folder, the root included (`folder_id=root`): an app
+  // URL with no `folder` is the project root, not "every file in the project"
+  // (DEFECT-005). An absent `folder_id` is a different question, so it is never sent.
+  params.folder_id = folder && folder !== "root" ? folder : "root";
   const q = app.get("q");
   if (q) params.q = q;
   // The app always sends an ordering; with none in the URL it sends its own default,

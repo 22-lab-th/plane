@@ -518,6 +518,16 @@ export const restoredToRootCopy = "Restored to the project root — the original
 export const purgeConfirmCopy = (name: string): string => `Permanently delete ${name}? This cannot be undone.`;
 
 /**
+ * The folder anchor that means "the project root" (the API's ``folder_id=root``).
+ *
+ * It is not the same as omitting ``folder_id``: the endpoint reads an absent filter
+ * as "every file in the project, at any depth", so a file placed in a folder used to
+ * appear at the root as well as inside it (DEFECT-005). The tab always asks for one
+ * folder - the root is a folder like any other - so the two can never be confused.
+ */
+export const FILES_ROOT_FOLDER = "root";
+
+/**
  * What the URL asks the API for. The URL is the only place the browse state
  * lives, so this mapping is the single definition of what each folder, search
  * term, quick view and ordering means as a request.
@@ -528,8 +538,12 @@ export const buildListQuery = (state: {
   quickView: TFilesQuickView;
   ordering: TProjectFileOrdering;
 }): TProjectFileListQuery => {
-  const listQuery: TProjectFileListQuery = { ordering: state.ordering };
-  if (state.folderId) listQuery.folder_id = state.folderId;
+  const listQuery: TProjectFileListQuery = {
+    // The browse scope is always explicit; a `null` folder id is the root (EXP-001
+    // F-01 step 1: "the first page of folders and files for the project root").
+    folder_id: state.folderId ?? FILES_ROOT_FOLDER,
+    ordering: state.ordering,
+  };
   if (state.query) listQuery.q = state.query;
   if (state.quickView === "pinned") listQuery.pinned = true;
   if (state.quickView === "trash") listQuery.trashed = true;

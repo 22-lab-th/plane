@@ -248,7 +248,11 @@ export interface IProjectFileRestoreResult {
 
 /** The list query parameters the endpoint documents. */
 export type TProjectFileListQuery = {
-  /** Omit for the project root; a folder UUID browses that folder. */
+  /**
+   * The folder to browse: a folder UUID, or `"root"` for the project root's own
+   * files. An *absent* `folder_id` is not the root - the endpoint then returns every
+   * file in the project at any depth, which is why `buildListQuery` always sends one.
+   */
   folder_id?: string;
   q?: string;
   ordering?: TProjectFileOrdering;

@@ -73,6 +73,14 @@ test.describe("Project files tab (T-112)", () => {
       root.live.results.length,
       "the harness must seed more than one file so ordering and ArrowDown are observable"
     ).toBeGreaterThanOrEqual(2);
+    // DEFECT-005: the root view asks for the project root's own files. The harness
+    // seeds files into folders too, so a root request that omits `folder_id` - which
+    // the endpoint reads as "every file in the project, at any depth" - brings those
+    // folder files back with it and this fails.
+    expect(
+      root.live.results.filter((row) => row.folder_id !== null),
+      "the root listing carries only the files that live at the root"
+    ).toEqual([]);
 
     // Recent: the view's "last 30 days" window reaches the API as created_from.
     const recent = await snapshotList(page, "recent", () => page.getByTestId("files-quick-recent").click());
@@ -206,7 +214,10 @@ test.describe("Project files tab (T-112)", () => {
       page.getByTestId("files-search").fill(noMatchToken)
     );
     expect(new URL(noMatch.url).searchParams.get("q"), "the search reaches the API's q filter").toBe(noMatchToken);
-    expect(new URL(noMatch.url).searchParams.get("folder_id"), "the root request carries no folder").toBeNull();
+    expect(
+      new URL(noMatch.url).searchParams.get("folder_id"),
+      "the root request asks for the root folder explicitly, not for every folder"
+    ).toBe("root");
     expect(noMatch.live.results, "the API answers an empty page for this query").toEqual([]);
     expect(
       noMatch.live.folders.length,
@@ -239,7 +250,7 @@ test.describe("Project files tab (T-112)", () => {
       page.getByTestId("files-breadcrumb-root").click()
     );
     expect(backAtRootFromEmpty.live.breadcrumbs, "the root crumb walks out of the empty folder").toEqual([]);
-    expect(new URL(backAtRootFromEmpty.url).searchParams.get("folder_id")).toBeNull();
+    expect(new URL(backAtRootFromEmpty.url).searchParams.get("folder_id")).toBe("root");
     await expectViewMatchesBody(page, backAtRootFromEmpty.live, "crumb-root-from-empty");
 
     const outerFolder = withEmptyFolder.live.folders.find((folder) => folder.id !== emptyFolderId);
@@ -269,6 +280,17 @@ test.describe("Project files tab (T-112)", () => {
     ).toEqual([outerFolderId, innerFolderId]);
     await expectViewMatchesBody(page, innerView.live, "folder-inner");
 
+    // The two scopes are disjoint, which is the rest of DEFECT-005: a file that lives
+    // in a folder must not also be listed at the root (it used to be, because the root
+    // request carried no folder at all). Derived from this run's own responses, so no
+    // fixture name is written down here.
+    const insideFolders = new Set([...outerView.live.results, ...innerView.live.results].map((row) => row.id));
+    expect(insideFolders.size, "the folder views carry the seeded files, so this is not vacuous").toBeGreaterThan(0);
+    expect(
+      root.live.results.filter((row) => insideFolders.has(row.id)),
+      "a file inside a folder is not also listed at the root"
+    ).toEqual([]);
+
     const upOneLevel = await snapshotList(page, "crumb-outer", () =>
       page.getByTestId(`files-breadcrumb-${outerFolderId}`).click()
     );
@@ -280,7 +302,10 @@ test.describe("Project files tab (T-112)", () => {
 
     const backAtRoot = await snapshotList(page, "crumb-root", () => page.getByTestId("files-breadcrumb-root").click());
     expect(backAtRoot.live.breadcrumbs, "the root crumb walks all the way back").toEqual([]);
-    expect(new URL(backAtRoot.url).searchParams.get("folder_id"), "the root request carries no folder").toBeNull();
+    expect(
+      new URL(backAtRoot.url).searchParams.get("folder_id"),
+      "the root request asks for the root folder explicitly"
+    ).toBe("root");
     await expectViewMatchesBody(page, backAtRoot.live, "crumb-root");
     expect(new Set(backAtRoot.live.results.map((row) => row.id)), "the root list is unchanged").toEqual(
       new Set(root.live.results.map((row) => row.id))
