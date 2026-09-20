@@ -40,8 +40,8 @@ from rest_framework.response import Response
 
 # Module imports
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import project_or_404
-from plane.db.models import FileAccessLog, FileObject, FileVersion, ProjectMember
+from plane.app.views.file.base import project_or_404, require_project_member
+from plane.db.models import FileAccessLog, FileObject, FileVersion
 from plane.settings.storage import S3Storage
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
@@ -94,17 +94,6 @@ def signed_url_ttl(storage):
     configured = int(getattr(storage, "signed_url_expiration", 0) or 0)
     ttl = configured if configured > 0 else DEFAULT_SIGNED_URL_EXPIRATION
     return min(ttl, MAX_SIGNED_URL_EXPIRATION)
-
-
-def require_project_member(request, project):
-    """Refuse a non-member with the generic 404 rather than a 403.
-
-    A file-scoped endpoint must not confirm that a file exists to somebody who
-    cannot see the project, so the caller is answered exactly like a caller
-    asking for a file in a project it is not part of (AD-06).
-    """
-    if not ProjectMember.objects.filter(project_id=project.id, member=request.user, is_active=True).exists():
-        raise FileObject.DoesNotExist
 
 
 def resolve_version(file_object, version_no):

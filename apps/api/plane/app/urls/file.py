@@ -7,6 +7,8 @@ from django.urls import path
 from plane.app.views import (
     FileDetailEndpoint,
     FileDownloadEndpoint,
+    FileFolderDetailEndpoint,
+    FileFolderListEndpoint,
     FileListEndpoint,
     FilePreviewEndpoint,
     FileUploadAbortEndpoint,
@@ -20,6 +22,17 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/",
         FileListEndpoint.as_view(),
         name="project-files",
+    ),
+    # Folder tree (T-105)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/folders/",
+        FileFolderListEndpoint.as_view(),
+        name="project-file-folders",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/folders/<uuid:folder_id>/",
+        FileFolderDetailEndpoint.as_view(),
+        name="project-file-folder-detail",
     ),
     # Upload lifecycle (T-102). The literal segments stay ahead of the
     # parameterised detail pattern so the intent is obvious.

@@ -220,3 +220,21 @@ class FileObjectSerializer(serializers.ModelSerializer):
 
     def get_uploader(self, obj):
         return user_payload(obj.created_by)
+
+
+class FileFolderWriteSerializer(serializers.Serializer):
+    """`POST files/folders/` and `PATCH files/folders/{id}/` payload."""
+
+    name = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
+    parent_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    def validate_name(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError("name must not be empty.")
+        return name
+
+    def validate(self, attrs):
+        if self.partial is False and not attrs.get("name"):
+            raise serializers.ValidationError({"name": "name is required."})
+        return attrs

@@ -34,7 +34,7 @@ from plane.app.serializers.file import (
     FileVersionSerializer,
 )
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import project_or_404
+from plane.app.views.file.base import breadcrumbs, parse_bool, project_or_404
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion, ProjectMember
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.errors import ProjectFileError
@@ -61,10 +61,6 @@ ROOT_FOLDER = "root"
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
 
-#: Guard against a folder cycle while walking breadcrumbs (the model allows 32).
-MAX_BREADCRUMB_DEPTH = 64
-
-
 def _invalid(field, message):
     raise ProjectFileError(message, code="invalid_request", field=field)
 
@@ -90,15 +86,6 @@ def link_count_expression():
         Value(0),
         output_field=IntegerField(),
     )
-
-
-def _parse_bool(raw, field):
-    value = raw.strip().lower()
-    if value in ("true", "1", "yes"):
-        return True
-    if value in ("false", "0", "no"):
-        return False
-    _invalid(field, f"{field} must be true or false.")
 
 
 def _parse_int(raw, field, *, minimum=0):
@@ -201,10 +188,10 @@ def parse_filters(request):
         filters["entity_id"] = _parse_uuid(raw_entity_id, "entity_id")
 
     if query.get("pinned") is not None and query.get("pinned") != "":
-        filters["pinned"] = _parse_bool(query.get("pinned"), "pinned")
+        filters["pinned"] = parse_bool(query.get("pinned"), "pinned")
 
     if query.get("trashed") is not None and query.get("trashed") != "":
-        filters["trashed"] = _parse_bool(query.get("trashed"), "trashed")
+        filters["trashed"] = parse_bool(query.get("trashed"), "trashed")
 
     ordering = (query.get("ordering") or "").strip()
     if ordering:
@@ -220,8 +207,14 @@ def _files_queryset(project, slug, filters):
 
     Every filter is conjunctive and the trash view is opt-in: without
     ``trashed=true`` the trashed files are excluded (R-FIND-1).
+
+    Moving a file to trash sets both ``status='trashed'`` and ``deleted_at``
+    (R-FOLD-4), so the trash view reads through the all-objects manager to find
+    those rows again; the default view keeps the live manager and additionally
+    excludes the trashed status, so a trashed row is invisible either way.
     """
-    queryset = FileObject.objects.filter(project_id=project.id, workspace__slug=slug)
+    manager = FileObject.all_objects if filters["trashed"] else FileObject.objects
+    queryset = manager.filter(project_id=project.id, workspace__slug=slug)
 
     if filters["trashed"]:
         queryset = queryset.filter(status=FileObject.Status.TRASHED)
@@ -285,34 +278,6 @@ def _current_folder(project, filters):
     return FileFolder.objects.filter(id=filters["folder"], project_id=project.id).first()
 
 
-def _breadcrumbs(project, folder):
-    """Return the path from the project root down to ``folder``.
-
-    The whole folder tree is read in one query, so a deep folder costs the same
-    as a shallow one on this read path.
-    """
-    if folder is None:
-        return []
-
-    tree = {
-        row["id"]: row
-        for row in FileFolder.objects.filter(project_id=project.id).values("id", "name", "parent_id", "depth")
-    }
-
-    trail = []
-    current_id = folder.id
-    for _ in range(MAX_BREADCRUMB_DEPTH):
-        node = tree.get(current_id)
-        if node is None:
-            break
-        trail.append({"id": str(node["id"]), "name": node["name"], "depth": node["depth"]})
-        current_id = node["parent_id"]
-        if current_id is None:
-            break
-
-    return list(reversed(trail))
-
-
 def _folders_for(project, folder):
     """Return the child folders of the browsed folder, ordered by name."""
     parent_id = folder.id if folder is not None else None
@@ -325,7 +290,8 @@ def storage_summary(project):
 
     The counts include trashed files on purpose: what the bucket stores is what
     the counters and the counts report, and trashed files keep consuming quota
-    until they are purged (AD-09).
+    until they are purged (AD-09). That is also why the count reads through the
+    all-objects manager: trashing sets ``deleted_at`` as well as the status.
     """
     quota_row, usage_row = quota.get_usage_rows(project)
     version_count = FileVersion.objects.filter(file__project_id=project.id).count()
@@ -337,7 +303,7 @@ def storage_summary(project):
         # otherwise the workspace ceiling.
         "limit_bytes": usage_row.limit_bytes if usage_row.limit_bytes is not None else quota_row.limit_bytes,
         "warn_threshold_pct": quota_row.warn_threshold_pct,
-        "file_count": FileObject.objects.filter(project_id=project.id).count(),
+        "file_count": FileObject.all_objects.filter(project_id=project.id).count(),
         "version_count": version_count,
     }
 
@@ -442,7 +408,7 @@ class FileListEndpoint(BaseAPIView):
             {
                 "results": page["results"],
                 "folders": FileFolderSerializer(_folders_for(project, folder), many=True).data,
-                "breadcrumbs": _breadcrumbs(project, folder),
+                "breadcrumbs": breadcrumbs(project, folder),
                 "page": {
                     "next_cursor": page["next_cursor"],
                     "prev_cursor": page["prev_cursor"],

@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 from .download import FileDownloadEndpoint, FilePreviewEndpoint
+from .folders import FileFolderDetailEndpoint, FileFolderListEndpoint
 from .listing import FileDetailEndpoint, FileListEndpoint
 from .upload import (
     FileUploadAbortEndpoint,
