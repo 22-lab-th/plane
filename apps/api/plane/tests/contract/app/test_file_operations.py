@@ -335,6 +335,94 @@ class TestRenameAndMove:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_a_row_hidden_by_the_default_surface_cannot_be_changed(
+        self, session_client, project, stored_objects
+    ):
+        """F-2: the write door applies the same visibility verdict as the read paths.
+
+        A row whose ``deleted_at`` is set while its status is still ``active`` is
+        hidden from the listing and 404s on detail for a MEMBER, so neither client
+        may mutate it. An ADMIN may still *address* it on detail (the documented
+        widener for the trash surface), which is addressing, not serving: the file
+        stays undownloadable and unwritable for everyone.
+        """
+        member = add_member(project, email="hidden-member@example.com", role=15)
+        member_client = client_for(member)
+        file_object = make_file(project, name="Hidden.pdf", stored_objects=stored_objects)
+        FileObject.all_objects.filter(pk=file_object.pk).update(deleted_at=timezone.now())
+
+        url = detail_url(project.workspace.slug, project.id, file_object.id)
+        listing = session_client.get(list_url(project.workspace.slug, project.id))
+        assert str(file_object.id) not in [row["id"] for row in listing.data["results"]]
+        assert member_client.get(url).status_code == status.HTTP_404_NOT_FOUND
+
+        admin_view = session_client.get(url)
+        assert admin_view.status_code == status.HTTP_200_OK
+        assert admin_view.data["permissions"]["can_download"] is False
+
+        for client in (session_client, member_client):
+            rename = client.patch(url, {"name_display": "Nope.pdf"}, format="json")
+            pinned = client.patch(url, {"is_pinned": True}, format="json")
+            copy = client.post(copy_url(project.workspace.slug, project.id, file_object.id), {}, format="json")
+
+            for response in (rename, pinned, copy):
+                assert response.status_code == status.HTTP_404_NOT_FOUND
+                assert response.data == {"error": "The required object does not exist."}
+
+        file_object.refresh_from_db()
+        assert file_object.name_display == "Hidden.pdf"
+        assert file_object.is_pinned is False
+        # Trash-inclusive: the row is soft-deleted, so the default manager hides it.
+        assert FileObject.all_objects.filter(project=project).count() == 1
+
+    def test_a_patch_with_an_unsupported_field_is_refused(self, session_client, project, stored_objects):
+        """F-3: a field this endpoint does not implement is refused, not dropped."""
+        file_object = make_file(project, name="Strict.pdf", stored_objects=stored_objects)
+        target = make_folder(project, "Elsewhere")
+
+        response = session_client.patch(
+            detail_url(project.workspace.slug, project.id, file_object.id),
+            {"target_project_id": str(uuid.uuid4()), "folder_id": str(target.id)},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["code"] == "unsupported_field"
+        assert response.data["field"] == "target_project_id"
+        file_object.refresh_from_db()
+        # The supported field in the same payload is not applied either: the whole
+        # request is rejected rather than half-honoured.
+        assert file_object.folder_id is None
+        assert file_object.name_display == "Strict.pdf"
+
+    def test_a_patch_with_an_unknown_field_is_refused(self, session_client, project, stored_objects):
+        file_object = make_file(project, name="Strict2.pdf", stored_objects=stored_objects)
+
+        response = session_client.patch(
+            detail_url(project.workspace.slug, project.id, file_object.id),
+            {"name": "typo.pdf"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["code"] == "unsupported_field"
+        assert response.data["field"] == "name"
+        file_object.refresh_from_db()
+        assert file_object.name_display == "Strict2.pdf"
+
+    def test_a_copy_with_an_unknown_field_is_refused(self, session_client, project, stored_objects):
+        source = make_file(project, name="Strict3.pdf", stored_objects=stored_objects)
+
+        response = session_client.post(
+            copy_url(project.workspace.slug, project.id, source.id), {"name": "typo.pdf"}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["code"] == "unsupported_field"
+        assert response.data["field"] == "name"
+        assert FileObject.objects.filter(project=project).count() == 1
+        assert object_exists(source.object_key)
+
     def test_an_unknown_file_is_not_found(self, session_client, project):
         response = session_client.patch(
             detail_url(project.workspace.slug, project.id, uuid.uuid4()), {"name_display": "Nope.pdf"}, format="json"
@@ -549,6 +637,24 @@ class TestCopy:
         source.refresh_from_db()
         assert FileLink.objects.filter(file=source).count() == 1
         assert source.folder_id is None
+        assert object_exists(source.object_key)
+
+    def test_copy_of_a_superseded_only_file_is_refused(self, session_client, project, stored_objects):
+        """F-1: with no active version there is nothing a copy could be a copy of."""
+        source = make_file(
+            project,
+            name="SupersededOnly.pdf",
+            stored_objects=stored_objects,
+            version_status=FileVersion.Status.SUPERSEDED,
+            is_active=False,
+        )
+
+        response = session_client.post(copy_url(project.workspace.slug, project.id, source.id), {}, format="json")
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["code"] == "object_unavailable"
+        assert response.data["version_status"] is None
+        assert FileObject.objects.filter(project=project).count() == 1
         assert object_exists(source.object_key)
 
     def test_copy_of_a_file_without_a_stored_version_is_refused(self, session_client, project, stored_objects):

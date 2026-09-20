@@ -46,6 +46,7 @@ from plane.app.views.base import BaseAPIView
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.app.views.file.base import (
     GOOD_VERSION_STATUSES,
+    file_for_write,
     available_display_name,
     folder_or_400,
     project_or_404,
@@ -59,25 +60,6 @@ from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.object_key import build_object_key
-
-
-def live_file_or_404(project, slug, file_id):
-    """Return the file to operate on, or raise the shared 404/409.
-
-    The lookup goes through the all-objects manager so a trashed file is reported
-    as such instead of disappearing behind a 404 (the T-105 F-6 shape), while a
-    genuinely unknown id still raises ``DoesNotExist``.
-    """
-    file_object = FileObject.all_objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
-
-    if file_object.status == FileObject.Status.TRASHED:
-        raise ProjectFileError(
-            "This file is in the trash; restore it before changing it.",
-            code="file_trashed",
-            status_code=status.HTTP_409_CONFLICT,
-        )
-
-    return file_object
 
 
 def _serialize_file(file_object):
@@ -102,7 +84,7 @@ def patch_file(request, slug, project_id, file_id):
 
     project = project_or_404(slug, project_id)
     require_project_editor(request, project)
-    file_object = live_file_or_404(project, slug, file_id)
+    file_object = file_for_write(project, slug, file_id)
 
     rename_requested = "name_display" in payload
     move_requested = "folder_id" in request.data
@@ -227,7 +209,7 @@ class FileCopyEndpoint(BaseAPIView):
                 field="target_project_id",
             )
 
-        source = live_file_or_404(project, slug, file_id)
+        source = file_for_write(project, slug, file_id)
         folder = folder_or_400(project, payload.get("folder_id"))
 
         versions = list(
@@ -266,7 +248,20 @@ class FileCopyEndpoint(BaseAPIView):
             for version in versions
         ]
         total_bytes = sum(version.size_bytes or 0 for version, _ in plan)
-        active_source = next((version for version in versions if version.is_active), versions[-1])
+        # The copy takes the source's *active* version as its own active one. A
+        # source with none has nothing a copy could be a copy of, so it is refused
+        # here rather than falling back to the newest stored version: that fallback
+        # would hand back a copy that downloads object bytes the source's own
+        # pointer does not claim (the T-104 F-4 shape, on the write side now).
+        active_source = next((version for version in versions if version.is_active), None)
+        if active_source is None:
+            raise ProjectFileError(
+                "This file has no active version to copy.",
+                code="object_unavailable",
+                status_code=status.HTTP_409_CONFLICT,
+                version_status=None,
+            )
+
         key_by_version = {version.pk: object_key for version, object_key in plan}
 
         storage = S3Storage(request=request)

@@ -234,6 +234,41 @@ def trashed_files(project, slug):
     return file_queryset(project, slug, include_trashed=True).filter(status=FileObject.Status.TRASHED)
 
 
+def is_on_default_surface(file_object):
+    """True when the default surface shows this row.
+
+    The predicate ``file_queryset(include_trashed=False)`` applies in SQL: a row
+    must be live (``deleted_at IS NULL``) **and** not carry the trashed status.
+    Trashing sets both (R-FOLD-4); the two can still disagree after a partial
+    write, and when they do every path has to agree they mean "not visible".
+    """
+    return file_object.deleted_at is None and file_object.status != FileObject.Status.TRASHED
+
+
+def file_for_write(project, slug, file_id):
+    """Resolve a file for a mutation with the visibility verdict the read paths use.
+
+    A trashed row is resolved and reported as such - the documented 409
+    ``file_trashed`` a caller can act on by restoring it (T-105 F-6) - while a row
+    the default surface hides for any other reason is treated as absent, so no
+    mutation can touch a row the listing does not show and the detail endpoint
+    404s (T-106 verification F-2).
+    """
+    file_object = file_queryset(project, slug, include_trashed=True).get(id=file_id)
+
+    if file_object.status == FileObject.Status.TRASHED:
+        raise ProjectFileError(
+            "This file is in the trash; restore it before changing it.",
+            code="file_trashed",
+            status_code=409,
+        )
+
+    if not is_on_default_surface(file_object):
+        raise ObjectDoesNotExist("The required object does not exist.")
+
+    return file_object
+
+
 def permissions_for(request, project, file_object, *, version=None):
     """Return the caller's affordances for this file, from the shared predicates.
 
@@ -281,6 +316,19 @@ def delivery_refusal(file_object, version):
             "This file is quarantined and cannot be served.",
             code="file_quarantined",
             status_code=409,
+        )
+
+    if not is_on_default_surface(file_object):
+        # A row the default surface hides (soft-deleted without the trashed status,
+        # or a partial write that left the two markers disagreeing) is not servable
+        # either: it is absent from the listing and 404 on detail for a MEMBER, so
+        # signing a URL for it would be a third, contradictory answer (P-1).
+        return ProjectFileError(
+            "This file is not available.",
+            code="object_unavailable",
+            status_code=409,
+            version_no=version.version_no if version is not None else None,
+            version_status=version.status if version is not None else None,
         )
 
     if version is None or version.object_deleted_at is not None or version.status not in GOOD_VERSION_STATUSES:

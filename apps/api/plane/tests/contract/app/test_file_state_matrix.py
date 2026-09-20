@@ -31,6 +31,8 @@ state                   built by
                         while v1 stays active, so the file still serves v1
 ``failed``              ``complete-upload`` with a declared size that contradicts
                         the stored object
+``superseded`` only,   **directly in the database** (``hand_built_...``): nothing
+no active version       deactivates a version yet, T-108 owns that
 ``trashed``             **directly in the database** - see the test id
                         ``hand_built_trashed_row``. No API path deletes a file
                         yet (T-107 owns ``DELETE files/{file_id}/``), so the row
@@ -143,6 +145,10 @@ def preview_url(slug, project_id, file_id):
     return f"{files_url(slug, project_id)}{file_id}/preview/"
 
 
+def copy_url(slug, project_id, file_id):
+    return f"{files_url(slug, project_id)}{file_id}/copy/"
+
+
 @dataclass(frozen=True)
 class FileState:
     """What the four read paths must answer for one state, and how it was built."""
@@ -167,6 +173,11 @@ class FileState:
     requested_version_status: str | None = None
     #: an ADMIN may address a row the default surface hides (detail without a flag)
     admin_can_address_hidden_row: bool = False
+    #: whether ``POST {file_id}/copy/`` is allowed, and its code when it is not.
+    #: It matches ``servable`` in every state today, and that is the point: a copy
+    #: of a file nobody can download is a new row nobody can download.
+    copy_allowed: bool = False
+    copy_refusal_code: str | None = None
 
 
 PENDING = FileState(
@@ -183,6 +194,8 @@ PENDING = FileState(
     requested_servable=False,
     requested_refusal_code="object_unavailable",
     requested_version_status=FileVersion.Status.UPLOADING,
+    copy_allowed=False,
+    copy_refusal_code="object_unavailable",
 )
 
 ACTIVE = FileState(
@@ -193,6 +206,7 @@ ACTIVE = FileState(
     served_version_no=1,
     requested_version=1,
     requested_servable=True,
+    copy_allowed=True,
 )
 
 SUPERSEDED = FileState(
@@ -205,6 +219,7 @@ SUPERSEDED = FileState(
     served_version_no=1,
     requested_version=2,
     requested_servable=True,
+    copy_allowed=True,
 )
 
 FAILED = FileState(
@@ -219,6 +234,24 @@ FAILED = FileState(
     requested_servable=False,
     requested_refusal_code="object_unavailable",
     requested_version_status=FileVersion.Status.FAILED,
+    copy_allowed=False,
+    copy_refusal_code="object_unavailable",
+)
+
+SUPERSEDED_ONLY = FileState(
+    id="hand_built_superseded_only_no_active_version",
+    visible_in_list=True,
+    visible_in_trash=False,
+    servable=False,
+    refusal_status=409,
+    refusal_code="object_unavailable",
+    file_level_version_status=None,
+    # v2 is still stored, so asking for it by number is served; the file itself has
+    # no active pointer and must not guess one.
+    requested_version=2,
+    requested_servable=True,
+    copy_allowed=False,
+    copy_refusal_code="object_unavailable",
 )
 
 TRASHED = FileState(
@@ -232,6 +265,8 @@ TRASHED = FileState(
     requested_servable=False,
     requested_refusal_code="file_trashed",
     admin_can_address_hidden_row=True,
+    copy_allowed=False,
+    copy_refusal_code="file_trashed",
 )
 
 
@@ -314,6 +349,22 @@ def build_failed(session_client, project, stored_objects):
     return FAILED, file_id
 
 
+def build_superseded_only(session_client, project, stored_objects):
+    """Built directly in the database: nothing deactivates a version yet (T-108).
+
+    The state F-1 was raised for: every version is stored, none is active, and the
+    old copy path used to point the copy's active version at the newest one anyway.
+    """
+    _, file_id = build_superseded(session_client, project, stored_objects)
+
+    FileVersion.objects.filter(file_id=file_id, version_no=1).update(
+        status=FileVersion.Status.SUPERSEDED, is_active=False
+    )
+    assert not FileVersion.objects.filter(file_id=file_id, is_active=True).exists()
+
+    return SUPERSEDED_ONLY, file_id
+
+
 def build_trashed(session_client, project, stored_objects):
     """Built directly in the database: no API path trashes a file yet (T-107)."""
     _, file_id = build_active(session_client, project, stored_objects)
@@ -330,6 +381,7 @@ STATE_MATRIX = [
     pytest.param(build_active, id=ACTIVE.id),
     pytest.param(build_superseded, id=SUPERSEDED.id),
     pytest.param(build_failed, id=FAILED.id),
+    pytest.param(build_superseded_only, id=SUPERSEDED_ONLY.id),
     pytest.param(build_trashed, id=TRASHED.id),
 ]
 
@@ -398,6 +450,25 @@ class TestStateMatrix:
             # ``None`` means the refusal names no version status (the key may be
             # absent or null); a specific value names the version it examined.
             assert download.data.get("version_status") == state.file_level_version_status
+
+        # 5. the write door: a copy must succeed exactly when the file is servable,
+        # and the copy it makes must be servable in its own right.
+        copied = session_client.post(copy_url(slug, project.id, file_id), {}, format="json")
+        if state.copy_allowed:
+            assert copied.status_code == status.HTTP_200_OK, f"{state.id}: {copied.data}"
+            copy_id = copied.data["file"]["id"]
+            assert copy_id != str(file_id)
+            for key in FileVersion.objects.filter(file_id=copy_id).values_list("object_key", flat=True):
+                stored_objects.append(key)
+            copy_active = FileVersion.objects.get(file_id=copy_id, is_active=True)
+            source_active = FileVersion.objects.get(file_id=file_id, is_active=True)
+            assert copy_active.object_key != source_active.object_key, f"{state.id}: copy aliased a key"
+            downloaded_copy = session_client.get(download_url(slug, project.id, copy_id))
+            assert downloaded_copy.status_code == status.HTTP_200_OK, f"{state.id}: copy not servable"
+        else:
+            assert copied.status_code == status.HTTP_409_CONFLICT, f"{state.id}: {copied.data}"
+            assert copied.data["code"] == state.copy_refusal_code, f"{state.id}: copy refusal code"
+            assert FileObject.all_objects.filter(project=project).count() == 1, f"{state.id}: a copy was made"
 
         # and asking for a specific version never widens what may be served
         if state.requested_version is not None:

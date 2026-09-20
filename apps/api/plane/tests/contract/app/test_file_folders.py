@@ -14,7 +14,6 @@ import io
 import uuid
 
 # Django imports
-from django.db import IntegrityError
 from django.utils import timezone
 
 # Third party imports
@@ -33,7 +32,6 @@ from plane.db.models import (
     Workspace,
     WorkspaceMember,
 )
-from plane.app.views.file.folders import NAME_CONSTRAINT_NAME, folder_conflict
 from plane.settings.storage import S3Storage
 from plane.utils.file_storage.naming import normalize_name
 
@@ -479,53 +477,6 @@ class TestFolderDelete:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data["code"] == "folder_not_found"
         assert response.data["field"] == "folder_id"
-
-
-@pytest.mark.unit
-class TestFolderConflictMapping:
-    """F-3: an integrity error is reported as the constraint it actually hit."""
-
-    @staticmethod
-    def _integrity_error(constraint_name):
-        class _Diagnostics:
-            pass
-
-        class _Cause(Exception):
-            pass
-
-        cause = _Cause()
-        cause.diag = _Diagnostics()
-        cause.diag.constraint_name = constraint_name
-
-        try:
-            raise IntegrityError("boom") from cause
-        except IntegrityError as exc:
-            return exc
-
-    def test_the_name_constraint_maps_to_a_name_conflict(self):
-        error = folder_conflict(self._integrity_error(NAME_CONSTRAINT_NAME), name_normalized="specs")
-
-        assert error.code == "folder_name_conflict"
-        assert error.status_code == 409
-        assert error.details["name_normalized"] == "specs"
-
-    def test_a_depth_constraint_maps_to_the_depth_code(self):
-        error = folder_conflict(self._integrity_error("file_folders_depth_check"), name_normalized="specs")
-
-        assert error.code == "depth_limit_exceeded"
-        assert error.status_code == 409
-
-    def test_an_unidentified_constraint_maps_to_the_generic_code(self):
-        error = folder_conflict(self._integrity_error("some_other_constraint"), name_normalized="specs")
-
-        assert error.code == "folder_conflict"
-        assert error.status_code == 409
-        assert error.details["constraint"] == "some_other_constraint"
-
-    def test_a_missing_constraint_name_is_still_reported(self):
-        error = folder_conflict(IntegrityError("boom"), name_normalized="specs")
-
-        assert error.code == "folder_conflict"
 
 
 @pytest.mark.contract

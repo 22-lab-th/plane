@@ -15,6 +15,7 @@ from rest_framework import serializers
 
 # Module imports
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
+from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.magic_bytes import normalize_mime_type
 from plane.utils.object_key import OBJECT_KEY_CATEGORIES
 
@@ -246,8 +247,31 @@ class FileFolderWriteSerializer(serializers.Serializer):
         return attrs
 
 
+def _reject_unsupported(payload, allowed):
+    """Refuse a payload field this endpoint does not implement.
+
+    DRF drops unknown keys silently, which turns a caller's mistake - or a field
+    that belongs to a later ticket, such as the cross-project
+    ``target_project_id`` on PATCH - into a no-op that reads as success
+    (T-106 verification F-3). The refusal names the field and carries a stable
+    code, so a client can tell "not implemented here" from "bad value".
+    """
+    unsupported = sorted(set(payload or {}) - set(allowed))
+    if unsupported:
+        raise ProjectFileError(
+            f"{unsupported[0]} is not a field of this endpoint.",
+            code="unsupported_field",
+            status_code=400,
+            field=unsupported[0],
+            unsupported_fields=unsupported,
+        )
+
+
 class FileOperationSerializer(serializers.Serializer):
     """`PATCH files/{file_id}/` payload: rename, move and pin."""
+
+    #: not ``fields`` - that name is DRF's own mapping on ``Serializer``.
+    PAYLOAD_FIELDS = ("name_display", "folder_id", "is_pinned")
 
     name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
     folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
@@ -260,6 +284,7 @@ class FileOperationSerializer(serializers.Serializer):
         return name
 
     def validate(self, attrs):
+        _reject_unsupported(self.initial_data, self.PAYLOAD_FIELDS)
         if not attrs:
             raise serializers.ValidationError("Provide name_display, folder_id or is_pinned.")
         return attrs
@@ -267,6 +292,8 @@ class FileOperationSerializer(serializers.Serializer):
 
 class FileCopySerializer(serializers.Serializer):
     """`POST files/{file_id}/copy/` payload."""
+
+    PAYLOAD_FIELDS = ("folder_id", "name_display", "target_project_id")
 
     folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
     name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
@@ -278,3 +305,7 @@ class FileCopySerializer(serializers.Serializer):
         if not name:
             raise serializers.ValidationError("name_display must not be empty.")
         return name
+
+    def validate(self, attrs):
+        _reject_unsupported(self.initial_data, self.PAYLOAD_FIELDS)
+        return attrs
