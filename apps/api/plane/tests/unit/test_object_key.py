@@ -79,11 +79,19 @@ class TestBuildObjectKey:
     def test_entity_ref_is_omitted_when_not_given(self):
         assert build("a.pdf", entity_ref=None) == build("a.pdf")
 
-    @pytest.mark.parametrize("entity_ref", ["", "///", "Pages/0193f0a1", "CBUTR|11", "CBUTR x", "a" * 121])
+    @pytest.mark.parametrize("entity_ref", ["", "///", "Pages/0193f0a1", "CBUTR|11", "MY:PROJ-11", "a" * 121])
     def test_entity_ref_that_would_have_to_be_modified_is_rejected(self, entity_ref):
-        """The reference is embedded verbatim, so a foldable value is an error."""
+        """Only whitespace may be folded, so any other unsafe value is an error."""
         with pytest.raises(ValueError, match="entity_ref"):
             build("a.pdf", entity_ref=entity_ref)
+
+    @pytest.mark.parametrize("entity_ref", ["MY PROJ-11", "MY  PROJ-11"])
+    def test_entity_ref_whitespace_folds_to_a_dash(self, entity_ref):
+        """A project identifier may contain a space, so ``MY PROJ-11`` is a real key."""
+        key = build("a.pdf", entity_ref=entity_ref)
+
+        assert segments(key)[5] == "MY-PROJ-11"
+        assert key == f"{KEY_PREFIX}/issues/MY-PROJ-11/{FILE_ID_STR}/v1/a.pdf"
 
     def test_page_uuid_entity_ref_is_preserved(self):
         key = build("wireframe.png", entity_ref=FILE_ID_STR, category="pages")

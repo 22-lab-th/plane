@@ -68,6 +68,9 @@ _EXTENSION = re.compile(r"\A[a-z0-9]{1,%d}\Z" % MAX_EXTENSION_CHARS)
 #: (``/``, ``\\``, ``:``, ``|``, whitespace, ``%``, control characters,
 #: non-ASCII) is rejected.
 _KEY_SEGMENT = re.compile(r"\A[A-Za-z0-9._-]+\Z")
+#: Runs of whitespace in an entity reference fold to "-" (an issue key may be
+#: ``MY PROJ-11`` when the project identifier contains a space).
+_ENTITY_REF_WHITESPACE = re.compile(r"\s+")
 _PROJECT_KEY_DISALLOWED = re.compile(r"[^A-Za-z0-9]+")
 _EDGE_CHARS = ".-"
 
@@ -159,9 +162,12 @@ def _require_key_segment(value, label):
 def _require_entity_ref(value):
     """Validate an entity reference, or return ``""`` when there is none.
 
-    The reference is embedded verbatim (NFC-normalised, case preserved), so any
-    value that would have to be modified to be safe is rejected rather than
-    silently folded into something else.
+    The reference is embedded verbatim (NFC-normalised, case preserved), with one
+    exception: runs of whitespace fold to ``-``, because a project identifier may
+    legally contain a space (``MY PROJ``), which makes ``MY PROJ-11`` a real issue
+    key. Anything else that would have to be changed to fit ``[A-Za-z0-9._-]``
+    (``:``, ``|``, ``/``, ``%``, …) is rejected rather than silently folded into
+    something else.
     """
     if value is None:
         return ""
@@ -169,7 +175,7 @@ def _require_entity_ref(value):
     if not isinstance(value, str):
         raise ValueError(f"entity_ref is not a usable object-key segment: {value!r}")
 
-    reference = unicodedata.normalize("NFC", value)
+    reference = _ENTITY_REF_WHITESPACE.sub("-", unicodedata.normalize("NFC", value))
     if not _KEY_SEGMENT.match(reference) or reference in {".", ".."} or ".." in reference:
         raise ValueError(f"entity_ref is not a usable object-key segment: {value!r}")
     if len(reference) > MAX_SEGMENT_CHARS:
@@ -222,7 +228,9 @@ def build_object_key(
     :param version_no: 1-based ``FileVersion.version_no`` as an ``int``.
     :param filename: original upload filename; sanitised, never trusted.
     :param entity_ref: optional single segment binding the file to an entity
-        (for example ``CBUTR-11`` or a page UUID). Omitted when ``None``.
+        (for example ``CBUTR-11`` or a page UUID). Omitted when ``None``; runs of
+        whitespace fold to ``-`` and anything else outside ``[A-Za-z0-9._-]``
+        raises :class:`ValueError`.
     :raises ValueError: for an unknown category, an unusable server segment or a
         filename that cannot be represented safely.
     """

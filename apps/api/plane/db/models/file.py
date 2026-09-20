@@ -227,8 +227,14 @@ class FileVersion(ProjectBaseModel):
 
         The cleanup sweep's age guard reads ``status_changed_at``, so every
         status transition has to move it; this method is the single place that
-        does both (ARCH-001 §2.4, R3-01).
+        does both (ARCH-001 §2.4, R3-01). A bulk ``queryset.update()`` bypasses
+        the model layer and therefore leaves the stamp stale — it must never be
+        used to change ``status``. Which transitions are legal is T-102's job;
+        here the value only has to be one of the model's choices.
         """
+        if new_status not in self.Status.values:
+            raise ValueError(f"unknown file version status: {new_status!r}")
+
         self.status = new_status
         self.status_changed_at = timezone.now()
         if save:

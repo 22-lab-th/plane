@@ -185,28 +185,40 @@ class TestProviderConfiguration:
         assert storage.aws_region == "eu-west-1"
         assert "/eu-west-1/s3/aws4_request" in credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
 
-    def test_addressing_style_defaults_to_virtual_for_r2(self):
+    def test_addressing_style_defaults_to_auto(self):
+        """Without the setting, a hostname-addressed endpoint stays path-style.
+
+        This is the pre-existing behaviour of the adapter for the test-stack
+        configuration (``AWS_S3_ENDPOINT_URL`` pointing at a MinIO host): the
+        bucket stays in the path, so the URL is resolvable.
+        """
         storage = make_storage(drop=("AWS_S3_ADDRESSING_STYLE",))
+        url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+        assert storage.aws_addressing_style == "auto"
+        assert url.hostname == "test-minio"
+        assert url.path == f"/{BUCKET}/{OBJECT_KEY}"
+
+    def test_test_stack_url_is_unchanged_without_the_addressing_style_setting(self):
+        """Regression guard: the shared Config must not change legacy URLs."""
+        storage = make_storage(
+            extra_env={"USE_MINIO": "1", "MINIO_PUBLIC_ENDPOINT_URL": PUBLIC_ENDPOINT},
+            drop=("AWS_S3_ADDRESSING_STYLE",),
+        )
+        url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+
+        assert f"{url.scheme}://{url.netloc}{url.path}" == f"{PUBLIC_ENDPOINT}/{BUCKET}/{OBJECT_KEY}"
+        assert url.hostname == "objects.example.com"
+        assert query_of(url.geturl())["X-Amz-Signature"][0]
+
+    def test_explicit_virtual_addressing_style_takes_effect(self):
+        storage = make_storage(extra_env={"AWS_S3_ADDRESSING_STYLE": "virtual"})
         url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
 
         assert storage.aws_addressing_style == "virtual"
         # Virtual-host addressing puts the bucket in the host, path-style in the path.
         assert url.hostname == f"{BUCKET}.test-minio"
         assert url.path == f"/{OBJECT_KEY}"
-
-    def test_addressing_style_defaults_to_path_for_minio(self):
-        """The local/dev MinIO stack reaches storage by host without wildcard DNS."""
-        storage = make_storage(extra_env={"USE_MINIO": "1"}, drop=("AWS_S3_ADDRESSING_STYLE",))
-        url = urlsplit(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
-
-        assert storage.aws_addressing_style == "path"
-        assert url.hostname == "test-minio"
-        assert url.path == f"/{BUCKET}/{OBJECT_KEY}"
-
-    def test_addressing_style_env_overrides_the_minio_default(self):
-        storage = make_storage(extra_env={"USE_MINIO": "1", "AWS_S3_ADDRESSING_STYLE": "virtual"})
-
-        assert storage.aws_addressing_style == "virtual"
 
     def test_both_clients_share_the_provider_configuration(self):
         storage = make_storage(

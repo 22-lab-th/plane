@@ -199,6 +199,17 @@ class TestFileVersionConstraints:
         assert version.status_changed_at <= timezone.now()
 
 
+    @pytest.mark.django_db
+    def test_mark_status_rejects_an_unknown_status(self, project):
+        version = make_version(project, make_file(project))
+
+        with pytest.raises(ValueError, match="unknown file version status"):
+            version.mark_status("verified")
+
+        version.refresh_from_db()
+        assert version.status == FileVersion.Status.UPLOADING
+
+
 @pytest.mark.unit
 class TestFileJobConstraints:
     """`file_jobs`: verification is unique per version, purge is unique per file."""

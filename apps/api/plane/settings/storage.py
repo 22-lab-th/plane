@@ -34,13 +34,12 @@ class S3Storage(S3Boto3Storage):
         # kept as a fallback for existing deployments.
         self.aws_region = os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION") or "auto"
         # Addressing style and signature version are provider configuration, not
-        # code branches (AD-01). The documented R2 defaults are "virtual" and
-        # "s3v4"; the local/dev MinIO stack is reached by container name or
-        # loopback address with no wildcard DNS, so it keeps path-style
-        # addressing unless the operator sets AWS_S3_ADDRESSING_STYLE explicitly.
-        self.aws_addressing_style = os.environ.get("AWS_S3_ADDRESSING_STYLE") or (
-            "path" if os.environ.get("USE_MINIO") == "1" else "virtual"
-        )
+        # code branches (AD-01). The default is botocore's "auto", which keeps
+        # hostname-addressed S3-compatible endpoints (local MinIO, custom gateway
+        # hosts) on path-style URLs exactly as before this configuration was
+        # introduced; an operator enables virtual-host addressing - the R2 posture
+        # in ARCH-001 §3 - with AWS_S3_ADDRESSING_STYLE=virtual.
+        self.aws_addressing_style = os.environ.get("AWS_S3_ADDRESSING_STYLE") or "auto"
         self.aws_signature_version = os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4")
         self.s3_config = boto3.session.Config(
             signature_version=self.aws_signature_version,
