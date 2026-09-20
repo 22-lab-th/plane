@@ -137,7 +137,16 @@ def purge_file(file_object, *, request=None, trigger="manual"):
             return False
         version.mark_status(FileVersion.Status.PURGED, save=False)
         version.object_deleted_at = timezone.now()
-        version.save(update_fields=["status", "status_changed_at", "object_deleted_at", "updated_at"])
+        # A version whose object is gone must never carry the active pointer. The
+        # purge can take the *active* version's object and then fail on another
+        # object, so the file row survives while its active pointer names bytes that
+        # no longer exist - and "the active version has no stored object" is the
+        # state delivery must never be able to serve (T-104 F-4, asserted by the
+        # versioning tests). A version with no object is not the active version.
+        version.is_active = False
+        version.save(
+            update_fields=["status", "status_changed_at", "object_deleted_at", "is_active", "updated_at"]
+        )
 
     with transaction.atomic():
         # Counters move inside the same transaction as the row removal, so a purge

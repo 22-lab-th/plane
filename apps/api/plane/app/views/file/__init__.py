@@ -11,3 +11,4 @@ from .upload import (
     FileUploadCompleteEndpoint,
     FileUploadInitiateEndpoint,
 )
+from .versions import FileVersionActivateEndpoint, FileVersionListEndpoint

@@ -14,6 +14,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 # Module imports
+from plane.app.views.file.base import delivery_refusal
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.magic_bytes import normalize_mime_type
@@ -111,6 +112,26 @@ class FileUploadCompleteSerializer(serializers.Serializer):
         return value.lower()
 
 
+class FileVersionInitiateSerializer(FileUploadInitiateSerializer):
+    """`POST files/{file_id}/versions/` payload: the file comes from the URL.
+
+    The same fields and the same validation as ``initiate-upload/``, minus
+    ``file_id``: DRF drops an inherited field that a subclass declares as ``None``,
+    and the door refuses a body that names a file anyway rather than ignoring it,
+    because this URL already knows which file it is (F-3). One field list, one set
+    of validators, two doors.
+    """
+
+    PAYLOAD_FIELDS = ("file_name", "size_bytes", "mime_type", "folder_id", "category", "checksum_sha256", "link")
+
+    #: the file is in the URL here; naming another one in the body is an error.
+    file_id = None
+
+    def validate(self, attrs):
+        reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
+        return attrs
+
+
 class FileUploadAbortSerializer(serializers.Serializer):
     """`POST files/{file_id}/abort-upload/` payload."""
 
@@ -141,6 +162,7 @@ class FileVersionSerializer(serializers.ModelSerializer):
     """
 
     uploaded_by = serializers.SerializerMethodField()
+    can_activate = serializers.SerializerMethodField()
 
     class Meta:
         model = FileVersion
@@ -149,6 +171,7 @@ class FileVersionSerializer(serializers.ModelSerializer):
             "version_no",
             "status",
             "is_active",
+            "can_activate",
             "size_bytes",
             "mime_type",
             "client_checksum_sha256",
@@ -162,6 +185,18 @@ class FileVersionSerializer(serializers.ModelSerializer):
 
     def get_uploaded_by(self, obj):
         return user_payload(obj.uploaded_by)
+
+    def get_can_activate(self, obj):
+        """True when no *recorded* reason stops this version becoming active.
+
+        Driven by ``delivery_refusal`` - the predicate the delivery endpoints and the
+        activation endpoint apply - so a client is never invited to activate a
+        version the endpoint will refuse. It says nothing about the caller's role
+        (the file's ``permissions`` block does) and nothing about the store: the
+        activation endpoint still checks that the object is really there, because a
+        deletion made outside this application leaves no trace in the row.
+        """
+        return not obj.is_active and delivery_refusal(obj.file, obj) is None
 
 
 class FileLinkSerializer(serializers.ModelSerializer):
@@ -286,7 +321,15 @@ class FileOperationSerializer(serializers.Serializer):
     def validate(self, attrs):
         reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
         if not attrs:
-            raise serializers.ValidationError("Provide name_display, folder_id or is_pinned.")
+            # The rest of this surface refuses with a code; an empty body should not
+            # be the one answer that arrives as DRF's ``non_field_errors`` shape
+            # (T-106 verification residual).
+            raise ProjectFileError(
+                "Provide name_display, folder_id or is_pinned.",
+                code="invalid_request",
+                status_code=400,
+                fields=list(self.PAYLOAD_FIELDS),
+            )
         return attrs
 
 

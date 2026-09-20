@@ -271,6 +271,19 @@ def is_on_default_surface(file_object):
     return file_object.deleted_at is None and file_object.status != FileObject.Status.TRASHED
 
 
+def include_trashed(request, project):
+    """True when the caller may address rows the default surface hides.
+
+    ``?trashed=true`` asks for the trash explicitly, and a project ADMIN may address
+    those rows without the flag. One function, so the detail endpoint and the version
+    history cannot answer the question differently (ADV-001 §5 P-1).
+    """
+    raw = request.query_params.get("trashed")
+    flagged = parse_bool(raw, "trashed") if raw not in (None, "") else False
+
+    return flagged or member_role(request, project) == ROLE.ADMIN.value
+
+
 def file_for_write(project, slug, file_id):
     """Resolve a file for a mutation with the visibility verdict the read paths use.
 

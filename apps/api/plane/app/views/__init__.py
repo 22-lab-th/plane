@@ -129,6 +129,8 @@ from .file import (
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,
     FileUploadInitiateEndpoint,
+    FileVersionActivateEndpoint,
+    FileVersionListEndpoint,
 )
 from .issue.base import (
     IssueListEndpoint,

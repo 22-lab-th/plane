@@ -38,7 +38,7 @@ from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.app.views.file.base import (
     breadcrumbs,
     file_queryset,
-    member_role,
+    include_trashed,
     parse_bool,
     permissions_for,
     project_or_404,
@@ -440,16 +440,11 @@ class FileDetailEndpoint(BaseAPIView):
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
 
-        raw_trashed = request.query_params.get("trashed")
-        include_trashed = (
-            parse_bool(raw_trashed, "trashed") if raw_trashed not in (None, "") else False
-        ) or member_role(request, project) == ROLE.ADMIN.value
-
         # The same visibility source the list reads, scoped by project, so a file
         # belonging to another project is simply not found and the caller learns
         # nothing about it (AD-06).
         file_object = (
-            file_queryset(project, slug, include_trashed=include_trashed)
+            file_queryset(project, slug, include_trashed=include_trashed(request, project))
             .annotate(link_count=link_count_expression())
             .select_related("created_by", "folder")
             .get(id=file_id)

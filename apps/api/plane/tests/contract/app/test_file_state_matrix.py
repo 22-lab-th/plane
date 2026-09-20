@@ -33,6 +33,9 @@ state                   built by
                         the stored object
 ``superseded`` only,   **directly in the database** (``hand_built_...``): nothing
 no active version       deactivates a version yet, T-108 owns that
+``purged``/            **directly in the database** (``hand_built_...``): only a
+``purge_failed``        whole file can be purged today, so a single version in a
+revisions               terminal state is marked by hand
 ``purge_failed``        the purge path with its object deletion made to fail (only
                         the storage failure is injected)
 ``purged``              the purge path: the row is gone, so every path 404s
@@ -168,6 +171,16 @@ def purge_url(slug, project_id, file_id):
 
 
 @dataclass(frozen=True)
+class VersionRequest:
+    """One explicit ``?version=`` probe: the number, and what it must answer."""
+
+    version_no: int
+    servable: bool
+    refusal_code: str | None = None
+    version_status: str | None = None
+
+
+@dataclass(frozen=True)
 class FileState:
     """What the four read paths must answer for one state, and how it was built."""
 
@@ -189,6 +202,9 @@ class FileState:
     requested_servable: bool = False
     requested_refusal_code: str | None = None
     requested_version_status: str | None = None
+    #: further ``?version=`` probes for a file that holds versions in more than one
+    #: terminal state (the requested-version dimension, extended past ``failed``).
+    extra_version_requests: tuple[VersionRequest, ...] = ()
     #: an ADMIN may address a row the default surface hides (detail without a flag)
     admin_can_address_hidden_row: bool = False
     #: False once the row is purged: every path answers 404, not a refusal.
@@ -334,6 +350,25 @@ PURGE_FAILED = FileState(
 # Every state builder has the same shape - ``(session_client, admin_client, project,
 # stored_objects)`` - so the walk can call them uniformly; only the two purge states
 # need the admin client, and the others name it ``_admin_client`` to say so.
+TERMINAL_VERSIONS = FileState(
+    id="hand_built_live_file_with_purged_and_purge_failed_revisions",
+    visible_in_list=True,
+    visible_in_trash=False,
+    # v1 is active and stored, so the file itself is servable; the two terminal
+    # revisions are not, and asking for one by number must say which and why.
+    servable=True,
+    served_version_no=1,
+    requested_version=2,
+    requested_servable=False,
+    requested_refusal_code="object_unavailable",
+    requested_version_status=FileVersion.Status.PURGED,
+    copy_allowed=True,
+    extra_version_requests=(
+        VersionRequest(3, False, "object_unavailable", FileVersion.Status.PURGE_FAILED),
+    ),
+)
+
+
 def _initiate(session_client, project, *, file_name, file_id=None):
     response = session_client.post(
         upload_url(project.workspace.slug, project.id),
@@ -459,6 +494,43 @@ def build_purge_failed(session_client, admin_client, project, stored_objects):
     return PURGE_FAILED, file_id
 
 
+def build_terminal_versions(session_client, _admin_client, project, stored_objects):
+    """A live file holding a purged revision and a purge_failed revision.
+
+    Built through the API as far as it can be (v1 active, v2 and v3 stored) and then
+    marked in the database, because nothing purges a single *version* yet: the purge
+    endpoint removes whole files, and deleting an unverified version's object is
+    T-118's sweep. The marks are written directly, which is why this state's id says
+    ``hand_built``.
+    """
+    _, file_id = build_superseded(session_client, _admin_client, project, stored_objects)
+
+    third = _initiate(session_client, project, file_name="state-active.pdf", file_id=file_id)
+    assert third.data["version_no"] == 3
+    _put_bytes(third, stored_objects)
+    finished = session_client.post(
+        complete_url(project.workspace.slug, project.id, file_id),
+        {"version_no": 3, "size_bytes": len(PDF_BYTES)},
+        format="json",
+    )
+    assert finished.status_code == status.HTTP_200_OK, finished.data
+    assert finished.data["version"]["status"] == FileVersion.Status.SUPERSEDED
+
+    purged_key = FileVersion.objects.get(file_id=file_id, version_no=2).object_key
+    assert S3Storage().delete_files([purged_key]) is True
+    FileVersion.objects.filter(file_id=file_id, version_no=2).update(
+        status=FileVersion.Status.PURGED,
+        object_deleted_at=timezone.now(),
+        is_active=False,
+        status_changed_at=timezone.now(),
+    )
+    FileVersion.objects.filter(file_id=file_id, version_no=3).update(
+        status=FileVersion.Status.PURGE_FAILED, status_changed_at=timezone.now()
+    )
+
+    return TERMINAL_VERSIONS, file_id
+
+
 def build_trashed(session_client, _admin_client, project, stored_objects):
     """Built directly in the database: no API path trashes a file yet (T-107)."""
     _, file_id = build_active(session_client, admin_client, project, stored_objects)
@@ -477,6 +549,7 @@ STATE_MATRIX = [
     pytest.param(build_failed, id=FAILED.id),
     pytest.param(build_superseded_only, id=SUPERSEDED_ONLY.id),
     pytest.param(build_trashed, id=TRASHED.id),
+    pytest.param(build_terminal_versions, id=TERMINAL_VERSIONS.id),
     pytest.param(build_purge_failed, id=PURGE_FAILED.id),
     pytest.param(build_purged, id=PURGED.id),
 ]
@@ -566,6 +639,18 @@ class TestStateMatrix:
             # absent or null); a specific value names the version it examined.
             assert download.data.get("version_status") == state.file_level_version_status
 
+        for extra in state.extra_version_requests:
+            asked_extra = session_client.get(
+                download_url(slug, project.id, file_id), {"version": extra.version_no}
+            )
+            if extra.servable:
+                assert asked_extra.status_code == status.HTTP_200_OK, f"{state.id}: {asked_extra.data}"
+            else:
+                assert asked_extra.status_code == status.HTTP_409_CONFLICT, f"{state.id}: {asked_extra.data}"
+                assert asked_extra.data["code"] == extra.refusal_code
+                assert asked_extra.data.get("version_status") == extra.version_status
+                assert "url" not in asked_extra.data
+
         # 5. the write door: a copy must succeed exactly when the file is servable,
         # and the copy it makes must be servable in its own right.
         copied = session_client.post(copy_url(slug, project.id, file_id), {}, format="json")
@@ -597,7 +682,7 @@ class TestStateMatrix:
                 assert asked.status_code == status.HTTP_200_OK, f"{state.id}: {asked.data}"
                 assert asked.data["version_no"] == state.requested_version
             else:
-                assert asked.status_code == state.refusal_status
+                assert asked.status_code == status.HTTP_409_CONFLICT
                 assert asked.data["code"] == state.requested_refusal_code
                 assert asked.data.get("version_status") == state.requested_version_status
 

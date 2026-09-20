@@ -44,6 +44,7 @@ from plane.app.serializers.file import (
 from plane.app.views.base import BaseAPIView
 from plane.app.views.file.base import (
     available_display_name,
+    file_for_write,
     folder_or_400,
     project_or_404,
     require_writable_project,
@@ -80,16 +81,20 @@ CATEGORY_BY_ENTITY_TYPE = {
 UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.MILESTONE, FileLink.EntityType.DELIVERABLE)
 
 
-def _existing_file(project, slug, file_id):
-    """Return the file a revision belongs to, or raise a 404 through the ORM."""
+def _target_file(project, slug, file_id):
+    """Return the file a new version belongs to, or ``None`` for a brand new file.
+
+    The verdict is the shared write-path one (``file_for_write``), not a manager
+    picked here: a trashed row is refused with the documented 409 ``file_trashed``
+    - the old lookup resolved through the live manager and answered 404 before its
+    own status check could run - and a row the default surface hides, including one
+    left ``purge_failed`` by a failed purge, is refused with 404 so a new version
+    can never resurrect it.
+    """
     if not file_id:
         return None
 
-    return FileObject.objects.get(
-        id=file_id,
-        project_id=project.id,
-        workspace__slug=slug,
-    )
+    return file_for_write(project, slug, file_id)
 
 
 def _resolve_link(project, link):
@@ -307,163 +312,165 @@ class FileUploadInitiateEndpoint(BaseAPIView):
     def post(self, request, slug, project_id):
         serializer = FileUploadInitiateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        payload = serializer.validated_data
 
-        project = project_or_404(slug, project_id)
-        require_writable_project(project)
-        link = _resolve_link(project, payload.get("link"))
-        folder = folder_or_400(project, payload.get("folder_id"))
-        file_object = _existing_file(project, slug, payload.get("file_id"))
-        if file_object is not None and file_object.status in (
-            FileObject.Status.TRASHED,
-            FileObject.Status.PURGED,
-        ):
-            raise ProjectFileError(
-                "This file is trashed and cannot receive a new version.",
-                code="invalid_request",
-                field="file_id",
-                status_code=status.HTTP_409_CONFLICT,
+        return initiate_upload(request, slug, project_id, serializer.validated_data)
+
+
+def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
+    """Create the pending version, reserve quota and presign the upload (ARCH-001 §4.1).
+
+    Shared by ``initiate-upload/`` - which may carry ``file_id`` in the body for a
+    retry or a revision - and ``{file_id}/versions/``, where the URL pins the file.
+    ``pinned_file_id`` wins over the body and is the only difference between the two
+    doors, so the reservation, the key and the audit row are built once.
+    """
+    project = project_or_404(slug, project_id)
+    require_writable_project(project)
+    link = _resolve_link(project, payload.get("link"))
+    folder = folder_or_400(project, payload.get("folder_id"))
+    target_id = pinned_file_id if pinned_file_id is not None else payload.get("file_id")
+    file_object = _target_file(project, slug, target_id)
+
+    category = _category_for(payload.get("category"), link, file_object)
+    version_no = _next_version_no(file_object)
+    entity_ref = link["entity_ref"] if link else _existing_entity_ref(file_object)
+    bucket = settings.AWS_STORAGE_BUCKET_NAME
+    file_id = file_object.id if file_object is not None else uuid4()
+    display_name = stored_name(payload["file_name"])
+    if file_object is None:
+        # A second upload of the same name in the same folder becomes
+        # "Name (2).ext" (R-FOLD-5) before the key is built, so the key's
+        # filename and the stored name stay in step.
+        display_name = available_display_name(project, folder, display_name)
+
+    object_key = build_object_key(
+        workspace_slug=project.workspace.slug,
+        project_storage_key=project.ensure_storage_key(),
+        category=category,
+        file_id=file_id,
+        version_no=version_no,
+        filename=display_name,
+        entity_ref=entity_ref,
+    )
+    upload_ttl = timedelta(seconds=settings.PROJECT_FILE_UPLOAD_URL_TTL_SECONDS)
+    expires_at = timezone.now() + upload_ttl
+
+    try:
+        # The reservation and the rows that carry it commit together: this
+        # commit is what makes the presigned URL valid (ARCH-001 §2.8 item 1).
+        with transaction.atomic():
+            quota_row, usage_row = quota.lock_usage_rows(project)
+
+            if file_object is not None:
+                _refuse_live_attempt(file_object)
+
+            if file_object is None:
+                file_object = FileObject(
+                    id=file_id,
+                    project=project,
+                    folder=folder,
+                    name_original=display_name,
+                    name_display=display_name,
+                    name_normalized=normalize_name(display_name),
+                    mime_type=payload["mime_type"],
+                    extension=extension_of(display_name),
+                    bucket=bucket,
+                    object_key=object_key,
+                    category=category,
+                    status=FileObject.Status.PENDING,
+                    checksum_sha256=payload.get("checksum_sha256"),
+                )
+                # The uploader is recorded from the request rather than from
+                # the ambient current user, so the uploader filter and the
+                # audit trail stay correct outside a request context too.
+                file_object.save(force_insert=True, created_by_id=request.user.id)
+
+            version = FileVersion.objects.create(
+                project=project,
+                file=file_object,
+                version_no=version_no,
+                object_key=object_key,
+                bucket=bucket,
+                mime_type=payload["mime_type"],
+                client_checksum_sha256=payload.get("checksum_sha256"),
+                uploaded_by=request.user,
+                status=FileVersion.Status.UPLOADING,
             )
 
-        category = _category_for(payload.get("category"), link, file_object)
-        version_no = _next_version_no(file_object)
-        entity_ref = link["entity_ref"] if link else _existing_entity_ref(file_object)
-        bucket = settings.AWS_STORAGE_BUCKET_NAME
-        file_id = file_object.id if file_object is not None else uuid4()
-        display_name = stored_name(payload["file_name"])
-        if file_object is None:
-            # A second upload of the same name in the same folder becomes
-            # "Name (2).ext" (R-FOLD-5) before the key is built, so the key's
-            # filename and the stored name stay in step.
-            display_name = available_display_name(project, folder, display_name)
+            quota.reserve(
+                quota_row,
+                usage_row,
+                version,
+                requested_bytes=payload["size_bytes"],
+                expires_at=expires_at,
+            )
 
-        object_key = build_object_key(
-            workspace_slug=project.workspace.slug,
-            project_storage_key=project.ensure_storage_key(),
-            category=category,
-            file_id=file_id,
-            version_no=version_no,
-            filename=display_name,
-            entity_ref=entity_ref,
-        )
-        upload_ttl = timedelta(seconds=settings.PROJECT_FILE_UPLOAD_URL_TTL_SECONDS)
-        expires_at = timezone.now() + upload_ttl
-
-        try:
-            # The reservation and the rows that carry it commit together: this
-            # commit is what makes the presigned URL valid (ARCH-001 §2.8 item 1).
-            with transaction.atomic():
-                quota_row, usage_row = quota.lock_usage_rows(project)
-
-                if file_object is not None:
-                    _refuse_live_attempt(file_object)
-
-                if file_object is None:
-                    file_object = FileObject(
-                        id=file_id,
-                        project=project,
-                        folder=folder,
-                        name_original=display_name,
-                        name_display=display_name,
-                        name_normalized=normalize_name(display_name),
-                        mime_type=payload["mime_type"],
-                        extension=extension_of(display_name),
-                        bucket=bucket,
-                        object_key=object_key,
-                        category=category,
-                        status=FileObject.Status.PENDING,
-                        checksum_sha256=payload.get("checksum_sha256"),
-                    )
-                    # The uploader is recorded from the request rather than from
-                    # the ambient current user, so the uploader filter and the
-                    # audit trail stay correct outside a request context too.
-                    file_object.save(force_insert=True, created_by_id=request.user.id)
-
-                version = FileVersion.objects.create(
+            if link is not None:
+                FileLink.objects.create(
                     project=project,
                     file=file_object,
-                    version_no=version_no,
-                    object_key=object_key,
-                    bucket=bucket,
-                    mime_type=payload["mime_type"],
-                    client_checksum_sha256=payload.get("checksum_sha256"),
-                    uploaded_by=request.user,
-                    status=FileVersion.Status.UPLOADING,
+                    entity_type=link["entity_type"],
+                    entity_id=link["entity_id"],
+                    entity_identifier=link["entity_identifier"],
                 )
 
-                quota.reserve(
-                    quota_row,
-                    usage_row,
-                    version,
-                    requested_bytes=payload["size_bytes"],
-                    expires_at=expires_at,
-                )
-
-                if link is not None:
-                    FileLink.objects.create(
-                        project=project,
-                        file=file_object,
-                        entity_type=link["entity_type"],
-                        entity_id=link["entity_id"],
-                        entity_identifier=link["entity_identifier"],
-                    )
-
-                record_file_access(
-                    request,
-                    action=FileAccessLog.Action.UPLOAD_INITIATED,
-                    project=project,
-                    file_name=display_name,
-                    file_id=file_object.id,
-                    version_no=version_no,
-                    metadata={
-                        "size_bytes": payload["size_bytes"],
-                        "mime_type": payload["mime_type"],
-                        "category": category,
-                        "folder_id": str(folder.id) if folder else None,
-                        "new_file": version_no == 1,
-                    },
-                )
-        except quota.QuotaExceeded as exc:
             record_file_access(
                 request,
-                action=FileAccessLog.Action.QUOTA_REJECTED,
+                action=FileAccessLog.Action.UPLOAD_INITIATED,
                 project=project,
                 file_name=display_name,
-                file_id=file_object.id if file_object is not None else None,
-                metadata={"size_bytes": payload["size_bytes"], "level": exc.level},
-            )
-            return Response(exc.as_response(), status=exc.status_code)
-
-        # The reservation is committed, so the URL may now be signed.
-        upload = S3Storage(request=request).generate_presigned_put(
-            object_name=object_key,
-            content_type=payload["mime_type"],
-            expires_in=settings.PROJECT_FILE_UPLOAD_URL_TTL_SECONDS,
-        )
-        if upload is None:
-            # The attempt stays uploading with a live reservation; the cleanup
-            # sweep releases and deletes it once the URL TTL has passed (AD-13).
-            return Response(
-                {
-                    "error": "The storage provider could not sign this upload.",
-                    "code": "storage_unavailable",
+                file_id=file_object.id,
+                version_no=version_no,
+                metadata={
+                    "size_bytes": payload["size_bytes"],
+                    "mime_type": payload["mime_type"],
+                    "category": category,
+                    "folder_id": str(folder.id) if folder else None,
+                    "new_file": version_no == 1,
                 },
-                status=status.HTTP_502_BAD_GATEWAY,
             )
+    except quota.QuotaExceeded as exc:
+        record_file_access(
+            request,
+            action=FileAccessLog.Action.QUOTA_REJECTED,
+            project=project,
+            file_name=display_name,
+            file_id=file_object.id if file_object is not None else None,
+            metadata={"size_bytes": payload["size_bytes"], "level": exc.level},
+        )
+        return Response(exc.as_response(), status=exc.status_code)
 
+    # The reservation is committed, so the URL may now be signed.
+    upload = S3Storage(request=request).generate_presigned_put(
+        object_name=object_key,
+        content_type=payload["mime_type"],
+        expires_in=settings.PROJECT_FILE_UPLOAD_URL_TTL_SECONDS,
+    )
+    if upload is None:
+        # The attempt stays uploading with a live reservation; the cleanup
+        # sweep releases and deletes it once the URL TTL has passed (AD-13).
         return Response(
             {
-                "file": _file_payload(file_object),
-                "version_no": version_no,
-                "upload": {
-                    "url": upload["url"],
-                    "method": upload["method"],
-                    "headers": upload["headers"],
-                    "expires_at": expires_at.isoformat(),
-                },
+                "error": "The storage provider could not sign this upload.",
+                "code": "storage_unavailable",
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_502_BAD_GATEWAY,
         )
+
+    return Response(
+        {
+            "file": _file_payload(file_object),
+            "version_no": version_no,
+            "upload": {
+                "url": upload["url"],
+                "method": upload["method"],
+                "headers": upload["headers"],
+                "expires_at": expires_at.isoformat(),
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
+
 
 
 class FileUploadCompleteEndpoint(BaseAPIView):
