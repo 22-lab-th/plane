@@ -34,6 +34,7 @@ from plane.app.serializers.file import (
     FileVersionSerializer,
 )
 from plane.app.views.base import BaseAPIView
+from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.app.views.file.base import breadcrumbs, delivery_refusal, member_role, parse_bool, project_or_404
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion, ProjectMember
 from plane.utils.file_storage import quota
@@ -431,7 +432,7 @@ class FileListEndpoint(BaseAPIView):
 
 
 class FileDetailEndpoint(BaseAPIView):
-    """Return one file with its versions, links and the caller's permissions.
+    """Read, rename, move or pin one file (GET from T-103, PATCH from T-106).
 
     A live-only lookup is the default, so a trashed file is not found; the caller
     may address the trash explicitly with ``?trashed=true`` (the same flag the
@@ -439,6 +440,18 @@ class FileDetailEndpoint(BaseAPIView):
     and a project ADMIN may address trashed rows without the flag. Either way the
     payload carries a ``trashed`` marker.
     """
+
+    def get_throttles(self):
+        """Mutations carry the project-file throttle; reads keep the defaults."""
+        if self.request.method not in ("GET", "HEAD", "OPTIONS"):
+            return [ProjectFileUploadThrottle()]
+        return super().get_throttles()
+
+    def patch(self, request, slug, project_id, file_id):
+        """Rename, move or pin the file; the work itself lives in operations.py."""
+        from plane.app.views.file.operations import patch_file
+
+        return patch_file(request, slug, project_id, file_id)
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def get(self, request, slug, project_id, file_id):

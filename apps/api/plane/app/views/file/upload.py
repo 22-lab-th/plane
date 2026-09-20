@@ -42,7 +42,13 @@ from plane.app.serializers.file import (
     FileUploadInitiateSerializer,
 )
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import project_or_404, require_writable_project
+from plane.app.views.file.base import (
+    available_display_name,
+    folder_or_400,
+    project_or_404,
+    require_writable_project,
+    stored_name,
+)
 from plane.db.models import (
     FileAccessLog,
     FileFolder,
@@ -61,7 +67,6 @@ from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.magic_bytes import HEAD_BYTES, check_magic_bytes, normalize_mime_type
 from plane.utils.object_key import build_object_key
-from plane.utils.path_validator import sanitize_filename
 
 #: Category a file inherits from the entity it was created from (DEC-001).
 CATEGORY_BY_ENTITY_TYPE = {
@@ -69,37 +74,10 @@ CATEGORY_BY_ENTITY_TYPE = {
     FileLink.EntityType.PAGE: FileObject.Category.PAGES,
 }
 
-#: Upper bound on the " (n)" suffixes tried when a name is already taken.
-MAX_NAME_ATTEMPTS = 200
-
 #: Entity types whose target row can be validated in this repository. ``milestone``
 #: and ``deliverable`` are accepted choices without a table in this fork, so their
 #: payload contract belongs to the links ticket rather than to upload.
 UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.MILESTONE, FileLink.EntityType.DELIVERABLE)
-
-
-def _folder_for(project, folder_id):
-    """Return the folder inside this project, or raise a 400."""
-    if not folder_id:
-        return None
-
-    folder = FileFolder.all_objects.filter(id=folder_id, project_id=project.id).first()
-    if folder is None:
-        raise ProjectFileError(
-            "folder_id does not belong to this project.",
-            code="folder_not_found",
-            field="folder_id",
-        )
-
-    if folder.deleted_at is not None:
-        raise ProjectFileError(
-            "This folder was deleted; restore it or choose another folder.",
-            code="folder_trashed",
-            status_code=status.HTTP_409_CONFLICT,
-            field="folder_id",
-        )
-
-    return folder
 
 
 def _existing_file(project, slug, file_id):
@@ -255,47 +233,6 @@ def _refuse_live_attempt(file_object):
     )
 
 
-def _stored_name(file_name):
-    """Return the name stored for display: the uploader's name without path tricks."""
-    return sanitize_filename(file_name) or file_name
-
-
-def _split_extension(name):
-    """Return ``(stem, ".ext")`` for a name, or ``(name, "")`` without an extension."""
-    stem, dot, extension = name.rpartition(".")
-    if not dot or not extension_of(name):
-        return name, ""
-
-    return stem, f".{extension}"
-
-
-def _available_display_name(project, folder, file_name):
-    """Suffix the display name until it is free in this folder (R-FOLD-5).
-
-    ``file_objects`` is unique per project and folder on the normalised live name,
-    so a second upload of ``Report.pdf`` is stored as ``Report (2).pdf`` rather
-    than failing or silently overwriting the first one.
-    """
-    stem, extension = _split_extension(file_name)
-    candidate = file_name
-
-    for index in range(2, MAX_NAME_ATTEMPTS):
-        taken = FileObject.objects.filter(
-            project_id=project.id,
-            folder_id=folder.id if folder is not None else None,
-            name_normalized=normalize_name(candidate),
-        ).exclude(status=FileObject.Status.TRASHED)
-        if not taken.exists():
-            return candidate
-
-        candidate = f"{stem} ({index}){extension}"
-
-    raise ProjectFileError(
-        "A unique name could not be derived for this file.",
-        code="name_conflict",
-    )
-
-
 def _file_payload(file_object):
     """The file summary shared by the initiate and complete responses."""
     return {
@@ -375,7 +312,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
         project = project_or_404(slug, project_id)
         require_writable_project(project)
         link = _resolve_link(project, payload.get("link"))
-        folder = _folder_for(project, payload.get("folder_id"))
+        folder = folder_or_400(project, payload.get("folder_id"))
         file_object = _existing_file(project, slug, payload.get("file_id"))
         if file_object is not None and file_object.status in (
             FileObject.Status.TRASHED,
@@ -393,12 +330,12 @@ class FileUploadInitiateEndpoint(BaseAPIView):
         entity_ref = link["entity_ref"] if link else _existing_entity_ref(file_object)
         bucket = settings.AWS_STORAGE_BUCKET_NAME
         file_id = file_object.id if file_object is not None else uuid4()
-        stored_name = _stored_name(payload["file_name"])
+        display_name = stored_name(payload["file_name"])
         if file_object is None:
             # A second upload of the same name in the same folder becomes
             # "Name (2).ext" (R-FOLD-5) before the key is built, so the key's
             # filename and the stored name stay in step.
-            stored_name = _available_display_name(project, folder, stored_name)
+            display_name = available_display_name(project, folder, display_name)
 
         object_key = build_object_key(
             workspace_slug=project.workspace.slug,
@@ -406,7 +343,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
             category=category,
             file_id=file_id,
             version_no=version_no,
-            filename=stored_name,
+            filename=display_name,
             entity_ref=entity_ref,
         )
         upload_ttl = timedelta(seconds=settings.PROJECT_FILE_UPLOAD_URL_TTL_SECONDS)
@@ -426,11 +363,11 @@ class FileUploadInitiateEndpoint(BaseAPIView):
                         id=file_id,
                         project=project,
                         folder=folder,
-                        name_original=stored_name,
-                        name_display=stored_name,
-                        name_normalized=normalize_name(stored_name),
+                        name_original=display_name,
+                        name_display=display_name,
+                        name_normalized=normalize_name(display_name),
                         mime_type=payload["mime_type"],
-                        extension=extension_of(stored_name),
+                        extension=extension_of(display_name),
                         bucket=bucket,
                         object_key=object_key,
                         category=category,
@@ -475,7 +412,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
                     request,
                     action=FileAccessLog.Action.UPLOAD_INITIATED,
                     project=project,
-                    file_name=stored_name,
+                    file_name=display_name,
                     file_id=file_object.id,
                     version_no=version_no,
                     metadata={
@@ -491,7 +428,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
                 request,
                 action=FileAccessLog.Action.QUOTA_REJECTED,
                 project=project,
-                file_name=stored_name,
+                file_name=display_name,
                 file_id=file_object.id if file_object is not None else None,
                 metadata={"size_bytes": payload["size_bytes"], "level": exc.level},
             )

@@ -5,6 +5,7 @@
 from django.urls import path
 
 from plane.app.views import (
+    FileCopyEndpoint,
     FileDetailEndpoint,
     FileDownloadEndpoint,
     FileFolderDetailEndpoint,
@@ -61,6 +62,12 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/preview/",
         FilePreviewEndpoint.as_view(),
         name="project-file-preview",
+    ),
+    # File operations (T-106)
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/copy/",
+        FileCopyEndpoint.as_view(),
+        name="project-file-copy",
     ),
     # Detail (T-103)
     path(

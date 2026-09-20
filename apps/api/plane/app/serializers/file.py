@@ -244,3 +244,37 @@ class FileFolderWriteSerializer(serializers.Serializer):
         if self.partial is False and not attrs.get("name"):
             raise serializers.ValidationError({"name": "name is required."})
         return attrs
+
+
+class FileOperationSerializer(serializers.Serializer):
+    """`PATCH files/{file_id}/` payload: rename, move and pin."""
+
+    name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
+    folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    is_pinned = serializers.BooleanField(required=False)
+
+    def validate_name_display(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError("name_display must not be empty.")
+        return name
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("Provide name_display, folder_id or is_pinned.")
+        return attrs
+
+
+class FileCopySerializer(serializers.Serializer):
+    """`POST files/{file_id}/copy/` payload."""
+
+    folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
+    #: Cross-project copy is T-122; the field exists so the refusal is explicit.
+    target_project_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+
+    def validate_name_display(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError("name_display must not be empty.")
+        return name
