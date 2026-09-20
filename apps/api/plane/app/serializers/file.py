@@ -22,7 +22,13 @@ CHECKSUM_SHA256_PATTERN = re.compile(r"\A[0-9a-fA-F]{64}\Z")
 
 
 def user_payload(user):
-    """Return the uploader snapshot returned with files and versions."""
+    """Return the user snapshot returned with files and versions.
+
+    Two different people can be involved: a file's *creator* (its first uploader,
+    stored on the file row and the value the list ``uploader`` filter matches) and
+    a *version's* uploader (stored per version, so a later "my uploads" view can
+    tell them apart).
+    """
     if user is None:
         return None
 
@@ -127,9 +133,13 @@ class FileFolderSerializer(serializers.ModelSerializer):
 
 
 class FileVersionSerializer(serializers.ModelSerializer):
-    """One stored version of a file, including the evidence finalize recorded."""
+    """One stored version of a file, including the evidence finalize recorded.
 
-    uploader = serializers.SerializerMethodField()
+    ``uploaded_by`` is the person who uploaded *this version*, which is not
+    necessarily the file's creator (``file.uploader``).
+    """
+
+    uploaded_by = serializers.SerializerMethodField()
 
     class Meta:
         model = FileVersion
@@ -143,13 +153,13 @@ class FileVersionSerializer(serializers.ModelSerializer):
             "client_checksum_sha256",
             "etag",
             "magic_bytes_checked_at",
-            "uploader",
+            "uploaded_by",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
 
-    def get_uploader(self, obj):
+    def get_uploaded_by(self, obj):
         return user_payload(obj.uploaded_by)
 
 
@@ -173,6 +183,10 @@ class FileObjectSerializer(serializers.ModelSerializer):
 
     ``link_count`` is annotated by the queryset so a listing never issues one
     query per file (R-NFR-1).
+
+    ``uploader`` is the file's **creator** — the person who started the file —
+    which is what the list endpoint's ``uploader`` filter matches. A version's
+    uploader is a separate field on the version payload.
     """
 
     link_count = serializers.IntegerField(read_only=True)

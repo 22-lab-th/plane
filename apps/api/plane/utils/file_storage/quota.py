@@ -51,17 +51,31 @@ class QuotaExceeded(ProjectFileError):
 
 
 def get_usage_rows(project):
-    """Return both counter rows for ``project``, creating missing ones (N-02a).
+    """Return both counter rows for ``project``, creating or reviving them.
 
-    The workspace row carries the ceiling counters because the limit is
-    workspace-level; the project row carries the per-project counters and an
-    optional per-project limit.
+    Both rows are materialised before any lock is taken, because a
+    ``SELECT ... FOR UPDATE`` on an absent row takes no lock and two racers would
+    both pass the ceiling check (N-02a).
+
+    The counters are durable infrastructure rather than user-visible objects, so
+    a row that was soft-deleted is *revived* instead of replaced: the unique
+    constraint spans soft-deleted rows, so inserting a second row would fail, and
+    reusing the row also keeps its counts. The lookup therefore goes through the
+    all-objects manager.
     """
-    quota, _ = StorageQuota.objects.get_or_create(
+    quota, _ = StorageQuota.all_objects.get_or_create(
         workspace_id=project.workspace_id,
         defaults={"limit_bytes": settings.PROJECT_FILE_WORKSPACE_QUOTA_BYTES},
     )
-    usage, _ = ProjectStorageUsage.objects.get_or_create(project_id=project.id)
+    if quota.deleted_at is not None:
+        StorageQuota.all_objects.filter(pk=quota.pk).update(deleted_at=None)
+        quota.deleted_at = None
+
+    usage, _ = ProjectStorageUsage.all_objects.get_or_create(project_id=project.id)
+    if usage.deleted_at is not None:
+        ProjectStorageUsage.all_objects.filter(pk=usage.pk).update(deleted_at=None)
+        usage.deleted_at = None
+
     return quota, usage
 
 

@@ -32,9 +32,13 @@ from plane.db.models import (
     FileObject,
     FileVersion,
     Issue,
+    Page,
     Project,
     ProjectMember,
+    ProjectPage,
+    ProjectStorageUsage,
     State,
+    StorageQuota,
     User,
     Workspace,
     WorkspaceMember,
@@ -131,10 +135,11 @@ def make_file(
     return file_object
 
 
-def make_version(file_object, version_no=1, *, is_active=True, size=100):
+def make_version(file_object, version_no=1, *, is_active=True, size=100, uploaded_by=None):
     return FileVersion.objects.create(
         project=file_object.project,
         file=file_object,
+        uploaded_by=uploaded_by,
         version_no=version_no,
         object_key=f"{file_object.object_key}.v{version_no}",
         bucket="uploads",
@@ -475,6 +480,63 @@ class TestFileListing:
         assert response.status_code == status.HTTP_200_OK
         storage.assert_not_called()
 
+    def test_storage_summary_counts_trashed_files_on_purpose(self, session_client, project, library):
+        """AD-09: trashed files keep consuming quota until they are purged."""
+        response = session_client.get(list_url(project.workspace.slug, project.id))
+
+        assert FileObject.objects.filter(project=project, status=FileObject.Status.TRASHED).count() == 1
+        assert "Delta Trash.pdf" not in names(response)
+        assert response.data["storage"]["file_count"] == 7
+
+    def test_link_count_is_stable_with_and_without_entity_filters(
+        self, session_client, project, library, create_user
+    ):
+        """An entity filter must not shrink the link count of the matching file."""
+        alpha = library["alpha"]
+        page = Page.objects.create(
+            name="Linked page",
+            workspace=project.workspace,
+            owned_by=create_user,
+        )
+        ProjectPage.objects.create(project=project, page=page, workspace=project.workspace)
+        FileLink.objects.create(
+            project=project,
+            file=alpha,
+            entity_type=FileLink.EntityType.PAGE,
+            entity_id=page.id,
+            entity_identifier=str(page.id),
+        )
+
+        unfiltered = session_client.get(list_url(project.workspace.slug, project.id), {"q": "Alpha"})
+        issue_filtered = session_client.get(
+            list_url(project.workspace.slug, project.id), {"q": "Alpha", "entity_type": "issue"}
+        )
+        entity_filtered = session_client.get(
+            list_url(project.workspace.slug, project.id),
+            {"q": "Alpha", "entity_type": "issue", "entity_id": str(library["issue"].id)},
+        )
+        detail = session_client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+
+        assert unfiltered.data["results"][0]["link_count"] == 2
+        assert issue_filtered.data["results"][0]["link_count"] == 2
+        assert entity_filtered.data["results"][0]["link_count"] == 2
+        assert detail.data["link_count"] == 2
+        assert detail.data["file"]["link_count"] == 2
+
+    def test_listing_survives_a_soft_deleted_quota_row(self, session_client, project, library):
+        """A soft-deleted counter row is revived, never duplicated."""
+        StorageQuota.objects.filter(workspace=project.workspace).update(deleted_at=timezone.now())
+        ProjectStorageUsage.objects.filter(project=project).update(deleted_at=timezone.now())
+
+        response = session_client.get(list_url(project.workspace.slug, project.id))
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.data["storage"]["file_count"] == 7
+        assert StorageQuota.all_objects.filter(workspace=project.workspace, deleted_at__isnull=True).count() == 1
+        assert (
+            ProjectStorageUsage.all_objects.filter(project=project, deleted_at__isnull=True).count() == 1
+        )
+
     def test_storage_summary_reports_counts_and_ceilings(self, session_client, project, library):
         response = session_client.get(list_url(project.workspace.slug, project.id))
 
@@ -536,6 +598,19 @@ class TestFileListing:
 @pytest.mark.django_db
 class TestFileDetail:
     """Detail returns versions, links and permissions for the caller."""
+
+    def test_detail_exposes_the_creator_and_the_version_uploader(
+        self, session_client, project, library, create_user
+    ):
+        """The file's creator and a version's uploader are distinct people."""
+        alpha = library["alpha"]
+        contributor = library["contributor"]
+        make_version(alpha, version_no=1, is_active=True, uploaded_by=contributor)
+
+        response = session_client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+
+        assert response.data["file"]["uploader"]["email"] == create_user.email
+        assert response.data["version"]["uploaded_by"]["email"] == contributor.email
 
     def test_detail_returns_the_active_version_links_and_permissions(self, session_client, project, library):
         alpha = library["alpha"]

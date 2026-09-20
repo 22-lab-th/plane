@@ -16,7 +16,8 @@ import uuid
 from datetime import datetime, time
 
 # Django imports
-from django.db.models import Count
+from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
@@ -66,6 +67,29 @@ MAX_BREADCRUMB_DEPTH = 64
 
 def _invalid(field, message):
     raise ProjectFileError(message, code="invalid_request", field=field)
+
+
+def link_count_expression():
+    """Count a file's links in its own subquery.
+
+    An aggregate over the listing's join would only see the links the entity
+    filter selected, so a file with two links would report one whenever
+    ``entity_type`` or ``entity_id`` was supplied. Counting in a dedicated
+    subquery keeps ``link_count`` the same filter or no filter (index-backed on
+    ``file_links.file_id``).
+    """
+    return Coalesce(
+        Subquery(
+            FileLink.objects.filter(file_id=OuterRef("pk"))
+            .order_by()
+            .values("file_id")
+            .annotate(total=Count("id"))
+            .values("total"),
+            output_field=IntegerField(),
+        ),
+        Value(0),
+        output_field=IntegerField(),
+    )
 
 
 def _parse_bool(raw, field):
@@ -247,7 +271,7 @@ def _files_queryset(project, slug, filters):
         queryset = queryset.filter(is_pinned=filters["pinned"])
 
     return (
-        queryset.annotate(link_count=Count("links", distinct=True))
+        queryset.annotate(link_count=link_count_expression())
         .select_related("created_by", "folder")
         .order_by(*ORDERINGS[filters["ordering"]])
     )
@@ -297,7 +321,12 @@ def _folders_for(project, folder):
 
 
 def storage_summary(project):
-    """Return the storage block of the list response (ARCH-001 §4.1, §2.8)."""
+    """Return the storage block of the list response (ARCH-001 §4.1, §2.8).
+
+    The counts include trashed files on purpose: what the bucket stores is what
+    the counters and the counts report, and trashed files keep consuming quota
+    until they are purged (AD-09).
+    """
     quota_row, usage_row = quota.get_usage_rows(project)
     version_count = FileVersion.objects.filter(file__project_id=project.id).count()
 
@@ -372,7 +401,25 @@ def permissions_for(request, project, file_object):
 
 
 class FileListEndpoint(BaseAPIView):
-    """List the files and folders of a project, with the documented filters."""
+    """List the files and folders of a project, with the documented filters.
+
+    Pagination reuses the repository's cursor token, which is an **offset** token
+    (``page_size:page:offset``), not a keyset: a file inserted or trashed between
+    two page requests can therefore shift a row across the page boundary. That is
+    the contract R-FIND-2 permits ("cursor or page pagination consistent with
+    existing Plane list endpoints") and the ordering is still stable for a fixed
+    data set; the trash and restore tickets must keep that in mind when they
+    mutate rows a client may be paging through.
+
+    ``trashed`` is opt-in, so the default view never shows trashed files, and the
+    storage block counts them anyway because trashed files consume quota until
+    they are purged (AD-09).
+
+    Reading this endpoint may create the project's ``storage_quotas`` and
+    ``project_storage_usage`` rows: they are materialised lazily on first use
+    (ARCH-001 §2.8, N-02a) so the ceiling always has a row to lock, and a row
+    that was soft-deleted is revived rather than duplicated.
+    """
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def get(self, request, slug, project_id):
@@ -423,7 +470,7 @@ class FileDetailEndpoint(BaseAPIView):
         # found and the caller learns nothing about it (AD-06).
         file_object = (
             FileObject.objects.filter(project_id=project.id, workspace__slug=slug)
-            .annotate(link_count=Count("links", distinct=True))
+            .annotate(link_count=link_count_expression())
             .select_related("created_by", "folder")
             .get(id=file_id)
         )
