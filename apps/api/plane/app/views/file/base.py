@@ -20,8 +20,11 @@ from django.core.exceptions import ObjectDoesNotExist
 
 # Module imports
 from plane.app.permissions import ROLE
-from plane.db.models import FileFolder, Project, ProjectMember
+from plane.db.models import FileFolder, FileObject, FileVersion, Project, ProjectMember
 from plane.utils.file_storage.errors import ProjectFileError
+
+#: Version states whose object exists and was verified, so it can be served.
+GOOD_VERSION_STATUSES = (FileVersion.Status.ACTIVE, FileVersion.Status.SUPERSEDED)
 
 #: Guard against a folder cycle or a corrupted tree while walking breadcrumbs.
 MAX_BREADCRUMB_DEPTH = 64
@@ -95,6 +98,38 @@ def parse_bool(raw, field):
         return False
 
     raise ProjectFileError(f"{field} must be true or false.", code="invalid_request", field=field)
+
+
+def delivery_refusal(file_object, version):
+    """Return the refusal the delivery endpoints would apply, or ``None``.
+
+    Kept in one place so the ``permissions`` block a detail response advertises
+    and the answer download/preview actually give can never disagree.
+    """
+    if file_object.status == FileObject.Status.TRASHED:
+        return ProjectFileError(
+            "This file is in the trash; restore it before downloading it.",
+            code="file_trashed",
+            status_code=409,
+        )
+
+    if file_object.status == FileObject.Status.QUARANTINED:
+        return ProjectFileError(
+            "This file is quarantined and cannot be served.",
+            code="file_quarantined",
+            status_code=409,
+        )
+
+    if version is None or version.object_deleted_at is not None or version.status not in GOOD_VERSION_STATUSES:
+        return ProjectFileError(
+            "This version has no stored object to serve.",
+            code="object_unavailable",
+            status_code=409,
+            version_no=version.version_no if version is not None else None,
+            version_status=version.status if version is not None else None,
+        )
+
+    return None
 
 
 def breadcrumbs(project, folder):

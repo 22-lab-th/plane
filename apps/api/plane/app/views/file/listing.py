@@ -34,7 +34,7 @@ from plane.app.serializers.file import (
     FileVersionSerializer,
 )
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import breadcrumbs, member_role, parse_bool, project_or_404
+from plane.app.views.file.base import breadcrumbs, delivery_refusal, member_role, parse_bool, project_or_404
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion, ProjectMember
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.errors import ProjectFileError
@@ -345,12 +345,17 @@ def _cursor(request):
     )
 
 
-def permissions_for(request, project, file_object):
+def permissions_for(request, project, file_object, *, version=None):
     """Return the caller's affordances for this file.
 
     GUEST members may list and read but never edit or delete, and an archived
     project is read-only for everyone (AC-37). A file that is already trashed has
     no edit affordance because it is restored rather than edited.
+
+    ``can_download`` is driven by the same predicate the delivery endpoints
+    enforce, so the advertised affordance and the answer download/preview give
+    cannot drift apart (a trashed, quarantined or object-less version reports
+    false here *and* is refused there).
     """
     member = ProjectMember.objects.filter(
         project_id=project.id, member=request.user, is_active=True
@@ -362,7 +367,7 @@ def permissions_for(request, project, file_object):
     return {
         "can_edit": writable and not is_trashed,
         "can_delete": writable,
-        "can_download": True,
+        "can_download": delivery_refusal(file_object, version) is None,
     }
 
 
@@ -473,7 +478,7 @@ class FileDetailEndpoint(BaseAPIView):
                 "versions": FileVersionSerializer(versions, many=True).data,
                 "links": FileLinkSerializer(links, many=True).data,
                 "link_count": file_object.link_count,
-                "permissions": permissions_for(request, project, file_object),
+                "permissions": permissions_for(request, project, file_object, version=version),
             },
             status=status.HTTP_200_OK,
         )

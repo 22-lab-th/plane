@@ -59,6 +59,14 @@ def detail_url(slug, project_id, file_id):
     return f"/api/workspaces/{slug}/projects/{project_id}/files/{file_id}/"
 
 
+def download_url(slug, project_id, file_id):
+    return f"/api/workspaces/{slug}/projects/{project_id}/files/{file_id}/download/"
+
+
+def preview_url(slug, project_id, file_id):
+    return f"/api/workspaces/{slug}/projects/{project_id}/files/{file_id}/preview/"
+
+
 @pytest.fixture
 def workspace(create_user):
     workspace = Workspace.objects.create(name="Listing Workspace", slug="listing-workspace", owner=create_user)
@@ -135,7 +143,7 @@ def make_file(
     return file_object
 
 
-def make_version(file_object, version_no=1, *, is_active=True, size=100, uploaded_by=None):
+def make_version(file_object, version_no=1, *, is_active=True, size=100, uploaded_by=None, status=None):
     return FileVersion.objects.create(
         project=file_object.project,
         file=file_object,
@@ -145,7 +153,7 @@ def make_version(file_object, version_no=1, *, is_active=True, size=100, uploade
         bucket="uploads",
         mime_type=file_object.mime_type,
         size_bytes=size,
-        status=FileVersion.Status.ACTIVE if is_active else FileVersion.Status.SUPERSEDED,
+        status=status or (FileVersion.Status.ACTIVE if is_active else FileVersion.Status.SUPERSEDED),
         is_active=is_active,
     )
 
@@ -663,6 +671,43 @@ class TestFileDetail:
         assert with_flag.data["file"]["status"] == FileObject.Status.TRASHED
         assert with_flag.data["permissions"]["can_edit"] is False
 
+    def test_can_download_agrees_with_the_delivery_endpoints(self, session_client, project, library):
+        """The advertised affordance and the delivery answer come from one rule."""
+        alpha = library["alpha"]
+        make_version(alpha, version_no=1, is_active=True)
+
+        allowed = session_client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+        served = session_client.get(download_url(project.workspace.slug, project.id, alpha.id))
+        preview_served = session_client.get(preview_url(project.workspace.slug, project.id, alpha.id))
+
+        assert allowed.data["permissions"]["can_download"] is True
+        assert served.status_code == status.HTTP_200_OK
+        assert preview_served.status_code == status.HTTP_200_OK
+
+        FileObject.objects.filter(pk=alpha.pk).update(
+            status=FileObject.Status.TRASHED, deleted_at=timezone.now()
+        )
+
+        refused_detail = session_client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+        refused_download = session_client.get(download_url(project.workspace.slug, project.id, alpha.id))
+        refused_preview = session_client.get(preview_url(project.workspace.slug, project.id, alpha.id))
+
+        assert refused_detail.data["permissions"]["can_download"] is False
+        for response in (refused_download, refused_preview):
+            assert response.status_code == status.HTTP_409_CONFLICT
+            assert response.data["code"] == "file_trashed"
+
+    def test_a_file_without_a_serveable_version_advertises_no_download(self, session_client, project, library):
+        beta = library["beta"]
+        make_version(beta, version_no=1, is_active=False, status=FileVersion.Status.FAILED)
+
+        response = session_client.get(detail_url(project.workspace.slug, project.id, beta.id))
+        refused = session_client.get(download_url(project.workspace.slug, project.id, beta.id))
+
+        assert response.data["permissions"]["can_download"] is False
+        assert refused.status_code == status.HTTP_409_CONFLICT
+        assert refused.data["code"] == "object_unavailable"
+
     def test_a_trashed_file_is_addressable_by_an_admin_without_the_flag(self, session_client, project, library):
         alpha = library["alpha"]
         FileObject.objects.filter(pk=alpha.pk).update(
@@ -685,6 +730,7 @@ class TestFileDetail:
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_permissions_for_each_role(self, session_client, project, library):
+        make_version(library["alpha"], version_no=1, is_active=True)
         guest = add_member(project, email="guest@example.com", role=5)
         member = add_member(project, email="member@example.com", role=15)
         admin = add_member(project, email="admin@example.com", role=20)
@@ -752,6 +798,7 @@ class TestIsolationAndLifecycle:
         assert detail.status_code == status.HTTP_403_FORBIDDEN
 
     def test_an_archived_project_is_read_only(self, session_client, project, library, create_user):
+        make_version(library["alpha"], version_no=1, is_active=True)
         Project.objects.filter(pk=project.pk).update(archived_at=timezone.now())
 
         listing = session_client.get(list_url(project.workspace.slug, project.id))

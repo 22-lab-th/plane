@@ -40,7 +40,7 @@ from rest_framework.response import Response
 
 # Module imports
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import project_or_404, require_project_member
+from plane.app.views.file.base import delivery_refusal, project_or_404, require_project_member
 from plane.db.models import FileAccessLog, FileObject, FileVersion
 from plane.settings.storage import S3Storage
 from plane.utils.file_storage.audit import record_file_access
@@ -64,10 +64,6 @@ INLINE_MIME_TYPES = frozenset(
         "text/markdown",
     ]
 )
-
-#: Version states whose object no longer exists or was never verified.
-GOOD_VERSION_STATUSES = (FileVersion.Status.ACTIVE, FileVersion.Status.SUPERSEDED)
-
 
 def is_inline_safe(mime_type):
     """Return True when ``mime_type`` may be rendered inline.
@@ -117,28 +113,9 @@ def resolve_version(file_object, version_no):
     if version is None:
         raise FileVersion.DoesNotExist
 
-    if version.object_deleted_at is not None or version.status not in GOOD_VERSION_STATUSES:
-        raise ProjectFileError(
-            "This version has no stored object to serve.",
-            code="object_unavailable",
-            status_code=status.HTTP_409_CONFLICT,
-            version_no=version.version_no,
-            version_status=version.status,
-        )
-
-    if file_object.status == FileObject.Status.TRASHED:
-        raise ProjectFileError(
-            "This file is in the trash; restore it before downloading it.",
-            code="file_trashed",
-            status_code=status.HTTP_409_CONFLICT,
-        )
-
-    if file_object.status == FileObject.Status.QUARANTINED:
-        raise ProjectFileError(
-            "This file is quarantined and cannot be served.",
-            code="file_quarantined",
-            status_code=status.HTTP_409_CONFLICT,
-        )
+    refusal = delivery_refusal(file_object, version)
+    if refusal is not None:
+        raise refusal
 
     return version
 
@@ -214,7 +191,9 @@ class FileDownloadEndpoint(BaseAPIView):
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
         require_project_member(request, project)
-        file_object = FileObject.objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
+        # All objects: a trashed file must reach the documented 409 rather than
+        # disappearing behind a 404, while a genuinely missing id still 404s.
+        file_object = FileObject.all_objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
 
         return Response(
             issue_file_url(
@@ -238,7 +217,7 @@ class FilePreviewEndpoint(BaseAPIView):
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
         require_project_member(request, project)
-        file_object = FileObject.objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
+        file_object = FileObject.all_objects.filter(project_id=project.id, workspace__slug=slug).get(id=file_id)
 
         disposition = "inline" if is_inline_safe(file_object.mime_type) else "attachment"
 

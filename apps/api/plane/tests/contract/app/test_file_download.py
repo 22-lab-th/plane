@@ -423,18 +423,60 @@ class TestVersionSelection:
         assert response.data["version_status"] == status_value
 
     def test_a_trashed_file_is_not_served(self, session_client, project, stored_objects):
-        """A trashed file is restored before it is downloaded or previewed."""
-        file_object, _ = make_file_with_object(
-            project, name="trashed.pdf", mime="application/pdf", content=PDF_BYTES, stored_objects=stored_objects,
-            file_status=FileObject.Status.TRASHED,
-        )
+        """A trashed file is restored before it is downloaded or previewed.
 
-        download = session_client.get(download_url(project.workspace.slug, project.id, file_object.id))
-        preview = session_client.get(preview_url(project.workspace.slug, project.id, file_object.id))
+        The trashed state is produced by the real API (upload, finalize, then a
+        recursive folder delete), so the refusal is exercised on a state an
+        endpoint actually creates rather than one built by hand.
+        """
+        folders = f"/api/workspaces/{project.workspace.slug}/projects/{project.id}/files/folders/"
+        folder_id = session_client.post(folders, {"name": "Trash"}, format="json").data["folder"]["id"]
+
+        initiate = session_client.post(
+            f"/api/workspaces/{project.workspace.slug}/projects/{project.id}/files/initiate-upload/",
+            {
+                "file_name": "trashed.pdf",
+                "size_bytes": len(PDF_BYTES),
+                "mime_type": "application/pdf",
+                "folder_id": str(folder_id),
+            },
+            format="json",
+        )
+        assert initiate.status_code == status.HTTP_200_OK, initiate.data
+        file_id = initiate.data["file"]["id"]
+        stored_objects.append(initiate.data["file"]["object_key"])
+        assert (
+            requests.put(
+                initiate.data["upload"]["url"],
+                data=PDF_BYTES,
+                headers=initiate.data["upload"]["headers"],
+                timeout=30,
+            ).status_code
+            == 200
+        )
+        complete = session_client.post(
+            f"/api/workspaces/{project.workspace.slug}/projects/{project.id}/files/{file_id}/complete-upload/",
+            {"version_no": 1, "size_bytes": len(PDF_BYTES)},
+            format="json",
+        )
+        assert complete.status_code == status.HTTP_200_OK, complete.data
+        assert session_client.get(download_url(project.workspace.slug, project.id, file_id)).status_code == 200
+
+        trashed = session_client.delete(f"{folders}{folder_id}/?recursive=true")
+        assert trashed.status_code == status.HTTP_204_NO_CONTENT
+
+        download = session_client.get(download_url(project.workspace.slug, project.id, file_id))
+        preview = session_client.get(preview_url(project.workspace.slug, project.id, file_id))
 
         for response in (download, preview):
             assert response.status_code == status.HTTP_409_CONFLICT
             assert response.data["code"] == "file_trashed"
+
+    def test_an_unknown_file_is_still_not_found(self, session_client, project):
+        response = session_client.get(download_url(project.workspace.slug, project.id, uuid.uuid4()))
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.data == {"error": "The required object does not exist."}
 
     def test_a_quarantined_file_is_refused(self, session_client, project, stored_objects):
         file_object, _ = make_file_with_object(
