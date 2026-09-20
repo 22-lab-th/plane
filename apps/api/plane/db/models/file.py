@@ -151,17 +151,23 @@ class FileObject(ProjectBaseModel):
     def reconcile_pointer(self, *, save=True):
         """Point ``object_key``/``current_version_no`` at what this file still has.
 
-        The pair names the file's current version (ARCH-001 §2.3), and a purge or a
-        repair can leave it naming a version whose object was just deleted. It is
-        reconciled to the active version when there is one, otherwise to the newest
-        version whose object is still stored, with ``current_version_no = 0`` - the
-        value a file with no active version carries, which is what tells a client
-        not to read the pair as naming the active version. ``object_key`` cannot be
-        nulled (the column is unique and not null), so it keeps naming the best key
-        the file has rather than a deleted one.
+        **The contract these two columns hold** (ARCH-001 §2.3), which the quota
+        recompute and the file UI both read:
 
-        Called by the purge's failure path and the activation path's repair, so a
-        partially purged file never displays data its objects no longer back.
+        * ``object_key`` always names a key that is actually stored - never a key
+          whose object a purge, a sweep or a repair removed. The column is unique
+          and not null, so it cannot be cleared; it is the key that is stored, and
+          it is not by itself a statement that the file can be served.
+        * ``current_version_no == 0`` means **no version is active**. That is the
+          signal that ``object_key`` names a stored key rather than the active
+          version's, and it is the same value a file that has never been finalised
+          carries. Any non-zero value names the active version, and that version's
+          row matches the key.
+
+        A purge or a repair can leave the pair naming a version whose object was
+        just deleted, so both callers reconcile it: the active version when there is
+        one, otherwise the newest version whose object is still stored with
+        ``current_version_no = 0``.
         """
         active = FileVersion.objects.filter(file_id=self.id, is_active=True).first()
         if active is not None:
