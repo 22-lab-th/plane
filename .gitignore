@@ -120,5 +120,7 @@ packages/i18n/src/types/keys.generated.ts
 
 # Local Playwright SSO runtime artifacts
 .e2e-sso/
+.e2e-files/
 test-results/
 playwright-report/
+.aidd/

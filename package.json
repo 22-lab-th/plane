@@ -18,6 +18,7 @@
     "check:format": "turbo run check:format",
     "check:types": "turbo run check:types",
     "test:e2e:sso": "bash e2e/sso/run.sh",
+    "test:e2e:files": "bash e2e/files/run.sh",
     "prepare": "husky",
     "doctor": "npx react-doctor@latest"
   },

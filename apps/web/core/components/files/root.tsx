@@ -1,0 +1,312 @@
+/**
+ * Copyright (c) 2023-present Plane Software, Inc. and contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * See the LICENSE file for details.
+ */
+
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { observer } from "mobx-react";
+import { usePathname, useSearchParams } from "next/navigation";
+import useSWR from "swr";
+// plane imports
+import { EUserPermissions } from "@plane/constants";
+import type { IProjectFileListResponse, TProjectFileOrdering } from "@/services/project-file.service";
+import {
+  PROJECT_FILE_DEFAULT_ORDERING,
+  ProjectFileService,
+  isProjectFileOrdering,
+} from "@/services/project-file.service";
+// components
+import { FilesBreadcrumbs } from "./breadcrumbs";
+import { FileDetailDrawer } from "./detail-drawer";
+import { FilesGrid } from "./grid-view";
+// helpers
+import {
+  buildFilesRows,
+  buildListQuery,
+  isFilesQuickView,
+  isFilesViewMode,
+  type TFilesQuickView,
+  type TFilesViewMode,
+} from "./helpers";
+import { FilesQuickViews } from "./quick-views";
+import {
+  FilesEmptyState,
+  FilesErrorBanner,
+  FilesErrorState,
+  FilesLoadingState,
+  FilesNoMatchState,
+  FilesReadonlyNotice,
+} from "./states";
+import { FilesTable } from "./table-view";
+import { FilesToolbar } from "./toolbar";
+// hooks
+import { useUserPermissions } from "@/hooks/store/user";
+import { useAppRouter } from "@/hooks/use-app-router";
+
+const fileService = new ProjectFileService();
+
+/** How long typing has to pause before the term is turned into a list request. */
+const SEARCH_DEBOUNCE_MS = 300;
+
+type Props = {
+  workspaceSlug: string;
+  projectId: string;
+};
+
+/**
+ * The Files tab. The URL is the single source of truth for what is being
+ * browsed (`folder`, `view`, `q`, `ordering`, `mode`) and for the open drawer
+ * (`file`), so every surface here is linkable and the back button walks the
+ * same path the user did.
+ */
+export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props) {
+  const { workspaceSlug, projectId } = props;
+
+  // router
+  const router = useAppRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // what the URL currently says
+  const folderParam = searchParams.get("folder");
+  const folderId = folderParam && folderParam !== "root" ? folderParam : null;
+  const viewParam = searchParams.get("view");
+  const quickView: TFilesQuickView = isFilesQuickView(viewParam) ? viewParam : "all";
+  const queryParam = searchParams.get("q") ?? "";
+  const orderingParam = searchParams.get("ordering");
+  const ordering = isProjectFileOrdering(orderingParam) ? orderingParam : PROJECT_FILE_DEFAULT_ORDERING;
+  const modeParam = searchParams.get("mode");
+  const fileId = searchParams.get("file");
+
+  // store hooks
+  const { getProjectRoleByWorkspaceSlugAndProjectId } = useUserPermissions();
+  // the same permission source the navigation item is filtered by: a GUEST lists and reads, and may not mutate
+  const isReadOnly = getProjectRoleByWorkspaceSlugAndProjectId(workspaceSlug, projectId) === EUserPermissions.GUEST;
+
+  // view mode: an explicit `mode` wins, otherwise the breakpoint decides (DESIGN §5)
+  const [responsiveViewMode, setResponsiveViewMode] = useState<TFilesViewMode>("table");
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 768px) and (max-width: 1023px)");
+    const apply = () => setResponsiveViewMode(query.matches ? "grid" : "table");
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+  const viewMode: TFilesViewMode = isFilesViewMode(modeParam) ? modeParam : responsiveViewMode;
+
+  const updateParams = useCallback(
+    (updates: Record<string, string | null>, options: { replace?: boolean } = {}) => {
+      const next = new URLSearchParams(searchParams.toString());
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null) next.delete(key);
+        else next.set(key, value);
+      });
+      const queryString = next.toString();
+      const target = queryString ? `${pathname}?${queryString}` : pathname;
+      if (options.replace) router.replace(target);
+      else router.push(target);
+    },
+    [pathname, router, searchParams]
+  );
+
+  // the search box holds its own value; the URL only learns about it once typing pauses
+  const [searchInput, setSearchInput] = useState(queryParam);
+  const lastPushedQuery = useRef(queryParam);
+  const previousQueryParam = useRef(queryParam);
+
+  // the URL changed underneath us (back button, a link): follow it, but never while typing
+  useEffect(() => {
+    if (previousQueryParam.current === queryParam) return;
+    previousQueryParam.current = queryParam;
+    if (lastPushedQuery.current === queryParam) return;
+    lastPushedQuery.current = queryParam;
+    setSearchInput(queryParam);
+  }, [queryParam]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      if (searchInput === queryParam) return;
+      lastPushedQuery.current = searchInput;
+      updateParams({ q: searchInput ? searchInput : null, file: null });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(handle);
+  }, [searchInput, queryParam, updateParams]);
+
+  // the list request: folder, search, quick view and ordering all come from the URL
+  const listQuery = useMemo(
+    () => buildListQuery({ folderId, query: queryParam, quickView, ordering }),
+    [folderId, ordering, queryParam, quickView]
+  );
+
+  const listKey = useMemo(
+    () => ["PROJECT_FILES_LIST", workspaceSlug, projectId, listQuery] as const,
+    [listQuery, projectId, workspaceSlug]
+  );
+
+  const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(
+    listKey,
+    () => fileService.listProjectFiles(workspaceSlug, projectId, listQuery),
+    { keepPreviousData: true, revalidateOnFocus: false }
+  );
+
+  const rows = useMemo(() => buildFilesRows(data?.folders ?? [], data?.results ?? []), [data]);
+  const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
+
+  // keyboard walk over the rows, in the order they are rendered
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const registerRow = useCallback((rowKey: string, element: HTMLElement | null) => {
+    if (element) rowRefs.current.set(rowKey, element);
+    else rowRefs.current.delete(rowKey);
+  }, []);
+
+  const lastOpenedRowKey = useRef<string | null>(null);
+
+  const handleOpenFile = useCallback(
+    (selectedFileId: string) => {
+      lastOpenedRowKey.current = `file-${selectedFileId}`;
+      updateParams({ file: selectedFileId });
+    },
+    [updateParams]
+  );
+
+  /** Both the breadcrumbs and a folder row browse the same way; `null` is the root. */
+  const handleOpenFolder = useCallback(
+    (selectedFolderId: string | null) => {
+      updateParams({ folder: selectedFolderId, file: null });
+    },
+    [updateParams]
+  );
+
+  const openRow = useCallback(
+    (rowKey: string) => {
+      const row = rows.find((candidate) => candidate.key === rowKey);
+      if (!row) return;
+      if (row.kind === "folder") handleOpenFolder(row.folder.id);
+      else handleOpenFile(row.file.id);
+    },
+    [handleOpenFile, handleOpenFolder, rows]
+  );
+
+  const handleCloseDrawer = useCallback(() => {
+    const rowKey = lastOpenedRowKey.current;
+    updateParams({ file: null }, { replace: true });
+    // focus goes back to the row that opened the drawer (DESIGN §6)
+    if (rowKey) window.requestAnimationFrame(() => rowRefs.current.get(rowKey)?.focus());
+  }, [updateParams]);
+
+  const handleRowKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>, rowKey: string) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const index = rowKeys.indexOf(rowKey);
+        if (index === -1) return;
+        const nextKey = rowKeys[event.key === "ArrowDown" ? index + 1 : index - 1];
+        if (nextKey) rowRefs.current.get(nextKey)?.focus();
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openRow(rowKey);
+      }
+    },
+    [openRow, rowKeys]
+  );
+
+  const handleQuickView = useCallback(
+    (view: TFilesQuickView) => {
+      updateParams({ view: view === "all" ? null : view, file: null });
+    },
+    [updateParams]
+  );
+
+  const handleOrderingChange = useCallback(
+    (nextOrdering: TProjectFileOrdering) => {
+      updateParams({
+        ordering: nextOrdering === PROJECT_FILE_DEFAULT_ORDERING ? null : nextOrdering,
+        file: null,
+      });
+    },
+    [updateParams]
+  );
+
+  const handleViewModeChange = useCallback(
+    (mode: TFilesViewMode) => {
+      updateParams({ mode }, { replace: true });
+    },
+    [updateParams]
+  );
+
+  const handleClearFilters = useCallback(() => {
+    lastPushedQuery.current = "";
+    previousQueryParam.current = "";
+    setSearchInput("");
+    updateParams({ q: null, view: null, file: null }, { replace: true });
+  }, [updateParams]);
+
+  const hasFilters = queryParam.trim().length > 0 || quickView !== "all";
+  const hasNoRows = !!data && data.results.length === 0 && data.folders.length === 0;
+
+  return (
+    <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden">
+      <FilesToolbar
+        storage={data?.storage}
+        searchValue={searchInput}
+        onSearchChange={setSearchInput}
+        viewMode={viewMode}
+        onViewModeChange={handleViewModeChange}
+      />
+      <FilesBreadcrumbs breadcrumbs={data?.breadcrumbs ?? []} onNavigate={handleOpenFolder} />
+      {isReadOnly && <FilesReadonlyNotice />}
+      {error && data && <FilesErrorBanner onRetry={() => void mutate()} />}
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)]">
+        <FilesQuickViews
+          activeView={quickView}
+          onSelect={handleQuickView}
+          className="border-b border-subtle xl:flex-col xl:items-stretch xl:border-r xl:border-b-0"
+        />
+        <div className="min-h-0 overflow-y-auto">
+          {isLoading && !data ? (
+            <FilesLoadingState />
+          ) : error && !data ? (
+            <FilesErrorState onRetry={() => void mutate()} />
+          ) : hasNoRows && hasFilters ? (
+            <FilesNoMatchState onClearFilters={handleClearFilters} />
+          ) : hasNoRows ? (
+            <FilesEmptyState />
+          ) : viewMode === "grid" ? (
+            <FilesGrid
+              rows={rows}
+              onOpenFolder={handleOpenFolder}
+              onOpenFile={handleOpenFile}
+              registerRow={registerRow}
+              onRowKeyDown={handleRowKeyDown}
+            />
+          ) : (
+            <FilesTable
+              rows={rows}
+              ordering={ordering}
+              onOrderingChange={handleOrderingChange}
+              onOpenFolder={handleOpenFolder}
+              onOpenFile={handleOpenFile}
+              registerRow={registerRow}
+              onRowKeyDown={handleRowKeyDown}
+            />
+          )}
+        </div>
+      </div>
+      {fileId && (
+        <FileDetailDrawer
+          workspaceSlug={workspaceSlug}
+          projectId={projectId}
+          fileId={fileId}
+          trashed={quickView === "trash"}
+          onClose={handleCloseDrawer}
+        />
+      )}
+    </div>
+  );
+});
