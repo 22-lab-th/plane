@@ -23,7 +23,7 @@ from django.utils import timezone
 import boto3
 import pytest
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from django.conf import settings
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -559,6 +559,69 @@ class TestPurge:
         assert FileAccessLog.objects.filter(
             file_id=file_object, action=FileAccessLog.Action.PURGED
         ).get().metadata["trigger"] == "retention"
+
+    def test_a_raising_object_deletion_is_a_failure_too_not_a_500(
+        self, session_client, project, stored_objects, independent_store
+    ):
+        """F-1: a storage client raises outside ClientError on a connection error."""
+        file_object, object_key = upload_file(session_client, project, stored_objects=stored_objects)
+        assert trash(session_client, project, file_object).status_code == status.HTTP_204_NO_CONTENT
+        failure = EndpointConnectionError(endpoint_url="http://test-minio:9000")
+
+        with mock.patch.object(S3Storage, "delete_files", side_effect=failure):
+            response = session_client.delete(
+                purge_url(project.workspace.slug, project.id, file_object) + "?confirm=true"
+            )
+
+        assert response.status_code == status.HTTP_502_BAD_GATEWAY, response.data
+        assert response.data["code"] == "storage_unavailable"
+
+        failed = FileObject.all_objects.get(pk=file_object)
+        assert failed.status == FileObject.Status.PURGE_FAILED
+        assert failed.deleted_at is not None
+        assert FileVersion.objects.get(file_id=file_object).status == FileVersion.Status.PURGE_FAILED
+        assert object_exists(independent_store, object_key) is True
+        assert usage_bytes(project)[0] == len(PDF_BYTES)
+        assert FileAccessLog.objects.filter(file_id=file_object, action=FileAccessLog.Action.PURGED).count() == 0
+
+        # And the retry, once the store answers again, still finishes the job.
+        assert purge_expired_files(batch_size=10) == {"purged": 1, "failed": 0, "scanned": 1}
+        assert FileObject.all_objects.filter(pk=file_object).exists() is False
+        assert object_exists(independent_store, object_key) is False
+        assert usage_bytes(project) == (0, 0)
+
+    def test_one_bad_row_does_not_abort_the_batch(self, session_client, project, stored_objects):
+        """F-1: the rest of the batch still runs when one row's deletion raises."""
+        first, first_key = upload_file(session_client, project, name="First.pdf", stored_objects=stored_objects)
+        second, second_key = upload_file(session_client, project, name="Second.pdf", stored_objects=stored_objects)
+        for file_id in (first, second):
+            assert trash(session_client, project, file_id).status_code == status.HTTP_204_NO_CONTENT
+        # Strictly older, so the failing row is certainly the one the batch reaches
+        # first: only then does a purged second row prove the loop continued.
+        FileObject.all_objects.filter(pk=first).update(deleted_at=timezone.now() - timedelta(days=32))
+        FileObject.all_objects.filter(pk=second).update(deleted_at=timezone.now() - timedelta(days=31))
+
+        real_delete = S3Storage.delete_files
+        failure = EndpointConnectionError(endpoint_url="http://test-minio:9000")
+
+        def flaky_delete(self, object_names):
+            if first_key in object_names:
+                raise failure
+            return real_delete(self, object_names)
+
+        # Patched as a context manager, so the fixture's own cleanup (which deletes
+        # the surviving object) runs against the real method again.
+        with mock.patch.object(S3Storage, "delete_files", flaky_delete):
+            summary = purge_expired_files(batch_size=10)
+
+        assert summary == {"purged": 1, "failed": 1, "scanned": 2}
+        # The bad row is left retryable, with its object and its bytes intact.
+        assert FileObject.all_objects.get(pk=first).status == FileObject.Status.PURGE_FAILED
+        assert usage_bytes(project)[0] == len(PDF_BYTES)
+        # The other row was still purged in the same run.
+        assert FileObject.all_objects.filter(pk=second).exists() is False
+        assert FileVersion.objects.filter(file_id=second).count() == 0
+        assert FileAccessLog.objects.filter(file_id=second, action=FileAccessLog.Action.PURGED).count() == 1
 
     def test_purge_is_idempotent(self, session_client, project, stored_objects, independent_store):
         file_object, object_key = upload_file(session_client, project, stored_objects=stored_objects)

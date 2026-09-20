@@ -74,6 +74,7 @@ from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.purge import purge_file as run_purge
+from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.object_key import build_object_key
 
@@ -292,7 +293,17 @@ class FileCopyEndpoint(BaseAPIView):
                 quota.ensure_within_limits(quota_row, usage_row, requested_bytes=total_bytes)
 
                 for source_version, object_key in plan:
-                    if storage.copy_object(source_version.object_key, object_key) is None:
+                    # ``copy_object`` reports a failed call as ``None``, but the
+                    # client can also raise outside ``ClientError`` (a connection
+                    # error or a timeout); both mean the copy did not happen, so both
+                    # answer the same 502 instead of an unhandled 500.
+                    try:
+                        copied = storage.copy_object(source_version.object_key, object_key)
+                    except Exception as exc:
+                        log_exception(exc)
+                        copied = None
+
+                    if copied is None:
                         raise ProjectFileError(
                             "The storage provider could not copy this object.",
                             code="storage_unavailable",
@@ -591,6 +602,13 @@ class FilePurgeEndpoint(BaseAPIView):
     scheduled task calls too - the endpoint must not have its own ordering, because
     the ordering ("every object first, then the audit event, then the row") is what
     keeps a row from disappearing while an object survives (R3-02).
+
+    The purge is performed synchronously and answered with ``204``. ARCH-001 §4.4
+    words this endpoint as queuing a purge job; the hand-off is deliberately not
+    implemented while this environment has no worker path (the broker is
+    unreachable and the smoke test asserts the post-conditions immediately after
+    the call), so one ordering is shared with the task instead of two. Revisit when
+    a worker path exists: the task is already the executor.
     """
 
     throttle_classes = [ProjectFileUploadThrottle]

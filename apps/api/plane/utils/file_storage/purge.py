@@ -19,6 +19,14 @@ Both the ADMIN endpoint and the scheduled ``purge_expired_files`` task call
 :func:`purge_file`, so the endpoint cannot invent a different order under time
 pressure. Deletion is application-driven: the keys come from ``file_versions``
 and the bucket is never listed (AD-12, AD-13).
+
+The endpoint performs the purge **synchronously** and answers ``204``. ARCH-001
+§4.4 words the endpoint as queuing a purge job; that hand-off is deliberately not
+implemented while there is no worker path in this environment (the broker is
+unreachable, and the smoke test asserts the post-conditions immediately after the
+call), and the synchronous call keeps a single ordering shared with the task. It
+is to be revisited when a worker path exists - the task already exists and only
+needs to become the endpoint's executor.
 """
 
 # Python imports
@@ -33,6 +41,7 @@ from django.utils import timezone
 # Module imports
 from plane.db.models import FileAccessLog, FileObject, FileVersion, Project
 from plane.settings.storage import S3Storage
+from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage import quota as quota_module
 from plane.utils.file_storage.audit import record_file_access
 
@@ -112,7 +121,18 @@ def purge_file(file_object, *, request=None, trigger="manual"):
         if version.object_deleted_at is not None:
             # An earlier attempt (or the sweep) already removed this object.
             continue
-        if not storage.delete_files([version.object_key]):
+        try:
+            deleted = storage.delete_files([version.object_key])
+        except Exception as exc:
+            # ``delete_files`` reports a failed API call as ``False``, but a client
+            # can also raise outside botocore's ``ClientError`` - a connection
+            # error or a timeout, for instance. Both mean "this object is still
+            # stored", so both become the retryable ``purge_failed`` state instead
+            # of an unhandled 500 that leaves the row looking purgeable.
+            log_exception(exc)
+            deleted = False
+
+        if not deleted:
             _mark_purge_failed(file_object, version)
             return False
         version.mark_status(FileVersion.Status.PURGED, save=False)
@@ -175,9 +195,16 @@ def purge_expired_batch(*, limit=PURGE_BATCH_SIZE):
     failed = 0
 
     for file_object in purgeable_files(limit=limit):
-        if purge_file(file_object, trigger="retention"):
-            purged += 1
-        else:
+        # One row's failure must not abort the batch: the row keeps its objects and
+        # its status, so the next run retries it, while every other row is still
+        # purged today rather than tomorrow.
+        try:
+            if purge_file(file_object, trigger="retention"):
+                purged += 1
+            else:
+                failed += 1
+        except Exception as exc:
+            log_exception(exc)
             failed += 1
 
     return {"purged": purged, "failed": failed, "scanned": purged + failed}
