@@ -523,9 +523,9 @@ export async function snapshotList(
 /** A write through the session's cookies, carrying the CSRF token the API needs. */
 export async function apiWrite(
   page: Page,
-  method: "post" | "patch",
+  method: "post" | "patch" | "delete",
   url: string,
-  data: Record<string, unknown>
+  data?: Record<string, unknown>
 ): Promise<APIResponse> {
   const tokenResponse = await page.request.get(`${API_URL}/auth/get-csrf-token/`);
   expect(tokenResponse.ok(), "the session needs a CSRF token for its writes").toBe(true);
@@ -535,7 +535,7 @@ export async function apiWrite(
     data,
     headers: { "X-CSRFToken": csrfToken, Origin: WEB_URL, Referer: `${WEB_URL}/` },
   });
-  // A create answers 201, a patch 200: what matters is that the write succeeded.
+  // A create answers 201, a patch 200, a delete 204: what matters is that the write succeeded.
   expect(response.status(), `${method.toUpperCase()} ${url}`).toBeGreaterThanOrEqual(200);
   expect(response.status(), `${method.toUpperCase()} ${url}`).toBeLessThan(300);
   return response;
