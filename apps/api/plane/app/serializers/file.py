@@ -190,6 +190,7 @@ class FileObjectSerializer(serializers.ModelSerializer):
     """
 
     link_count = serializers.IntegerField(read_only=True)
+    trashed = serializers.SerializerMethodField()
     uploader = serializers.SerializerMethodField()
 
     class Meta:
@@ -212,11 +213,16 @@ class FileObjectSerializer(serializers.ModelSerializer):
             "is_pinned",
             "last_accessed_at",
             "link_count",
+            "trashed",
             "uploader",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_trashed(self, obj):
+        """Explicit markup so a client can tell a trashed file from a live one."""
+        return obj.status == FileObject.Status.TRASHED
 
     def get_uploader(self, obj):
         return user_payload(obj.created_by)

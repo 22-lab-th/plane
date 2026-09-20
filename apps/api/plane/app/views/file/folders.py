@@ -48,6 +48,42 @@ from plane.utils.file_storage.naming import normalize_name
 MAX_FOLDER_DEPTH = 32
 
 
+#: Constraint names the folder write path can hit, so a conflict can be reported
+#: as what it is instead of a generic name collision.
+NAME_CONSTRAINT_NAME = "file_folder_unique_name_in_parent_when_deleted_at_null"
+DEPTH_CONSTRAINT_HINT = "depth"
+
+
+def folder_conflict(exc, *, name_normalized):
+    """Translate an integrity error on the folder table into a specific refusal."""
+    cause = getattr(exc, "__cause__", None)
+    diagnostics = getattr(cause, "diag", None)
+    constraint = getattr(diagnostics, "constraint_name", "") or ""
+
+    if NAME_CONSTRAINT_NAME in constraint:
+        return ProjectFileError(
+            "A folder with this name already exists here.",
+            code="folder_name_conflict",
+            status_code=status.HTTP_409_CONFLICT,
+            name_normalized=name_normalized,
+        )
+
+    if DEPTH_CONSTRAINT_HINT in constraint:
+        return ProjectFileError(
+            "The folder depth is out of range.",
+            code="depth_limit_exceeded",
+            status_code=status.HTTP_409_CONFLICT,
+            max_depth=MAX_FOLDER_DEPTH,
+        )
+
+    return ProjectFileError(
+        "The folder could not be created or moved because it conflicts with the current tree.",
+        code="folder_conflict",
+        status_code=status.HTTP_409_CONFLICT,
+        constraint=constraint or None,
+    )
+
+
 def folder_or_404(project, folder_id):
     """Return the folder inside this project; a foreign folder is not found."""
     return FileFolder.objects.get(id=folder_id, project_id=project.id)
@@ -141,13 +177,8 @@ class FileFolderListEndpoint(BaseAPIView):
         try:
             with transaction.atomic():
                 folder.save(force_insert=True, created_by_id=request.user.id)
-        except IntegrityError:
-            raise ProjectFileError(
-                "A folder with this name already exists here.",
-                code="folder_name_conflict",
-                status_code=status.HTTP_409_CONFLICT,
-                name_normalized=folder.name_normalized,
-            )
+        except IntegrityError as exc:
+            raise folder_conflict(exc, name_normalized=folder.name_normalized)
 
         return Response(folder_payload(project, folder), status=status.HTTP_200_OK)
 
@@ -203,13 +234,8 @@ class FileFolderDetailEndpoint(BaseAPIView):
                 folder.name = name
                 folder.name_normalized = normalize_name(name)
                 folder.save(update_fields=["parent", "depth", "name", "name_normalized", "updated_at"])
-        except IntegrityError:
-            raise ProjectFileError(
-                "A folder with this name already exists in the destination folder.",
-                code="folder_name_conflict",
-                status_code=status.HTTP_409_CONFLICT,
-                name_normalized=folder.name_normalized,
-            )
+        except IntegrityError as exc:
+            raise folder_conflict(exc, name_normalized=folder.name_normalized)
 
         return Response(folder_payload(project, folder), status=status.HTTP_200_OK)
 
@@ -232,19 +258,21 @@ class FileFolderDetailEndpoint(BaseAPIView):
             # uploaded while the delete is in flight is either seen here (and the
             # delete is refused without recursive=true) or lands in an already
             # deleted folder (and the upload itself fails).
-            child_folders = FileFolder.objects.filter(project_id=project.id, parent_id=folder.id).count()
             live_files = FileObject.objects.filter(project_id=project.id, folder_id__in=subtree).exclude(
                 status=FileObject.Status.TRASHED
             )
 
             if not recursive:
+                # Both counts describe the whole subtree, so they answer the same
+                # question the UI asks ("what will be trashed?").
+                descendant_folder_count = len(subtree) - 1
                 file_count = live_files.count()
-                if child_folders or file_count:
+                if descendant_folder_count or file_count:
                     raise ProjectFileError(
                         "This folder is not empty; pass recursive=true to move its contents to trash.",
                         code="folder_not_empty",
                         status_code=status.HTTP_409_CONFLICT,
-                        folder_count=child_folders,
+                        descendant_folder_count=descendant_folder_count,
                         file_count=file_count,
                     )
 

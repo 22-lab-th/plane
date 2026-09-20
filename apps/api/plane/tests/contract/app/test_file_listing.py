@@ -623,6 +623,7 @@ class TestFileDetail:
         assert response.data["file"]["id"] == str(alpha.id)
         assert response.data["file"]["link_count"] == 1
         assert response.data["link_count"] == 1
+        assert response.data["file"]["trashed"] is False
         assert [version["version_no"] for version in response.data["versions"]] == [2, 1]
         assert response.data["version"]["version_no"] == 1
         assert response.data["version"]["is_active"] is True
@@ -643,6 +644,35 @@ class TestFileDetail:
         assert response.data["version"]["is_active"] is False
         # The active pointer is untouched.
         assert FileVersion.objects.get(file=alpha, version_no=1).is_active is True
+
+    def test_a_trashed_file_is_addressable_when_asked_for(self, project, library):
+        """The trash view can open a trashed file, but a live-only lookup cannot."""
+        member = add_member(project, email="member-trash@example.com", role=15)
+        alpha = library["alpha"]
+        FileObject.objects.filter(pk=alpha.pk).update(
+            status=FileObject.Status.TRASHED, deleted_at=timezone.now()
+        )
+        client = client_for(member)
+
+        live_only = client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+        with_flag = client.get(detail_url(project.workspace.slug, project.id, alpha.id), {"trashed": "true"})
+
+        assert live_only.status_code == status.HTTP_404_NOT_FOUND
+        assert with_flag.status_code == status.HTTP_200_OK, with_flag.data
+        assert with_flag.data["file"]["trashed"] is True
+        assert with_flag.data["file"]["status"] == FileObject.Status.TRASHED
+        assert with_flag.data["permissions"]["can_edit"] is False
+
+    def test_a_trashed_file_is_addressable_by_an_admin_without_the_flag(self, session_client, project, library):
+        alpha = library["alpha"]
+        FileObject.objects.filter(pk=alpha.pk).update(
+            status=FileObject.Status.TRASHED, deleted_at=timezone.now()
+        )
+
+        response = session_client.get(detail_url(project.workspace.slug, project.id, alpha.id))
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.data["file"]["trashed"] is True
 
     def test_unknown_version_is_not_found(self, session_client, project, library):
         alpha = library["alpha"]

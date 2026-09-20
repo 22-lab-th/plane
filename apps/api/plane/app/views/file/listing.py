@@ -34,7 +34,7 @@ from plane.app.serializers.file import (
     FileVersionSerializer,
 )
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import breadcrumbs, parse_bool, project_or_404
+from plane.app.views.file.base import breadcrumbs, member_role, parse_bool, project_or_404
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion, ProjectMember
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.errors import ProjectFileError
@@ -426,16 +426,30 @@ class FileListEndpoint(BaseAPIView):
 
 
 class FileDetailEndpoint(BaseAPIView):
-    """Return one file with its versions, links and the caller's permissions."""
+    """Return one file with its versions, links and the caller's permissions.
+
+    A live-only lookup is the default, so a trashed file is not found; the caller
+    may address the trash explicitly with ``?trashed=true`` (the same flag the
+    listing uses, so a UI holding a trashed file id can open it to restore it),
+    and a project ADMIN may address trashed rows without the flag. Either way the
+    payload carries a ``trashed`` marker.
+    """
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def get(self, request, slug, project_id, file_id):
         project = project_or_404(slug, project_id)
 
+        raw_trashed = request.query_params.get("trashed")
+        include_trashed = (
+            parse_bool(raw_trashed, "trashed") if raw_trashed not in (None, "") else False
+        ) or member_role(request, project) == ROLE.ADMIN.value
+
+        manager = FileObject.all_objects if include_trashed else FileObject.objects
+
         # Scoped by project, so a file belonging to another project is simply not
         # found and the caller learns nothing about it (AD-06).
         file_object = (
-            FileObject.objects.filter(project_id=project.id, workspace__slug=slug)
+            manager.filter(project_id=project.id, workspace__slug=slug)
             .annotate(link_count=link_count_expression())
             .select_related("created_by", "folder")
             .get(id=file_id)

@@ -126,6 +126,13 @@ def resolve_version(file_object, version_no):
             version_status=version.status,
         )
 
+    if file_object.status == FileObject.Status.TRASHED:
+        raise ProjectFileError(
+            "This file is in the trash; restore it before downloading it.",
+            code="file_trashed",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
     if file_object.status == FileObject.Status.QUARANTINED:
         raise ProjectFileError(
             "This file is quarantined and cannot be served.",

@@ -422,6 +422,20 @@ class TestVersionSelection:
         assert response.data["code"] == "object_unavailable"
         assert response.data["version_status"] == status_value
 
+    def test_a_trashed_file_is_not_served(self, session_client, project, stored_objects):
+        """A trashed file is restored before it is downloaded or previewed."""
+        file_object, _ = make_file_with_object(
+            project, name="trashed.pdf", mime="application/pdf", content=PDF_BYTES, stored_objects=stored_objects,
+            file_status=FileObject.Status.TRASHED,
+        )
+
+        download = session_client.get(download_url(project.workspace.slug, project.id, file_object.id))
+        preview = session_client.get(preview_url(project.workspace.slug, project.id, file_object.id))
+
+        for response in (download, preview):
+            assert response.status_code == status.HTTP_409_CONFLICT
+            assert response.data["code"] == "file_trashed"
+
     def test_a_quarantined_file_is_refused(self, session_client, project, stored_objects):
         file_object, _ = make_file_with_object(
             project,

@@ -83,13 +83,22 @@ def _folder_for(project, folder_id):
     if not folder_id:
         return None
 
-    folder = FileFolder.objects.filter(id=folder_id, project_id=project.id).first()
+    folder = FileFolder.all_objects.filter(id=folder_id, project_id=project.id).first()
     if folder is None:
         raise ProjectFileError(
             "folder_id does not belong to this project.",
-            code="invalid_request",
+            code="folder_not_found",
             field="folder_id",
         )
+
+    if folder.deleted_at is not None:
+        raise ProjectFileError(
+            "This folder was deleted; restore it or choose another folder.",
+            code="folder_trashed",
+            status_code=status.HTTP_409_CONFLICT,
+            field="folder_id",
+        )
+
     return folder
 
 
