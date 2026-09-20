@@ -40,7 +40,10 @@ const EMPTY_STORAGE: IProjectFileStorage = {
 export const FilesToolbar = observer(function FilesToolbar(props: Props) {
   const { storage, searchValue, onSearchChange, viewMode, onViewModeChange } = props;
 
+  // The numbers are the listing's; with no listing answer the chip says so instead of
+  // reporting a usage of zero it has no basis for.
   const resolvedStorage = storage ?? EMPTY_STORAGE;
+  const hasStorage = Boolean(storage);
   // the used share of the ceiling, for the bar and `data-pct`; 0 when no ceiling is set
   const usedPct =
     resolvedStorage.limit_bytes > 0
@@ -54,16 +57,18 @@ export const FilesToolbar = observer(function FilesToolbar(props: Props) {
         <div className="flex items-center gap-3">
           <div
             data-testid="files-storage"
-            data-used={String(resolvedStorage.project_used_bytes)}
-            data-limit={String(resolvedStorage.limit_bytes)}
-            data-pct={String(usedPct)}
+            data-used={hasStorage ? String(resolvedStorage.project_used_bytes) : undefined}
+            data-limit={hasStorage ? String(resolvedStorage.limit_bytes) : undefined}
+            data-pct={hasStorage ? String(usedPct) : undefined}
             className="flex items-center gap-2"
           >
             <div className="h-1.5 w-24 overflow-hidden rounded-full bg-layer-2" aria-hidden="true">
               <div className="h-full rounded-full bg-accent-primary" style={{ width: `${Math.min(usedPct, 100)}%` }} />
             </div>
             <span data-testid="files-storage-text" className="text-caption-md-regular text-tertiary">
-              {formatFileSize(resolvedStorage.project_used_bytes)} of {formatFileSize(resolvedStorage.limit_bytes)} used
+              {hasStorage
+                ? `${formatFileSize(resolvedStorage.project_used_bytes)} of ${formatFileSize(resolvedStorage.limit_bytes)} used`
+                : "Storage usage unavailable"}
             </span>
           </div>
           <div className="flex items-center gap-1" role="group" aria-label="View mode">

@@ -205,7 +205,9 @@ export class ProjectFileService extends APIService {
     return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${this.listQueryString(query)}`)
       .then((response) => response?.data)
       .catch((error) => {
-        throw error?.response?.data;
+        // A transport-level failure has no `response`, and the view keys its error
+        // surface off the thrown value, so the raw error is the fallback.
+        throw error?.response?.data ?? error;
       });
   }
 
@@ -213,7 +215,9 @@ export class ProjectFileService extends APIService {
     return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/storage/`)
       .then((response) => response?.data)
       .catch((error) => {
-        throw error?.response?.data;
+        // A transport-level failure has no `response`, and the view keys its error
+        // surface off the thrown value, so the raw error is the fallback.
+        throw error?.response?.data ?? error;
       });
   }
 
@@ -227,7 +231,9 @@ export class ProjectFileService extends APIService {
     return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/${query}`)
       .then((response) => response?.data)
       .catch((error) => {
-        throw error?.response?.data;
+        // A transport-level failure has no `response`, and the view keys its error
+        // surface off the thrown value, so the raw error is the fallback.
+        throw error?.response?.data ?? error;
       });
   }
 }

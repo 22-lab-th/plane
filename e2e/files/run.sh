@@ -17,6 +17,7 @@ IMAGE="localhost/plane_api-tests:latest"
 NETWORK="plane_test_env"
 API_CONTAINER="plane-files-e2e-api"
 MINIO_CONTAINER="plane-files-e2e-minio"
+MQ_CONTAINER="plane-files-e2e-mq"
 MINIO_PORT=59010
 MINIO_CONSOLE_PORT=59011
 API_PORT=8000
@@ -28,7 +29,7 @@ compose() { podman compose -f "$COMPOSE_FILE" "$@"; }
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
-  podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" >/dev/null 2>&1 || true
+  podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" "$MQ_CONTAINER" >/dev/null 2>&1 || true
   compose down -v >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
@@ -41,12 +42,12 @@ for holder in $(podman ps -a --format '{{.Names}} {{.Ports}}' |
   awk -v p=":${MINIO_PORT}->" 'index($0, p) {print $1}'); do
   podman rm -f "$holder" >/dev/null 2>&1 || true
 done
-podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" >/dev/null 2>&1 || true
+podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" "$MQ_CONTAINER" >/dev/null 2>&1 || true
 
 say() { echo "[files-e2e $(date +%H:%M:%S)] $*"; }
 
 compose down -v >/dev/null 2>&1 || true
-compose up -d test-db test-redis test-mq >"$STATE_DIR/compose.log" 2>&1
+compose up -d test-db test-redis >"$STATE_DIR/compose.log" 2>&1
 say "compose up: $(podman network ls --format '{{.Name}}' | grep -c '^plane_test_env$') network(s)"
 
 podman run --rm -d --name "$MINIO_CONTAINER" --network "$NETWORK" \
@@ -69,12 +70,38 @@ fi
 podman exec "$MINIO_CONTAINER" /bin/sh -c "mc mb local/uploads -p" >>"$STATE_DIR/minio.log" 2>&1 || true
 say "minio ready at http://127.0.0.1:${MINIO_PORT}"
 
+podman run --rm -d --name "$MQ_CONTAINER" --network "$NETWORK"   -e RABBITMQ_DEFAULT_USER=plane -e RABBITMQ_DEFAULT_PASS=plane -e RABBITMQ_DEFAULT_VHOST=plane   --tmpfs /var/lib/rabbitmq:rw,mode=1777   rabbitmq:3.13.6-management-alpine >/dev/null 2>>"$STATE_DIR/mq.log"
+
+# Every dependency is checked before anything is started on top of it: a broker that is
+# down makes endpoints that enqueue Celery work answer 500, and a harness that proceeds
+# anyway turns that into confusing failures much later.
+wait_for_dependency() {
+  local name="$1" command="$2" tries="${3:-60}"
+  shift 3
+  for _ in $(seq 1 "$tries"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
+  say "dependency unhealthy: $name ($command)"
+  podman logs "$name" >>"$STATE_DIR/deps.log" 2>&1 || true
+  compose logs test-db test-redis >>"$STATE_DIR/deps.log" 2>&1 || true
+  tail -25 "$STATE_DIR/deps.log" >&2
+  exit 1
+}
+# Probed over the management API with the credentials the API container uses: the CLI
+# needs the node's Erlang cookie, and a check that fails on the probe rather than on the
+# broker would be worse than no check at all.
+wait_for_dependency "$MQ_CONTAINER" "management API" 120 \
+  podman exec "$MQ_CONTAINER" curl -fsS -u plane:plane http://localhost:15672/api/overview
+compose exec -T test-db pg_isready -U plane -d plane >/dev/null 2>&1 ||
+  wait_for_dependency test-db "pg_isready" 60 compose exec -T test-db pg_isready -U plane -d plane
+compose exec -T test-redis valkey-cli ping >/dev/null 2>&1 ||
+  wait_for_dependency test-redis "valkey-cli ping" 60 compose exec -T test-redis valkey-cli ping
+say "broker and stores ready"
+
 # Django-side environment shared by every container command below.
 DJANGO_ENV=(
   -e DJANGO_SETTINGS_MODULE=plane.settings.local
   -e DATABASE_URL=postgresql://plane:plane@test-db:5432/plane
   -e REDIS_URL=redis://test-redis:6379/
-  -e RABBITMQ_HOST=test-mq
+  -e RABBITMQ_HOST=plane-files-e2e-mq
   -e RABBITMQ_PORT=5672
   -e RABBITMQ_USER=plane
   -e RABBITMQ_PASSWORD=plane

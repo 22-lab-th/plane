@@ -146,13 +146,33 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
     [listQuery, projectId, workspaceSlug]
   );
 
+  // The key the rows on screen belong to. With `keepPreviousData` a failed request for
+  // a new filter would otherwise leave the previous filter's rows under the new filter's
+  // label, which is the state the design forbids.
+  const [dataKey, setDataKey] = useState<string | null>(null);
+  const currentKey = JSON.stringify(listKey);
+
   const { data, error, isLoading, mutate } = useSWR<IProjectFileListResponse>(
     listKey,
     () => fileService.listProjectFiles(workspaceSlug, projectId, listQuery),
-    { keepPreviousData: true, revalidateOnFocus: false }
+    {
+      keepPreviousData: true,
+      revalidateOnFocus: false,
+      onSuccess: (_response, key) => {
+        setDataKey(JSON.stringify(key));
+      },
+    }
   );
 
-  const rows = useMemo(() => buildFilesRows(data?.folders ?? [], data?.results ?? []), [data]);
+  // The rows and the storage chip on screen speak for the filter that produced them, not
+  // for the filter the URL now asks for: both are withheld when the request for the
+  // current filter failed, so a failed change shows the retryable error and no stale data.
+  const hasError = Boolean(error);
+  const dataIsCurrent = dataKey === currentKey;
+  const showErrorState = hasError && (!data || !dataIsCurrent);
+  const visibleData = !hasError || dataIsCurrent ? data : undefined;
+
+  const rows = useMemo(() => buildFilesRows(visibleData?.folders ?? [], visibleData?.results ?? []), [visibleData]);
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
 
   // keyboard walk over the rows, in the order they are rendered
@@ -248,21 +268,24 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   }, [updateParams]);
 
   const hasFilters = queryParam.trim().length > 0 || quickView !== "all";
-  const hasNoFiles = !!data && data.results.length === 0;
-  const hasNoRows = hasNoFiles && data.folders.length === 0;
+  const hasNoFiles = !!visibleData && visibleData.results.length === 0;
+  const hasNoRows = hasNoFiles && visibleData.folders.length === 0;
 
   return (
     <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden">
       <FilesToolbar
-        storage={data?.storage}
+        storage={hasError && !dataIsCurrent ? undefined : data?.storage}
         searchValue={searchInput}
         onSearchChange={setSearchInput}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
       />
-      <FilesBreadcrumbs breadcrumbs={data?.breadcrumbs ?? []} onNavigate={handleOpenFolder} />
+      <FilesBreadcrumbs
+        breadcrumbs={dataIsCurrent || !hasError ? (data?.breadcrumbs ?? []) : []}
+        onNavigate={handleOpenFolder}
+      />
       {isReadOnly && <FilesReadonlyNotice />}
-      {error && data && <FilesErrorBanner onRetry={() => void mutate()} />}
+      {hasError && data && dataIsCurrent && <FilesErrorBanner onRetry={() => void mutate()} />}
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[180px_minmax(0,1fr)]">
         <FilesQuickViews
           activeView={quickView}
@@ -272,7 +295,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
         <div className="min-h-0 overflow-y-auto">
           {isLoading && !data ? (
             <FilesLoadingState />
-          ) : error && !data ? (
+          ) : showErrorState ? (
             <FilesErrorState onRetry={() => void mutate()} />
           ) : hasNoFiles && hasFilters ? (
             // `q` filters files only, so the folders the API still returns stay on
@@ -302,7 +325,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
               <FilesNoMatchState onClearFilters={handleClearFilters} />
             </>
           ) : hasNoRows ? (
-            <FilesEmptyState />
+            <FilesEmptyState variant={folderId ? "folder" : "project"} />
           ) : viewMode === "grid" ? (
             <FilesGrid
               rows={rows}

@@ -25,14 +25,25 @@ export function FilesLoadingState() {
 }
 
 /** A folder (or a project) that genuinely holds nothing. */
-export function FilesEmptyState() {
+const EMPTY_COPY = {
+  folder: { headline: "This folder is empty.", hint: "Files added to this project will appear here." },
+  project: {
+    headline: "No files yet — drop files here or use Upload.",
+    hint: "Files added to this project will appear here.",
+  },
+} as const;
+
+/** The empty state of a folder, or of a project that has no files at all (DES-001 §7). */
+export function FilesEmptyState(props: { variant?: keyof typeof EMPTY_COPY }) {
+  const { variant = "folder" } = props;
   return (
     <div
       data-testid="files-state-empty"
+      data-variant={variant}
       className="flex h-full min-h-40 flex-col items-center justify-center gap-1 p-8 text-center"
     >
-      <p className="text-body-sm-medium text-primary">This folder is empty.</p>
-      <p className="text-caption-md-regular text-tertiary">Files added to this project will appear here.</p>
+      <p className="text-body-sm-medium text-primary">{EMPTY_COPY[variant].headline}</p>
+      <p className="text-caption-md-regular text-tertiary">{EMPTY_COPY[variant].hint}</p>
     </div>
   );
 }

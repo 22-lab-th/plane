@@ -74,6 +74,11 @@ def main():
     )
     assert status in (200, 301, 302), status
 
+    # A project retrieve enqueues Celery work, so a broker that is down turns it into a
+    # 500: this is the harness's own guard that the broker it started is usable.
+    status, _ = request(opener, "GET", f"{API_URL}/api/workspaces/{SLUG}/projects/{PROJECT_ID}/")
+    assert status == 200, f"project retrieve answered {status} — is the Celery broker up?"
+
     headers = {"X-CSRFToken": csrf["csrf_token"], "Origin": WEB_URL, "Referer": f"{WEB_URL}/"}
     files_url = f"{API_URL}/api/workspaces/{SLUG}/projects/{PROJECT_ID}/files"
     folders_url = f"{files_url}/folders/"

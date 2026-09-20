@@ -6,7 +6,9 @@
  * `page.waitForResponse` for the exact query the view issued and re-fetched with
  * `page.request.get` for that same URL. Nothing here compares the DOM against a
  * fixture written down in this file; the only literals are the copies and the
- * test ids the frozen contract (`local://files-ui-contract.md`) fixes.
+ * test ids this ticket's contract fixes (DEC-003 and REQ-001; the Orphan/Unlinked
+ * quick view is P2 per AC-21, so the listing has no filter for it and the view must
+ * not offer one).
  *
  * The harness (`e2e/files/run.sh`) seeds the workspace, the project, both members,
  * the folder tree and the files through the API; every piece of state this spec
@@ -277,6 +279,9 @@ function expectSameBody(reference: TListBody, refetched: TListBody, label: strin
  */
 let rowsComeFromLiveResponse = true;
 
+/** Files this spec wrote to through the API; only their timestamps may lag a re-fetch. */
+const mutatedFileIds = new Set<string>();
+
 async function expectRowsMatchBody(page: Page, body: TListBody, label: string): Promise<void> {
   const expectedIds = body.results.map((row) => row.id);
   await waitForRenderedIds(page, ROW_SELECTOR, "data-file-id", expectedIds);
@@ -427,8 +432,8 @@ function paramsFromAppUrl(page: Page): Record<string, string> {
   if (folder && folder !== "root") params.folder_id = folder;
   const q = app.get("q");
   if (q) params.q = q;
-  const ordering = app.get("ordering");
-  if (ordering) params.ordering = ordering;
+  // The app always sends an ordering, defaulting to the listing's own default.
+  params.ordering = app.get("ordering") ?? "created";
   const view = app.get("view");
   if (view === "pinned") params.pinned = "true";
   if (view === "trash") params.trashed = "true";
@@ -449,16 +454,24 @@ async function snapshotList(
   // cache, in which case the reference is the same URL the view is showing,
   // re-fetched — the API's own output for the exact query either way.
   // Long enough for any warmed transition to answer, short enough that the fallbacks
-  // below do not dominate the run.
+  // below do not dominate the run. The request is captured alongside the response so a
+  // fallback compares against the URL the view asked for, not a re-derivation of it.
   const captured = page.waitForResponse(isListResponse, { timeout: 8_000 }).catch(() => null);
+  const capturedRequest = page
+    .waitForRequest((request) => isListUrl(new URL(request.url())), { timeout: 8_000 })
+    .catch(() => null);
   await action();
-  const response = await captured;
+  const [response, request] = await Promise.all([captured, capturedRequest]);
 
   if (!response) {
     expect(options.requireLive ?? false, `${label}: the view must fetch the list at least once for this URL`).toBe(
       false
     );
-    const url = listUrl(paramsFromAppUrl(page));
+    const derivedUrl = listUrl(paramsFromAppUrl(page));
+    const url = request?.url() ?? derivedUrl;
+    if (request) {
+      expect(derivedUrl, `${label}: the app-URL mapping must name the query the view asked for`).toBe(url);
+    }
     console.log(`${label}: the view served this URL from its cache, re-fetching ${url}`);
     rowsComeFromLiveResponse = false;
     const fallback = await page.request.get(url);
@@ -579,7 +592,8 @@ test.describe("Project files tab (T-112)", () => {
     expect(root.live.breadcrumbs, "the root has no breadcrumb above it").toEqual([]);
     await expect(page.getByTestId("files-state-empty")).toBeHidden();
     await expect(page.getByTestId("files-state-loading")).toBeHidden();
-    // The contract: "Orphan has no API filter — do not render it."
+    // DEC-003 / REQ-001 AC-21: Orphan (Unlinked) is P2, so the API has no filter for it
+    // and the view must not offer a quick view that cannot be expressed.
     await expect(page.getByTestId("files-quick-orphan")).toHaveCount(0);
     expect(
       root.live.results.length,
@@ -602,6 +616,7 @@ test.describe("Project files tab (T-112)", () => {
     // Pinned: the state is created through the API, then read back through the view.
     const pinTarget = recent.live.results[0];
     expect(pinTarget, "the recent view must have a row to pin").toBeDefined();
+    mutatedFileIds.add(pinTarget.id);
     await apiWrite(page, "patch", `${listUrl()}${pinTarget.id}/`, { is_pinned: true });
 
     const pinned = await snapshotList(page, "pinned", () => page.getByTestId("files-quick-pinned").click());
@@ -796,6 +811,90 @@ test.describe("Project files tab (T-112)", () => {
     expect(new Set(backAtRoot.live.results.map((row) => row.id)), "the root list is unchanged").toEqual(
       new Set(root.live.results.map((row) => row.id))
     );
+
+    // --- grid mode: a view change, not a data change -------------------------
+    await page.getByTestId("files-view-toggle-grid").click();
+    await expect(page.getByTestId("files-view-grid")).toBeVisible();
+    await expect(page.getByTestId("files-view-table")).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("mode"), "the grid toggle is URL state").toBe("grid");
+    expect(
+      new Set((await readRows(page)).map((row) => row.fileId)),
+      "the grid renders the same rows the table did"
+    ).toEqual(new Set(backAtRoot.live.results.map((row) => row.id)));
+    await page.getByTestId("files-view-toggle-table").click();
+    await expect(page.getByTestId("files-view-table")).toBeVisible();
+
+    // --- sorting: a real request, and the DOM follows the API's order ---------
+    const sortedFirst = await snapshotList(page, "sort-name-first", () => page.getByTestId("files-sort-name").click());
+    const firstOrdering = new URL(sortedFirst.url).searchParams.get("ordering");
+    expect(firstOrdering, "the sort reaches the API's ordering filter").not.toBeNull();
+    await expectViewMatchesBody(page, sortedFirst.live, "sort-name-first");
+
+    const sortedSecond = await snapshotList(page, "sort-name-reversed", () =>
+      page.getByTestId("files-sort-name").click()
+    );
+    const secondOrdering = new URL(sortedSecond.url).searchParams.get("ordering");
+    expect(secondOrdering, "clicking the same column again reverses it").toBe(
+      firstOrdering?.startsWith("-") ? firstOrdering.slice(1) : `-${firstOrdering}`
+    );
+    await expectViewMatchesBody(page, sortedSecond.live, "sort-name-reversed");
+
+    // --- the loading state, on a cold load whose request is held --------------
+    await page.route(isListUrl, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+    await page.goto(APP_FILES_URL);
+    await expect(page.getByTestId("files-state-loading"), "a cold load shows the loading state").toBeVisible();
+    await expect(page.getByTestId("files-state-loading")).toBeHidden();
+    await page.unroute(isListUrl);
+
+    // --- a failure with no response at all: retryable, never an empty table ---
+    await page.route(isListUrl, (route) => route.abort("failed"));
+    await page.goto(APP_FILES_URL);
+    await expect(page.getByTestId("files-state-error"), "a transport failure is visible").toBeVisible();
+    await expect(page.getByTestId("files-retry")).toBeVisible();
+    await expect(page.locator(ROW_SELECTOR), "and the table is not left empty in silence").toHaveCount(0);
+    await expect(
+      page.getByTestId("files-storage-text"),
+      "the chip does not claim a usage it has no basis for"
+    ).not.toHaveText(/0 B of 0 B used/);
+
+    await page.unroute(isListUrl);
+    const recoveredCold = await snapshotList(page, "error-retry-cold", () => page.getByTestId("files-retry").click());
+    await expect(page.getByTestId("files-state-error")).toBeHidden();
+    await expectViewMatchesBody(page, recoveredCold.live, "error-retry-cold");
+
+    // --- a filter whose request failed keeps no stale rows --------------------
+    await page.route(isListUrl, (route) => route.abort("failed"));
+    await page.getByTestId("files-quick-pinned").click();
+    await expect(page.getByTestId("files-state-error"), "the failed filter is visible").toBeVisible();
+    await expect(page.locator(ROW_SELECTOR), "the previous filter's rows are not left on screen").toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("view"), "the filter asked for is still the one in the URL").toBe(
+      "pinned"
+    );
+
+    await page.unroute(isListUrl);
+    const recoveredPinned = await snapshotList(page, "error-retry-pinned", () =>
+      page.getByTestId("files-retry").click()
+    );
+    await expect(page.getByTestId("files-state-error")).toBeHidden();
+    expect(new URL(recoveredPinned.url).searchParams.get("pinned"), "the retry runs the filter that failed").toBe(
+      "true"
+    );
+    await expectViewMatchesBody(page, recoveredPinned.live, "error-retry-pinned");
+
+    // --- an empty project has its own copy (DES-001 §7), not the folder's -----
+    const emptyProject = await apiWrite(page, "post", `${API_URL}/api/workspaces/${WORKSPACE_SLUG}/projects/`, {
+      name: `Empty Files Project ${Date.now()}`,
+      identifier: `EF${Date.now() % 10_000}`,
+      network: 2,
+    });
+    const emptyProjectId = ((await emptyProject.json()) as { id: string }).id;
+    await page.goto(`${WEB_URL}/${WORKSPACE_SLUG}/projects/${emptyProjectId}/files`);
+    await expect(page.getByTestId("files-state-empty"), "a project with nothing in it is empty").toBeVisible();
+    await expect(page.getByTestId("files-state-empty")).toHaveAttribute("data-variant", "project");
+    await expect(page.getByTestId("files-state-empty")).toContainText("No files yet");
   });
 
   test("keyboard_focus_reaches_a_row_and_enter_opens_it", async ({ page }) => {
