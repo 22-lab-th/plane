@@ -321,6 +321,52 @@ class TestTrash:
         assert response.data["code"] == "project_archived"
 
 
+    def test_the_trash_surface_lists_a_file_whose_folder_is_gone(
+        self, session_client, project, stored_objects
+    ):
+        """R-DEL-3: a file trashed through its folder keeps its (now dead) folder_id.
+
+        The trash surface is the *project's*, not one folder's: it answers with the row
+        whether or not a folder scope is asked for, which is what the Files tab relies on
+        when its Trash quick view insists on no folder at all (T-118 F-1). A folder-scoped
+        trash request is a different question - one folder's trash - and the folder it
+        names no longer exists, so it is a 404 rather than an empty page.
+        """
+        outer = make_folder(project, "Ghost")
+        file_object, _ = upload_file(
+            session_client, project, folder=outer, stored_objects=stored_objects
+        )
+
+        assert (
+            session_client.delete(
+                folder_url(project.workspace.slug, project.id, outer.id) + "?recursive=true"
+            ).status_code
+            == status.HTTP_204_NO_CONTENT
+        )
+
+        stored = FileObject.all_objects.get(pk=file_object)
+        assert stored.status == FileObject.Status.TRASHED
+        assert str(stored.folder_id) == str(outer.id), "the row still names the folder it was in"
+
+        trashed = session_client.get(files_url(project.workspace.slug, project.id), {"trashed": True})
+        assert [row["id"] for row in trashed.data["results"]] == [file_object]
+        assert str(trashed.data["results"][0]["folder_id"]) == str(outer.id)
+
+        # The root's own trash is a narrower question, and this row is not in it.
+        root_trash = session_client.get(
+            files_url(project.workspace.slug, project.id), {"trashed": True, "folder_id": "root"}
+        )
+        assert [row["id"] for row in root_trash.data["results"]] == []
+
+        # Nor is "the deleted folder's trash" the project's trash: that folder no longer
+        # resolves, so the endpoint says so instead of answering an empty page.
+        gone = session_client.get(
+            files_url(project.workspace.slug, project.id),
+            {"trashed": True, "folder_id": str(outer.id)},
+        )
+        assert gone.status_code == status.HTTP_404_NOT_FOUND
+
+
 @pytest.mark.contract
 @pytest.mark.django_db
 class TestRestore:

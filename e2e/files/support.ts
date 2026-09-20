@@ -428,25 +428,34 @@ export async function expectViewMatchesBody(page: Page, body: TListBody, label: 
 // --- capturing a list request and its body ----------------------------------
 
 /**
- * The `folder_id` the view asks for when the app URL lives at `url`.
+ * The `folder_id` the view asks for when the app URL lives at `url`, or `null` when the
+ * view asks for no folder at all.
  *
- * The view always scopes to one folder and names the root explicitly (`folder_id=root`,
+ * The live browse scopes to one folder and names the root explicitly (`folder_id=root`,
  * DEFECT-005): an app URL with no `folder` - or with `folder=root` - is the project root,
  * which is a different question from an absent `folder_id` ("every file in the project, at
- * any depth"). One definition, so the mapping below and the drawer spec's capture check
+ * any depth"). The Trash, Pinned and Recent quick views are project-wide by purpose - they
+ * exist to find a file again, and a file trashed through its folder keeps a `folder_id`
+ * whose folder no longer resolves - so they are asked for with no `folder_id` at all
+ * (T-118 F-1). One definition, so the mapping below and the drawer spec's capture check
  * cannot disagree about which listing an app URL names.
  */
-export function folderQueryFromAppUrl(url: string): string {
-  const folder = new URL(url).searchParams.get("folder");
+export function folderQueryFromAppUrl(url: string): string | null {
+  const params = new URL(url).searchParams;
+  // Only the live browse is folder-scoped (see `buildListQuery`): the Trash, Pinned and
+  // Recent quick views are project-wide, so they ask for no `folder_id` at all.
+  if ((params.get("view") ?? "all") !== "all") return null;
+  const folder = params.get("folder");
   return folder && folder !== "root" ? folder : "root";
 }
 
 function paramsFromAppUrl(page: Page): Record<string, string> {
   const app = new URL(page.url()).searchParams;
   const params: Record<string, string> = {};
-  // The query the view actually issues for this app URL, root included; an absent
-  // `folder_id` is a different question, so it is never what this derives.
-  params.folder_id = folderQueryFromAppUrl(page.url());
+  // The query the view actually issues for this app URL, root included where the view is
+  // folder-scoped; an absent `folder_id` is a different question from the root.
+  const folder = folderQueryFromAppUrl(page.url());
+  if (folder) params.folder_id = folder;
   const q = app.get("q");
   if (q) params.q = q;
   // The app always sends an ordering; with none in the URL it sends its own default,

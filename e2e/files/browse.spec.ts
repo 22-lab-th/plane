@@ -46,6 +46,15 @@ import {
   type TFolderRow,
 } from "./support";
 
+/** The query a captured list URL carries, as the params `getListBody` re-issues it. */
+function paramsOf(url: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  new URL(url).searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  return params;
+}
+
 // --- the specs --------------------------------------------------------------
 
 test.describe("Project files tab (T-112)", () => {
@@ -121,6 +130,13 @@ test.describe("Project files tab (T-112)", () => {
     const trashQuery = new URL(trash.url).searchParams;
     expect(new URL(page.url()).searchParams.get("view"), "the trash quick view is a URL state").toBe("trash");
     expect(trashQuery.get("trashed"), "the trash quick view maps onto the API's trashed filter").toBe("true");
+    // The trash view is project-wide: a file trashed through its folder keeps a `folder_id`
+    // whose folder no longer resolves, so a folder scope here would drop exactly the rows
+    // R-DEL-3's restore surface exists for (T-118 F-1).
+    expect(
+      trashQuery.get("folder_id"),
+      "the trash view asks for no folder, so every trashed row is reachable"
+    ).toBeNull();
     expect(
       trash.live.results.length,
       "the harness leaves one file in the trash so this assertion is not vacuous"
@@ -135,7 +151,10 @@ test.describe("Project files tab (T-112)", () => {
     ).toEqual([]);
     await expectViewMatchesBody(page, trash.live, "trash");
 
-    const trashReference = await getListBody(page, { trashed: "true" });
+    // The query the view actually issued, re-fetched: the assertion is against the view's
+    // own request rather than a hand-written one that only agrees while the fixture's
+    // trashed file happens to live at the root (T-118 F-2).
+    const trashReference = await getListBody(page, paramsOf(trash.url));
     const trashReferenceIds = new Set(trashReference.results.map((row) => row.id));
     expect(new Set(trash.live.results.map((row) => row.id)), "the view asked the API for the trash").toEqual(
       trashReferenceIds
@@ -148,6 +167,61 @@ test.describe("Project files tab (T-112)", () => {
       trash.live.storage.project_used_bytes,
       "the indicator is the project's usage from this response, not a trash-filtered count"
     ).toBe(root.live.storage.project_used_bytes);
+
+    // A file trashed *through its folder* keeps a `folder_id` whose folder no longer
+    // resolves, and it must still be found here: the row is unrestorable from the UI if
+    // this view loses it (T-118 F-1, the defect this block exists to catch). Created,
+    // trashed and read back entirely through the API and the view's own request.
+    const doomedFolderId = await createFolder(page, `Trashed Folder ${Date.now()}`);
+    const doomedName = `folder-trashed-${Date.now()}.txt`;
+    const doomedBytes = Buffer.from("a file whose folder is about to be trashed\n", "ascii");
+    const initiated = await apiWrite(page, "post", `${listUrl()}initiate-upload/`, {
+      file_name: doomedName,
+      size_bytes: doomedBytes.length,
+      mime_type: "text/plain",
+      folder_id: doomedFolderId,
+    });
+    const initiation = (await initiated.json()) as {
+      file: { id: string };
+      version_no: number;
+      upload: { url: string; headers: Record<string, string> };
+    };
+    const put = await page.request.put(initiation.upload.url, {
+      data: doomedBytes,
+      headers: initiation.upload.headers,
+    });
+    expect(put.status(), `PUT ${doomedName} to the store the presign named`).toBe(200);
+    const finalized = await apiWrite(page, "post", `${listUrl()}${initiation.file.id}/complete-upload/`, {
+      version_no: initiation.version_no,
+      size_bytes: doomedBytes.length,
+    });
+    expect(finalized.status(), `the API verified ${doomedName}`).toBe(200);
+
+    const folderTrashed = await apiWrite(page, "delete", `${listUrl()}folders/${doomedFolderId}/?recursive=true`);
+    expect(folderTrashed.status(), "deleting the folder moves its file to the trash").toBe(204);
+
+    // Back to All first, so the Trash click below is a real transition that refetches:
+    // a repeat of the same key would leave the DOM on the rows fetched before the folder
+    // was trashed, and comparing that stale DOM against a fresh body is not the claim.
+    await snapshotList(page, "all-after-folder-trash", () => page.getByTestId("files-quick-all").click());
+    const trashProjectWide = await snapshotList(page, "trash-project-wide", () =>
+      page.getByTestId("files-quick-trash").click()
+    );
+    expect(
+      new URL(trashProjectWide.url).searchParams.get("folder_id"),
+      "the trash view still asks for no folder after the folder it was browsing is gone"
+    ).toBeNull();
+    const orphanRow = trashProjectWide.live.results.find((row) => row.id === initiation.file.id);
+    expect(orphanRow, "a file trashed through its folder is on the trash surface").toBeDefined();
+    expect(
+      (orphanRow as TFileRow).folder_id,
+      "and its row still names the folder that no longer resolves, which is why the scope matters"
+    ).toBe(doomedFolderId);
+    expect(
+      (await getListBody(page, paramsOf(trashProjectWide.url))).results.map((row) => row.id),
+      "the project-wide trash request the view issued carries that row"
+    ).toContain(initiation.file.id);
+    await expectViewMatchesBody(page, trashProjectWide.live, "trash-project-wide");
 
     // Back to All: the default view again, with the same rows.
     const all = await snapshotList(page, "back-to-all", () => page.getByTestId("files-quick-all").click());

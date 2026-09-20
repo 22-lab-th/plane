@@ -538,12 +538,12 @@ export const buildListQuery = (state: {
   quickView: TFilesQuickView;
   ordering: TProjectFileOrdering;
 }): TProjectFileListQuery => {
-  const listQuery: TProjectFileListQuery = {
-    // The browse scope is always explicit; a `null` folder id is the root (EXP-001
-    // F-01 step 1: "the first page of folders and files for the project root").
-    folder_id: state.folderId ?? FILES_ROOT_FOLDER,
-    ordering: state.ordering,
-  };
+  const listQuery: TProjectFileListQuery = { ordering: state.ordering };
+  // Only the live browse is folder-scoped. Trash, Pinned and Recent are project-wide by
+  // purpose — they exist to find a file again — and a file trashed through its folder
+  // keeps a `folder_id` whose folder no longer resolves, so scoping those views to one
+  // folder would hide exactly the rows they are for (R-DEL-3's restore surface, T-118 F-1).
+  if (state.quickView === "all") listQuery.folder_id = state.folderId ?? FILES_ROOT_FOLDER;
   if (state.query) listQuery.q = state.query;
   if (state.quickView === "pinned") listQuery.pinned = true;
   if (state.quickView === "trash") listQuery.trashed = true;
