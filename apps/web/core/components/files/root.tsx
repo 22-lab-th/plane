@@ -248,7 +248,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   }, [updateParams]);
 
   const hasFilters = queryParam.trim().length > 0 || quickView !== "all";
-  const hasNoRows = !!data && data.results.length === 0 && data.folders.length === 0;
+  const hasNoFiles = !!data && data.results.length === 0;
+  const hasNoRows = hasNoFiles && data.folders.length === 0;
 
   return (
     <div data-testid="files-root" className="flex h-full w-full flex-col overflow-hidden">
@@ -273,8 +274,33 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
             <FilesLoadingState />
           ) : error && !data ? (
             <FilesErrorState onRetry={() => void mutate()} />
-          ) : hasNoRows && hasFilters ? (
-            <FilesNoMatchState onClearFilters={handleClearFilters} />
+          ) : hasNoFiles && hasFilters ? (
+            // `q` filters files only, so the folders the API still returns stay on
+            // screen and only the file list reports the miss (DESIGN §7: "No files
+            // match your filters." + Clear filters).
+            <>
+              {rows.length > 0 &&
+                (viewMode === "grid" ? (
+                  <FilesGrid
+                    rows={rows}
+                    onOpenFolder={handleOpenFolder}
+                    onOpenFile={handleOpenFile}
+                    registerRow={registerRow}
+                    onRowKeyDown={handleRowKeyDown}
+                  />
+                ) : (
+                  <FilesTable
+                    rows={rows}
+                    ordering={ordering}
+                    onOrderingChange={handleOrderingChange}
+                    onOpenFolder={handleOpenFolder}
+                    onOpenFile={handleOpenFile}
+                    registerRow={registerRow}
+                    onRowKeyDown={handleRowKeyDown}
+                  />
+                ))}
+              <FilesNoMatchState onClearFilters={handleClearFilters} />
+            </>
           ) : hasNoRows ? (
             <FilesEmptyState />
           ) : viewMode === "grid" ? (

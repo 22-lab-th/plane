@@ -180,16 +180,30 @@ async function focusedFileId(page: Page): Promise<string | null> {
  * precisely the focus ring — asserting "some box-shadow exists" would also pass on
  * a row that always carries one.
  */
-async function readFocusDecoration(page: Page): Promise<{ focused: string | null; unfocused: string | null }> {
+async function readFocusDecoration(
+  page: Page
+): Promise<{ focused: string | null; unfocused: string | null; paintsSomething: boolean }> {
   return page.evaluate(() => {
-    // oxlint-disable-next-line consistent-function-scoping
+    /* oxlint-disable consistent-function-scoping */
+    const transparent = (value: string): boolean =>
+      value === "none" || value === "" || /rgba?\([^)]*,\s*0(\.0+)?\s*\)/.test(value) || value === "transparent";
+
     const decoration = (node: HTMLElement): string => {
       const style = window.getComputedStyle(node);
-      return `${style.boxShadow}|${style.outlineStyle}|${style.outlineWidth}`;
+      return `${style.boxShadow}|${style.outlineStyle}|${style.outlineWidth}:${style.outlineColor}`;
     };
+
+    /** Whether this element paints a focus indicator a user can actually see. */
+    const paints = (node: HTMLElement): boolean => {
+      const style = window.getComputedStyle(node);
+      const width = Number.parseFloat(style.outlineWidth || "0");
+      const outlinePaints = style.outlineStyle !== "none" && width > 0 && !transparent(style.outlineColor);
+      return outlinePaints || !transparent(style.boxShadow);
+    };
+    /* oxlint-enable consistent-function-scoping */
     const active = document.activeElement as HTMLElement | null;
     const row = (active?.closest?.('[data-testid^="files-row-"]') ?? null) as HTMLElement | null;
-    if (!row) return { focused: null, unfocused: null };
+    if (!row) return { focused: null, unfocused: null, paintsSomething: false };
 
     const rows = Array.from(document.querySelectorAll('[data-testid^="files-row-"]')) as HTMLElement[];
     const resting = rows.find((candidate) => candidate !== row) ?? null;
@@ -197,6 +211,7 @@ async function readFocusDecoration(page: Page): Promise<{ focused: string | null
     return {
       focused: chain.map(decoration).join(" ; "),
       unfocused: resting ? decoration(resting) : null,
+      paintsSomething: chain.some(paints),
     };
   });
 }
@@ -679,32 +694,45 @@ test.describe("Project files tab (T-112)", () => {
     await expect(page.getByTestId("files-state-empty")).toContainText("This folder is empty.");
     await expect(page.locator(ROW_SELECTOR)).toHaveCount(0);
 
-    // No match: a search the API answers with nothing. It is driven inside this leaf
-    // folder because the API's `q` filters files only — a browsed folder's subfolders
-    // come back regardless of the query — so "no rows of either kind" is reachable
-    // exactly where the folder has no subfolders.
+    // No match at the root: `q` filters files only, so the root keeps its folders while
+    // the file list comes back empty. The state under test is that the *file list*
+    // reports the miss while the folders stay on screen — an empty folder is not
+    // required, and requiring one would leave the real path uncovered (DESIGN §7).
     const noMatchToken = `zz-no-match-${Date.now()}`;
-    const noMatch = await snapshotList(page, "search-no-match", () =>
+    await page.goto(APP_FILES_URL);
+    await expect(page.getByTestId("files-root")).toBeVisible();
+    await expect(page.locator(ROW_SELECTOR).first()).toBeVisible();
+
+    const noMatch = await snapshotList(page, "search-no-match-root", () =>
       page.getByTestId("files-search").fill(noMatchToken)
     );
     expect(new URL(noMatch.url).searchParams.get("q"), "the search reaches the API's q filter").toBe(noMatchToken);
-    expect(new URL(noMatch.url).searchParams.get("folder_id"), "and stays in the folder being browsed").toBe(
-      emptyFolderId
-    );
+    expect(new URL(noMatch.url).searchParams.get("folder_id"), "the root request carries no folder").toBeNull();
     expect(noMatch.live.results, "the API answers an empty page for this query").toEqual([]);
-    expect(noMatch.live.folders, "with no subfolders to keep the view out of the no-match state").toEqual([]);
+    expect(
+      noMatch.live.folders.length,
+      "the root still has folders, so the no-match state cannot depend on an empty folder list"
+    ).toBeGreaterThan(0);
+
     await expect(page.getByTestId("files-state-no-match")).toBeVisible();
     await expect(page.getByTestId("files-state-no-match")).toContainText("No files match your filters.");
     await expect(page.getByTestId("files-clear-filters")).toBeVisible();
     await expect(page.locator(ROW_SELECTOR)).toHaveCount(0);
+    expect(
+      await page.locator('[data-testid^="files-folder-"]').count(),
+      "the folders stay visible while the file list reports the miss"
+    ).toBeGreaterThan(0);
 
-    const cleared = await snapshotList(page, "search-cleared", () => page.getByTestId("files-clear-filters").click());
+    const cleared = await snapshotList(page, "search-cleared-root", () =>
+      page.getByTestId("files-clear-filters").click()
+    );
     expect(new URL(cleared.url).searchParams.get("q"), "clearing drops the query from the request").toBeNull();
-    expect(new URL(cleared.url).searchParams.get("folder_id"), "clearing keeps the folder").toBe(emptyFolderId);
     await expect(page.getByTestId("files-state-no-match")).toBeHidden();
     await expect(page.getByTestId("files-search")).toHaveValue("");
-    await expect(page.getByTestId("files-state-empty"), "cleared, the empty folder is empty again").toBeVisible();
-    await expectRowsMatchBody(page, cleared.live, "search-cleared");
+    await expectViewMatchesBody(page, cleared.live, "search-cleared-root");
+    expect(new Set(cleared.live.results.map((row) => row.id)), "clearing the filters restores the root list").toEqual(
+      new Set(root.live.results.map((row) => row.id))
+    );
 
     // Back to the root from the empty folder, then one folder down, one level
     // deeper, and back up through the breadcrumbs.
@@ -782,6 +810,10 @@ test.describe("Project files tab (T-112)", () => {
 
     const startRing = await readFocusDecoration(page);
     expect(startRing.focused, "the focused row must be the one carrying the ring").not.toBeNull();
+    expect(
+      startRing.paintsSomething,
+      "the focused row must paint a focus indicator (an outline or a ring a user can see)"
+    ).toBe(true);
     expect(startRing.focused, "the focused row must be visually distinct from an unfocused row").not.toBe(
       startRing.unfocused
     );
@@ -789,6 +821,7 @@ test.describe("Project files tab (T-112)", () => {
     await page.keyboard.press("ArrowDown");
     expect(await focusedFileId(page), "ArrowDown moves focus to the next row").toBe(nextId);
     const movedRing = await readFocusDecoration(page);
+    expect(movedRing.paintsSomething, "the row ArrowDown moved to also paints its focus indicator").toBe(true);
     expect(movedRing.focused, "the row ArrowDown moved to keeps a visible focus ring").not.toBe(movedRing.unfocused);
 
     await page.keyboard.press("ArrowUp");

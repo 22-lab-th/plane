@@ -13,6 +13,7 @@ import type { TProjectFileOrdering } from "@/services/project-file.service";
 // helpers
 import {
   FILES_FOCUS_RING,
+  FILES_ROW_FOCUS_RING,
   FILES_SORT_LABELS,
   fileKind,
   formatFileSize,
@@ -100,7 +101,7 @@ export function FilesTable(props: Props) {
                 data-testid={`files-folder-${row.folder.id}`}
                 data-name={row.folder.name}
                 aria-label={`Open folder ${row.folder.name}`}
-                className={cn(ROW_CLASS_NAME, FILES_FOCUS_RING)}
+                className={cn(ROW_CLASS_NAME, FILES_ROW_FOCUS_RING)}
                 onClick={() => onOpenFolder(row.folder.id)}
                 onKeyDown={(event) => onRowKeyDown(event, row.key)}
               >
@@ -125,7 +126,7 @@ export function FilesTable(props: Props) {
                 data-pinned={row.file.is_pinned ? "true" : "false"}
                 data-extension={row.file.extension}
                 aria-label={`Open ${row.file.name_display}`}
-                className={cn(ROW_CLASS_NAME, FILES_FOCUS_RING)}
+                className={cn(ROW_CLASS_NAME, FILES_ROW_FOCUS_RING)}
                 onClick={() => onOpenFile(row.file.id)}
                 onKeyDown={(event) => onRowKeyDown(event, row.key)}
               >

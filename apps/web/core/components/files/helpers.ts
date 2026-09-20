@@ -19,6 +19,13 @@ export const FILES_FOCUS_RING =
   "focus-visible:ring-2 focus-visible:ring-accent-strong focus-visible:ring-inset focus-visible:outline-none";
 
 /**
+ * The same ring for a focusable `<tr>`. A table row is `display: table-row`, where a
+ * box-shadow (Tailwind's `ring`) is not painted, so rows carry an outline instead.
+ */
+export const FILES_ROW_FOCUS_RING =
+  "focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-accent-strong focus-visible:ring-0";
+
+/**
  * The quick views the API can express. "Orphan" is deliberately absent: the
  * listing endpoint has no filter for it, so offering it would mean inventing a
  * result set on the client.
