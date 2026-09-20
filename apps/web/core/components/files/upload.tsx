@@ -243,12 +243,18 @@ export function useFilesUpload(options: TFilesUploadOptions): TFilesUpload {
       const previous = { fileId: row.fileId, versionNo: row.versionNo };
       cancelledRef.current.delete(rowId);
       handlesRef.current.delete(rowId);
-      patchRow(rowId, { status: "queued", progress: 0, message: UPLOAD_QUEUED_COPY, fileId: null, versionNo: null });
+      // The file the attempt belongs to is kept: a retry has to end as the same file the
+      // failed attempt created. Asking for a new one instead would leave the first file
+      // behind as an unverified row and store the retry under a suffixed name — the retry
+      // is documented as resuming the interrupted upload, "no duplicate file row"
+      // (EXPERIENCE, upload interrupted). Only the version is dropped: the fresh presign
+      // allocates the attempt's own version, and `runUploadAttempt` fills it back in from
+      // the response.
+      patchRow(rowId, { status: "queued", progress: 0, message: UPLOAD_QUEUED_COPY, versionNo: null });
 
       void (async () => {
-        // A retry asks for a fresh URL for the same version, and the server refuses a
-        // presign while the previous attempt still holds its reservation, so the abandoned
-        // attempt is given up first (ARCH-001 §2.4).
+        // The server refuses a presign for this file while the abandoned attempt still
+        // holds its reservation, so that attempt is given up first (ARCH-001 §2.4).
         await releaseAttempt(previous.fileId, previous.versionNo);
         startRow(rowId);
       })();
@@ -300,7 +306,7 @@ export function useFilesUpload(options: TFilesUploadOptions): TFilesUpload {
         patchRow(row.id, {
           status: "queued",
           message: UPLOAD_QUEUED_COPY,
-          replaceFileId: replaced ? replaced.id : null,
+          fileId: replaced ? replaced.id : null,
         });
         startRow(row.id);
         return;

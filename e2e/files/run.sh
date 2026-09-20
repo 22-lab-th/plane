@@ -197,6 +197,15 @@ export E2E_GUEST_PASSWORD='PlaneE2E!Guest123'
 export E2E_WORKSPACE_SLUG
 export E2E_PROJECT_ID
 
+# The object store as the browser reaches it, so a spec can read the bytes an upload
+# landed rather than only the row that claims they exist. The credentials are the ones
+# the MinIO container was started with, and the bucket is the one created above.
+export E2E_MINIO_URL="http://127.0.0.1:${MINIO_PORT}"
+export E2E_MINIO_BUCKET=uploads
+export E2E_MINIO_ACCESS_KEY=access-key
+export E2E_MINIO_SECRET_KEY=secret-key
+export E2E_MINIO_REGION=us-east-1
+
 if [[ "${E2E_FILES_KEEP_STACK:-}" == "1" ]]; then
   say "stack kept up: api $API_URL web $WEB_URL minio http://127.0.0.1:${MINIO_PORT} — interrupt to tear down"
   while true; do sleep 30; done

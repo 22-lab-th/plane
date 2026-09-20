@@ -64,11 +64,14 @@ export type TUploadRow = {
   status: TUploadRowStatus;
   progress: number;
   message: string;
-  /** The attempt's file row and version, once `initiate-upload` has answered. */
+  /**
+   * The file this attempt uploads into: the row the collision decision chose for a
+   * "Replace as new version", or the file `initiate-upload` created (or resolved) for
+   * every other attempt. A retry keeps it, so the attempt it restarts stays the same
+   * file rather than becoming a second one.
+   */
   fileId: string | null;
   versionNo: number | null;
-  /** Set when the upload revises an existing file ("Replace as new version"). */
-  replaceFileId: string | null;
 };
 
 /** The failure the server (or the transport) reported for one attempt. */
@@ -190,7 +193,6 @@ export const planUploadRows = (
       message: UPLOAD_QUEUED_COPY,
       fileId: null,
       versionNo: null,
-      replaceFileId: null,
     };
 
     if (!validation.ok) {
@@ -264,7 +266,7 @@ export const runUploadAttempt = async (row: TUploadRow, io: TUploadAttemptIo): P
       size_bytes: row.file.size,
       mime_type: row.mimeType,
       folder_id: target.folderId,
-      file_id: row.replaceFileId,
+      file_id: row.fileId,
     });
   } catch (error) {
     const failure = readUploadFailure(error);
