@@ -39,6 +39,7 @@ from plane.db.models import (
     FileVersion,
     Issue,
     IssueComment,
+    Module,
     Page,
     Project,
     ProjectMember,
@@ -288,20 +289,55 @@ class TestAttachLink:
         assert response.data["code"] == "invalid_request"
         assert FileLink.objects.filter(file_id=file_id).count() == 0
 
-    def test_an_unvalidatable_entity_type_is_refused_on_both_doors(
+    def test_a_milestone_link_is_validated_against_this_forks_module_table(
         self, session_client, project, stored_objects
     ):
-        """This fork has no milestone table, so the type is refused rather than stored."""
+        """R-LINK-1's milestone is this fork's ``Module``; both spellings store one value."""
+        module = Module.objects.create(
+            name="Launch", project=project, workspace=project.workspace, created_by_id=project.created_by_id
+        )
         file_id, _ = upload_file(session_client, project, stored_objects=stored_objects)
 
-        response = attach(session_client, project, file_id, "milestone", uuid.uuid4())
+        by_milestone = attach(session_client, project, file_id, "milestone", module.id)
+        second_file_id, _ = upload_file(
+            session_client, project, name="Second.pdf", stored_objects=stored_objects
+        )
+        by_alias = attach(session_client, project, second_file_id, "module", module.id)
+
+        assert by_milestone.status_code == status.HTTP_200_OK, by_milestone.data
+        assert by_alias.status_code == status.HTTP_200_OK, by_alias.data
+        for file_id_checked in (file_id, second_file_id):
+            link = FileLink.objects.get(file_id=file_id_checked)
+            assert link.entity_type == FileLink.EntityType.MILESTONE, "one stored spelling"
+            assert link.entity_identifier == "Launch"
+            assert link.entity_id == module.id
+
+        # Scoped like every other target: another project's module is refused.
+        other_project = Project.objects.create(
+            name="Elsewhere", identifier="ELSE", workspace=project.workspace
+        )
+        foreign = Module.objects.create(
+            name="Foreign", project=other_project, workspace=project.workspace
+        )
+        refused = attach(session_client, project, file_id, "milestone", foreign.id)
+        assert refused.status_code == status.HTTP_400_BAD_REQUEST
+        assert refused.data["code"] == "invalid_request"
+        assert FileLink.objects.filter(file_id=file_id).count() == 1
+
+    def test_a_deliverable_link_is_refused_on_both_doors(
+        self, session_client, project, stored_objects
+    ):
+        """Not an R-LINK-1 target, and this fork has no row to validate it against."""
+        file_id, _ = upload_file(session_client, project, stored_objects=stored_objects)
+
+        response = attach(session_client, project, file_id, "deliverable", uuid.uuid4())
         upload = session_client.post(
             upload_url(project.workspace.slug, project.id),
             {
-                "file_name": "Milestone.pdf",
+                "file_name": "Deliverable.pdf",
                 "size_bytes": len(PDF_BYTES),
                 "mime_type": "application/pdf",
-                "link": {"entity_type": "milestone", "entity_id": str(uuid.uuid4())},
+                "link": {"entity_type": "deliverable", "entity_id": str(uuid.uuid4())},
             },
             format="json",
         )
@@ -444,6 +480,14 @@ class TestOrphanBehaviour:
         assert file_id in rows
         assert rows[file_id]["link_count"] == 0
 
+        # Neither entity finds it any more, and the count agrees with the filter.
+        for entity_type, entity_id in (("issue", issue.id), ("page", page.id)):
+            filtered = session_client.get(
+                files_url(project.workspace.slug, project.id),
+                {"entity_type": entity_type, "entity_id": str(entity_id)},
+            )
+            assert filtered.data["results"] == []
+
         # Still downloadable, and the object is still there - an orphan, not a deletion.
         signed = session_client.get(download_url(project.workspace.slug, project.id, file_id))
         assert signed.status_code == status.HTTP_200_OK
@@ -476,6 +520,27 @@ class TestOrphanBehaviour:
         assert detail.data["link_count"] == 2
         # Only the entity-filtered listing is entitled to narrow the rows.
         assert [row["id"] for row in by_entity.data["results"]] == [file_id]
+
+        # F-1: a detached link must vanish from the filtered listing too, because the
+        # filter and the count have to tell one story: present with count >= 1, absent
+        # with count 0.
+        linked = FileLink.objects.get(file_id=file_id, entity_type="issue")
+        session_client.delete(link_url(project.workspace.slug, project.id, file_id, linked.id))
+
+        after = session_client.get(
+            files_url(project.workspace.slug, project.id),
+            {"entity_type": "issue", "entity_id": str(issue.id)},
+        )
+        still_by_page = session_client.get(
+            files_url(project.workspace.slug, project.id),
+            {"entity_type": "page", "entity_id": str(page.id)},
+        )
+        after_detail = session_client.get(detail_url(project.workspace.slug, project.id, file_id))
+
+        assert after.data["results"] == [], "the unlinked entity must not find the file"
+        assert after.data["page"]["total_results"] == 0
+        assert [row["link_count"] for row in still_by_page.data["results"]] == [1]
+        assert after_detail.data["link_count"] == 1
 
 
 @pytest.mark.contract

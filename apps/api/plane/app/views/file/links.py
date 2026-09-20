@@ -54,6 +54,9 @@ def attach_link(request, slug, project_id, file_id):
         # Validation inside the transaction that writes the row (ARCH-001 §2.5), so a
         # target deleted between the check and the insert cannot be linked.
         resolved = resolve_link(project, entity_type, str(entity_id))
+        # The resolved type, not the payload's spelling: ``module`` is an accepted
+        # alias for ``milestone`` and the row stores the model's value.
+        entity_type = resolved["entity_type"]
 
         if FileLink.objects.filter(
             file_id=file_object.id, entity_type=entity_type, entity_id=entity_id

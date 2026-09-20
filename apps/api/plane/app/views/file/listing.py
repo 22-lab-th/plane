@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, time
 
 # Django imports
-from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+from django.db.models import Count, Exists, IntegerField, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -257,12 +257,16 @@ def _files_queryset(project, slug, filters):
         queryset = queryset.filter(size_bytes__lte=filters["size_max"])
 
     if filters["entity_type"] or filters["entity_id"]:
-        link_filters = {}
+        # An ``Exists`` over the same live manager ``link_count`` counts with: a join
+        # would also match an *unlinked* row (the link is soft-deleted, not removed),
+        # so the filtered listing would show a file whose own count reads 0 - the
+        # two-answers-for-one-question shape the filter and the count must not have.
+        entity_links = FileLink.objects.filter(file_id=OuterRef("pk"))
         if filters["entity_type"]:
-            link_filters["links__entity_type"] = filters["entity_type"]
+            entity_links = entity_links.filter(entity_type=filters["entity_type"])
         if filters["entity_id"]:
-            link_filters["links__entity_id"] = filters["entity_id"]
-        queryset = queryset.filter(**link_filters).distinct()
+            entity_links = entity_links.filter(entity_id=filters["entity_id"])
+        queryset = queryset.filter(Exists(entity_links))
 
     if filters["pinned"] is not None:
         queryset = queryset.filter(is_pinned=filters["pinned"])

@@ -17,25 +17,46 @@ Two rules come from the architecture:
 * the readable ``entityRef`` segment a key carries is frozen at the file's creation
   (DEC-001), so nothing here rewrites a key — :func:`entity_ref_for` reads the
   segment a revision inherits.
+
+**Product decision — what "milestone" means in this fork.** R-LINK-1 names a
+milestone among the MVP link targets, and this distribution has no table called
+``milestone``: it owns ``Module`` (``apps/api/plane/db/models/module.py``), which is
+the milestone-shaped entity the UI works with. A ``milestone`` link is therefore
+validated against a **Module row in the same project**, and the alternative spelling
+``module`` is accepted as an input alias — both spellings store the model's single
+value ``milestone`` on the row (``ENTITY_TYPE_ALIASES``), so no caller's vocabulary
+leaks into the database and a later rename has one place to change.
+``deliverable`` stays refused: it is not a target R-LINK-1 asks for and this
+distribution has no row to validate it against, so accepting it would mean storing
+an unverified pointer (T-101's reject-rather-than-fold posture). Do not "restore" a
+hard refusal for ``milestone``/``module`` without a product decision that removes
+the target from R-LINK-1 as well.
 """
 
 # Module imports
-from plane.db.models import FileLink, FileObject, Issue, IssueComment, ProjectPage
+from plane.db.models import FileLink, FileObject, Issue, IssueComment, Module, ProjectPage
 from plane.utils.file_storage.errors import ProjectFileError
 
 #: Entity types whose target row this repository can actually validate. ``milestone``
-#: and ``deliverable`` are choices on the model without a table in this fork, so they
-#: are refused with a stable code instead of being stored unverified.
+#: is validated against this fork's ``Module`` table (see the module docstring) and is
+#: the only value stored for either of its spellings.
 SUPPORTED_ENTITY_TYPES = (
     FileLink.EntityType.PROJECT,
     FileLink.EntityType.ISSUE,
     FileLink.EntityType.PAGE,
     FileLink.EntityType.COMMENT,
+    FileLink.EntityType.MILESTONE,
 )
 
-#: The accepted choices that cannot be validated here (documented so the refusal is
+#: Input spellings that mean an already-supported type. ``module`` is this fork's own
+#: vocabulary for the milestone-shaped row; the stored value stays the model's.
+ENTITY_TYPE_ALIASES = {
+    "module": FileLink.EntityType.MILESTONE,
+}
+
+#: The accepted choice that cannot be validated here (documented so the refusal is
 #: deliberate rather than an oversight).
-UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.MILESTONE, FileLink.EntityType.DELIVERABLE)
+UNVALIDATED_ENTITY_TYPES = (FileLink.EntityType.DELIVERABLE,)
 
 #: The category an upload lands in when it arrives with a link (DEC-001's mapping).
 CATEGORY_BY_ENTITY_TYPE = {
@@ -61,6 +82,8 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
     entity type this repository has no table for, or for a project link that names
     another project.
     """
+    entity_type = ENTITY_TYPE_ALIASES.get(str(entity_type), entity_type)
+
     if entity_type not in SUPPORTED_ENTITY_TYPES:
         raise ProjectFileError(
             f"{entity_type} links cannot be validated in this deployment.",
@@ -110,7 +133,26 @@ def resolve_link(project, entity_type, entity_id, *, field="link.entity_id"):
         resolved["entity_ref"] = entity_id
         return resolved
 
-    if not IssueComment.objects.filter(id=entity_id, project_id=project.id).exists():
+    if entity_type == FileLink.EntityType.MILESTONE:
+        module = Module.objects.filter(id=entity_id, project_id=project.id).first()
+        if module is None:
+            raise ProjectFileError(
+                "The linked module does not belong to this project.",
+                code="invalid_request",
+                field=field,
+            )
+        resolved["entity_ref"] = entity_id
+        resolved["entity_identifier"] = module.name[:64]
+        return resolved
+
+    # The comment's own ``project_id`` is denormalised, so the parent issue is what
+    # proves the comment belongs here (a row whose two disagree must not be linkable).
+    comment = (
+        IssueComment.objects.select_related("issue")
+        .filter(id=entity_id, project_id=project.id, issue__project_id=project.id)
+        .first()
+    )
+    if comment is None:
         raise ProjectFileError(
             "The linked comment does not belong to this project.",
             code="invalid_request",

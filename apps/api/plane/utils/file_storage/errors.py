@@ -4,15 +4,46 @@
 
 """Machine-readable project-file failures (ARCH-001 §4).
 
-Every project-file endpoint that has to refuse answers with a stable ``code``:
-``size_mismatch``, ``mime_mismatch``, ``object_missing`` and ``quota_exceeded``
-are the codes the architecture fixes for uploads; ``storage_unavailable``,
-``verification_failed``, ``not_uploading``, ``upload_in_progress``,
-``project_archived`` and ``invalid_request`` cover the remaining refusals across
-the upload and listing endpoints. The operations tickets add ``file_trashed``,
-``file_not_trashed``, ``confirmation_required`` (a purge without ``confirm=true``),
-``unsupported_field``, ``object_unavailable`` (no stored or active version),
-``cross_project_not_supported`` and ``permission_denied``.
+Every project-file endpoint that has to refuse answers with a stable ``code``, and
+**this docstring is the vocabulary contract**: the UI tickets read it rather than
+the raise sites, so a new code is added here in the same commit that introduces it.
+``file_quarantined`` and the codes the later phases add are listed with the reason
+they exist, not only the ones a test currently asserts.
+
+Uploads
+    ``size_mismatch`` (the stored object's size contradicts the declaration),
+    ``mime_mismatch``, ``object_missing`` (nothing at the signed key),
+    ``verification_failed``, ``not_uploading`` (a finalize or abort for an attempt
+    that already settled), ``upload_in_progress`` (a second attempt for a file with
+    a live reservation), ``quota_exceeded`` (workspace or project ceiling, carrying
+    ``level`` and integer byte fields).
+
+Storage
+    ``storage_unavailable`` (the provider could not sign, copy, or delete);
+    ``object_unavailable`` (no stored object can be served: no active version, a
+    purged/purge_failed version, or an object the store no longer has).
+
+Folders
+    ``folder_name_conflict``, ``folder_not_found``, ``folder_trashed``,
+    ``folder_not_empty``, ``folder_cycle``, ``depth_limit_exceeded``,
+    ``folder_conflict`` (an integrity failure this mapping could not attribute).
+
+Files and the trash lifecycle
+    ``file_name_conflict``, ``name_conflict`` (no unique name could be derived after
+    the suffix attempts), ``file_trashed`` (the row is in the trash),
+    ``file_not_trashed`` (restore or purge asked for a live file),
+    ``project_archived`` (an archived project is read-only),
+    ``confirmation_required`` (an irreversible purge without ``confirm=true``),
+    ``permission_denied`` (the caller is a member but lacks the role).
+
+Links
+    ``link_exists`` (this file is already linked to that entity),
+    ``unsupported_entity_type`` (a target this deployment cannot validate).
+
+Requests
+    ``invalid_request`` (a value or target that is wrong, carrying ``field``),
+    ``unsupported_field`` (a payload field this endpoint does not implement),
+    ``cross_project_not_supported`` (T-122 owns the cross-project flows).
 
 Subclassing DRF's :class:`APIException` means a raised failure becomes the right
 response without every endpoint re-implementing the mapping, and the body stays
