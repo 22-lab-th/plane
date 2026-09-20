@@ -72,6 +72,10 @@ app.conf.beat_schedule = {
         "task": "plane.bgtasks.file_purge_task.purge_expired_files",
         "schedule": crontab(hour=2, minute=15),  # UTC 02:15
     },
+    "check-every-day-to-reconcile-storage-usage": {
+        "task": "plane.bgtasks.file_quota_task.reconcile_storage_usage",
+        "schedule": crontab(hour=3, minute=0),  # UTC 03:00
+    },
     "check-every-day-to-delete-api-logs": {
         "task": "plane.bgtasks.cleanup_task.delete_api_logs",
         "schedule": crontab(hour=2, minute=30),  # UTC 02:30

@@ -8,7 +8,7 @@ import uuid
 
 # Third party imports
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from urllib.parse import quote
 
 # Module imports
@@ -306,6 +306,46 @@ class S3Storage(S3Boto3Storage):
         except ClientError as e:
             log_exception(e)
             return False
+
+    #: Field names a provider's ``UsageSummary`` response may carry its byte total
+    #: under. RSCH-001 S15 confirms the operation exists and is a Class B call, but
+    #: not the field names, and the deferred R2 verification covers that gap; the
+    #: extractor therefore reads the first shape it recognises and returns ``None``
+    #: rather than guessing a number.
+    BUCKET_USAGE_FIELDS = ("PayloadSizeBytes", "Bytes", "UsageBytes", "Value", "TotalSize")
+
+    def get_bucket_usage_bytes(self):
+        """Return the bucket's own usage in bytes, or ``None`` when unavailable.
+
+        A Class B ``UsageSummary`` call where the provider exposes one (RSCH-001
+        S15). ``None`` means "this provider cannot answer" - MinIO in this
+        environment, or a provider whose response shape this deployment has not
+        verified - and the reconciliation reports it as unavailable instead of
+        treating it as zero, which would look like a clean bucket.
+        """
+        try:
+            summary = self.s3_client.get_bucket_usage(Bucket=self.aws_storage_bucket_name)
+        except (ClientError, BotoCoreError, AttributeError, TypeError) as e:
+            log_exception(e)
+            return None
+
+        if not isinstance(summary, dict):
+            return None
+
+        for field in self.BUCKET_USAGE_FIELDS:
+            value = summary.get(field)
+            if isinstance(value, int):
+                return value
+
+        for nested in ("Usage", "Summary", "Storage"):
+            inner = summary.get(nested)
+            if isinstance(inner, dict):
+                for field in self.BUCKET_USAGE_FIELDS:
+                    value = inner.get(field)
+                    if isinstance(value, int):
+                        return value
+
+        return None
 
     def delete_files(self, object_names):
         """Delete an S3 object"""

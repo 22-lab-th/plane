@@ -26,11 +26,27 @@ transaction that holds the locks, except :func:`get_usage_rows` and
 
 # Django imports
 from django.conf import settings
+from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 # Module imports
-from plane.db.models import FileVersion, ProjectStorageUsage, StorageQuota
+from plane.db.models import FileObject, FileVersion, Project, ProjectStorageUsage, StorageQuota
 from plane.utils.file_storage.errors import ProjectFileError
+
+#: Version states whose bytes ``used_bytes`` accounts for (ARCH-001 §2.8 item 6).
+#: A settled version counts until its *file* goes: ``purged`` and ``purge_failed``
+#: rows stay counted while the file row exists, because a partial purge returns
+#: before the counter transaction and only a whole-file purge gives the bytes back
+#: once. ``uploading`` and ``failed`` versions were never settled - their bytes live
+#: in ``reserved_bytes`` - and an unverified object is never counted as usable
+#: storage, so they are excluded.
+ACCOUNTED_VERSION_STATUSES = (
+    FileVersion.Status.ACTIVE,
+    FileVersion.Status.SUPERSEDED,
+    FileVersion.Status.PURGED,
+    FileVersion.Status.PURGE_FAILED,
+)
 
 
 class QuotaExceeded(ProjectFileError):
@@ -245,3 +261,115 @@ def _bump_counters(quota, usage, *, used_bytes=0, reserved_bytes=0, clamp_reserv
     quota.reserved_bytes = quota_reserved
     usage.used_bytes = usage_used
     usage.reserved_bytes = usage_reserved
+
+
+def accounted_bytes(project):
+    """Return the bytes this project's files account for (ARCH-001 §2.8 item 6).
+
+    Summed from ``file_versions`` and from nothing else: the file row's
+    ``object_key``/``current_version_no``/``size_bytes`` are display values (T-108
+    F-2), and ``current_version_no == 0`` does not mean "nothing is stored". The
+    join deliberately does not filter the *file* rows, so a trashed file (AD-09) and
+    a file left ``purge_failed`` by a partial purge both keep their versions counted
+    until the file row itself is gone.
+    """
+    total = FileVersion.objects.filter(
+        file__project_id=project.id, status__in=ACCOUNTED_VERSION_STATUSES
+    ).aggregate(total=Sum("size_bytes"))["total"]
+
+    return int(total or 0)
+
+
+def reserved_bytes(project):
+    """Return the bytes this project's live reservations hold.
+
+    Read from the version rows rather than from the counter: the row's
+    ``reserved_bytes`` is the stored amount and ``reservation_released_at IS NULL``
+    is the single-fire marker, so a recompute cannot invent a reservation and cannot
+    forget one the counter lost.
+    """
+    total = FileVersion.objects.filter(
+        file__project_id=project.id, reservation_released_at__isnull=True
+    ).aggregate(total=Sum("reserved_bytes"))["total"]
+
+    return int(total or 0)
+
+
+def recompute_project_usage(project):
+    """Rewrite this project's counters from the version rows; return the drift.
+
+    Runs inside the shared lock pair (workspace first, then project), so a concurrent
+    presign, finalize or purge cannot interleave with it. This is R-QUOTA-1's
+    "self-correcting" guarantee: the version rows are the account of record and the
+    counters are made to agree with them.
+
+    ``file_count``/``version_count``/``recomputed_at`` are recorded for the readers
+    that want a snapshot (T-120's observability, the UI's last-reconciled line); no
+    decision anywhere reads them back.
+    """
+    with transaction.atomic():
+        quota_row, usage_row = lock_usage_rows(project)
+
+        expected = accounted_bytes(project)
+        expected_reserved = reserved_bytes(project)
+        files = FileObject.all_objects.filter(project_id=project.id).count()
+        versions = FileVersion.objects.filter(file__project_id=project.id).count()
+
+        drift = usage_row.used_bytes - expected
+        reserved_drift = usage_row.reserved_bytes - expected_reserved
+
+        ProjectStorageUsage.objects.filter(pk=usage_row.pk).update(
+            used_bytes=expected,
+            reserved_bytes=expected_reserved,
+            file_count=files,
+            version_count=versions,
+            recomputed_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
+        usage_row.used_bytes = expected
+        usage_row.reserved_bytes = expected_reserved
+
+    return {
+        "project_id": str(project.id),
+        "used_bytes": expected,
+        "drift_bytes": drift,
+        "reserved_drift_bytes": reserved_drift,
+        "file_count": files,
+        "version_count": versions,
+    }
+
+
+def recompute_workspace_usage(workspace_id):
+    """Make the workspace counters the sum of its projects'; return the drift.
+
+    The workspace row carries the ceiling counters (R-QUOTA-2), so it is the sum of
+    the project rows rather than a number of its own: this is what keeps the ceiling
+    honest after a project-level correction.
+    """
+    with transaction.atomic():
+        quota_row = StorageQuota.objects.select_for_update().filter(workspace_id=workspace_id).first()
+        if quota_row is None:
+            return {"workspace_id": str(workspace_id), "used_bytes": 0, "drift_bytes": 0, "reserved_drift_bytes": 0}
+
+        totals = ProjectStorageUsage.objects.filter(project__workspace_id=workspace_id).aggregate(
+            used=Sum("used_bytes"), reserved=Sum("reserved_bytes")
+        )
+        expected = int(totals["used"] or 0)
+        expected_reserved = int(totals["reserved"] or 0)
+        drift = quota_row.used_bytes - expected
+        reserved_drift = quota_row.reserved_bytes - expected_reserved
+
+        StorageQuota.objects.filter(pk=quota_row.pk).update(
+            used_bytes=expected,
+            reserved_bytes=expected_reserved,
+            updated_at=timezone.now(),
+        )
+        quota_row.used_bytes = expected
+        quota_row.reserved_bytes = expected_reserved
+
+    return {
+        "workspace_id": str(workspace_id),
+        "used_bytes": expected,
+        "drift_bytes": drift,
+        "reserved_drift_bytes": reserved_drift,
+    }

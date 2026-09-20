@@ -43,19 +43,8 @@ from plane.db.models import FileAccessLog, FileObject, FileVersion, Project
 from plane.settings.storage import S3Storage
 from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage import quota as quota_module
+from plane.utils.file_storage.quota import ACCOUNTED_VERSION_STATUSES
 from plane.utils.file_storage.audit import record_file_access
-
-#: Version states whose bytes ``used_bytes`` accounts for (ARCH-001 §2.8 item 6).
-#: A settled version counts until it is purged, including while the file is trashed
-#: (AD-09) - so purging the file has to give those bytes back. ``uploading`` and
-#: ``failed`` versions were never settled: their bytes live in ``reserved_bytes``
-#: and are released here rather than subtracted from usage.
-ACCOUNTED_VERSION_STATUSES = (
-    FileVersion.Status.ACTIVE,
-    FileVersion.Status.SUPERSEDED,
-    FileVersion.Status.PURGED,
-    FileVersion.Status.PURGE_FAILED,
-)
 
 #: File-row states a purge may act on. ``purge_failed`` is a trashed file whose
 #: earlier attempt could not delete an object and is being retried.

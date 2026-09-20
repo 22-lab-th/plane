@@ -127,6 +127,7 @@ from .file import (
     FileLinkDetailEndpoint,
     FileLinkListEndpoint,
     FileListEndpoint,
+    FileStorageEndpoint,
     FilePreviewEndpoint,
     FileUploadAbortEndpoint,
     FileUploadCompleteEndpoint,

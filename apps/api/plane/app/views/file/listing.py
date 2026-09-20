@@ -42,6 +42,7 @@ from plane.app.views.file.base import (
     parse_bool,
     permissions_for,
     project_or_404,
+    require_project_member,
     trashed_files,
 )
 from plane.db.models import FileFolder, FileLink, FileObject, FileVersion
@@ -410,6 +411,24 @@ class FileListEndpoint(BaseAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class FileStorageEndpoint(BaseAPIView):
+    """Return the project's storage usage and ceiling (ARCH-001 §4.1, AC-15).
+
+    The same block the listing carries, on its own route so a settings or billing
+    screen can read it without paging through files. Every value is an integer and
+    comes from the two counter rows plus the version/file counts; the ceiling is the
+    project's own limit when it has one, otherwise the workspace's (R-QUOTA-2).
+    ``warn_threshold_pct`` is the workspace row's configured percentage - the warning
+    behaviour itself is R-QUOTA-3 and belongs to a later phase.
+    """
+
+    def get(self, request, slug, project_id):
+        project = project_or_404(slug, project_id)
+        require_project_member(request, project)
+
+        return Response(storage_summary(project), status=status.HTTP_200_OK)
 
 
 class FileDetailEndpoint(BaseAPIView):
