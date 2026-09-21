@@ -7,13 +7,20 @@
 import { logger } from "@plane/logger";
 import { AppError } from "@/lib/errors";
 import { Server } from "./server";
+import { createDocumentReplacementServer } from "./document-replacement";
+import { env } from "./env";
 
 let server: Server;
+const replacementServer = createDocumentReplacementServer(env.LIVE_SERVER_SECRET_KEY);
 
 async function startServer() {
   server = new Server();
   try {
     await server.initialize();
+    await new Promise<void>((resolve, reject) => {
+      replacementServer.once("error", reject);
+      replacementServer.listen(env.YJS_REPLACE_PORT, "0.0.0.0", resolve);
+    });
     server.listen();
   } catch (error) {
     logger.error("Failed to start server:", error);
@@ -27,6 +34,8 @@ startServer();
 process.on("SIGTERM", async () => {
   logger.info("Received SIGTERM signal. Initiating graceful shutdown...");
   try {
+    replacementServer.close();
+    replacementServer.closeAllConnections();
     if (server) {
       await server.destroy();
     }
@@ -41,6 +50,8 @@ process.on("SIGTERM", async () => {
 process.on("SIGINT", async () => {
   logger.info("Received SIGINT signal. Killing node process...");
   try {
+    replacementServer.close();
+    replacementServer.closeAllConnections();
     if (server) {
       await server.destroy();
     }

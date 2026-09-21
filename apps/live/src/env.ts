@@ -24,6 +24,7 @@ const envSchema = z.object({
   COMPRESSION_THRESHOLD: z.string().default("5000").transform(Number),
   // secret
   LIVE_SERVER_SECRET_KEY: z.string(),
+  YJS_REPLACE_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
   // Redis configuration
   REDIS_HOST: z.string().optional(),
   REDIS_PORT: z.string().default("6379").transform(Number),
