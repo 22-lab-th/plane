@@ -47,13 +47,18 @@ an incident is running.
 ## 2. Triage: is it a personal-data breach, and which surface answers
 
 A breach is a breach of security leading to accidental or unlawful destruction,
-loss, alteration or unauthorised disclosure of, or access to, personal data.
-Ask in this order: (a) does the affected data relate to a natural person — a
-project file can be a contract, an ID document, payroll or HR material, and the
-audit columns `ip_address`, `user_agent`, `actor_display` and
-`file_name_snapshot` are personal data in their own right until
-`AUDIT_PII_RETENTION_DAYS` (default 90) masks them (R-NFR-13); (b) was it
-unauthorised; (c) does it risk rights and freedoms; (d) is the risk high (§4).
+loss, alteration or unauthorised disclosure of, or access to, personal data —
+the working definition the PDPA breach texts use; RSCH-002 does not quote it
+verbatim, so the owner should confirm it against the Thai text while doing the
+review this runbook does not do. Ask in this order: (a) does the affected data
+relate to a natural person — a project file can be a contract, an ID document,
+payroll or HR material, and the audit columns `ip_address`, `user_agent`,
+`actor_display` and `file_name_snapshot` carry personal data (whether the audit
+trail and the provider's access logs must be _treated_ as personal data held by
+22lab is an open legal question — RSCH-002 §7 item 7 — but the design masks them
+on schedule regardless, R-NFR-13, after `AUDIT_PII_RETENTION_DAYS`, default 90);
+(b) was it unauthorised; (c) does it risk rights and freedoms; (d) is the risk
+high (§4).
 
 | Event class                                                             | Where the answer is                                                                                                                                                                                  | What to capture                                                                                                                                       |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
