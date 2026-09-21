@@ -34,14 +34,17 @@ exact keys that were deleted.
 
 What happens if storage refuses: the purge deletes versions one at a time, and a
 storage failure aborts the loop on the failing call. Versions the loop had already
-deleted before the failure are gone; the failing version and the ones after it are
-still stored; no `purged` row is written. The file row's status becomes
-`purge_failed`, the endpoint answers `502 storage_unavailable`, and the daily
-`purge_expired_files` task retries every `purge_failed` row regardless of age. The
-state is "some objects may already be gone, none recorded, repair pending" — not
-"objects stay" — so a `502` is **not** a completed erasure. Read step 4 back before
-confirming completion; the repair path (restore, then re-activate a version whose
-object is intact, or the next retry) is what restores the invariant.
+deleted before the failure are gone (their version rows carry `object_deleted_at`
+and the failed version marks `purge_failed`); the failing version and the ones
+after it are still stored. No `purged` audit row is written, so the **completion
+record** the operator would read in step 4 is missing — that is what the failure
+aborts. The file row's status becomes `purge_failed`, the endpoint answers
+`502 storage_unavailable`, and the daily `purge_expired_files` task retries every
+`purge_failed` row regardless of age. The state is "some objects may already be
+gone, completion record absent, repair pending" — not "objects stay" — so a
+`502` is **not** a completed erasure. Read step 4 back before confirming
+completion; the repair path (restore, then re-activate a version whose object is
+intact, or the next retry) is what restores the invariant.
 
 The audit residue itself is masked, not deleted: `mask_audit_pii` clears `ip_address`,
 `user_agent`, `actor_display` and `file_name_snapshot` after `AUDIT_PII_RETENTION_DAYS`
@@ -66,9 +69,11 @@ set cite, so record it for the project's notice once set.
 - The API refuses a value below 1 day. A stored `0` would be read as "not set" by the
   purge, which would silently grant a 30-day window to a project that asked for none.
 - The setting is read back on the project detail, create and update responses
-  (`ProjectSerializer`/`ProjectListSerializer`); the workspace project list
-  projection (`list_detail`) currently omits it. Read the setting from the project
-  detail when a quick-view is needed.
+  (`GET …/projects/{id}/`, `POST …/projects/`, `PATCH …/projects/{id}/`) and on the
+  workspace detail list (`GET …/projects/details/`). The plain workspace project
+  list (`GET …/projects/`, the `.values(...)` row at `views/project/base.py:175-223`)
+  currently omits it. Read the setting from the project detail when a quick-view is
+  needed.
 
 ## 3. Holdings outside the automated mechanism
 
