@@ -26,14 +26,27 @@ from rest_framework import status
 from rest_framework.response import Response
 
 # Module imports
-from plane.app.serializers.file import FileLinkSerializer, FileLinkWriteSerializer
+from plane.app.serializers.file import FileLinkSerializer, FileLinkWriteSerializer, FileObjectSerializer
 from plane.app.views.base import BaseAPIView
-from plane.app.views.file.base import file_for_write, project_or_404, require_project_editor
+from plane.app.views.file.base import (
+    file_for_write,
+    invalid_param,
+    listed_files,
+    parse_uuid,
+    project_or_404,
+    require_project_editor,
+    require_project_member,
+)
+from plane.app.views.file.listing import link_count_expression
 from plane.db.models import FileAccessLog, FileLink
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
-from plane.utils.file_storage.links import resolve_link
+from plane.utils.file_storage.links import (
+    SUPPORTED_ENTITY_TYPES,
+    normalize_entity_type,
+    resolve_link,
+)
 
 
 def attach_link(request, slug, project_id, file_id):
@@ -164,3 +177,61 @@ class FileLinkDetailEndpoint(BaseAPIView):
 
     def delete(self, request, slug, project_id, file_id, link_id):
         return unlink(request, slug, project_id, file_id, link_id)
+
+
+def entity_link_filters(query):
+    """Validate the entity a link listing is asked about (R-LINK-2, AC-16)."""
+    entity_type = normalize_entity_type((query.get("entity_type") or "").strip())
+    if entity_type not in SUPPORTED_ENTITY_TYPES:
+        invalid_param("entity_type", "entity_type must be one of the supported entity types.")
+
+    raw_entity_id = (query.get("entity_id") or "").strip()
+    if not raw_entity_id:
+        invalid_param("entity_id", "entity_id is required.")
+
+    return entity_type, parse_uuid(raw_entity_id, "entity_id")
+
+
+class FileEntityLinkListEndpoint(BaseAPIView):
+    """The files this project surfaces for one entity (R-LINK-2, R-LINK-3, AC-16).
+
+    The entity → file direction a surface needs when it renders *its own*
+    attachments or embeds: one request answers "what is attached to this issue or
+    page", with each row carrying its link id (so the client can unlink without a
+    second lookup) and the file (so the surface prints exactly what the Files view
+    prints - same id, name, size, type and uploader). The file → entity direction
+    stays ``files/{file_id}/links/`` and the drawer's links list.
+
+    A file the Files view would not show - trashed, or with no verified version -
+    is not an attachment either, so it is left out here rather than listed on the
+    issue and missing from the repository (the one visibility rule, AC-20).
+    """
+
+    def get(self, request, slug, project_id):
+        project = project_or_404(slug, project_id)
+        require_project_member(request, project)
+        entity_type, entity_id = entity_link_filters(request.query_params)
+
+        links = list(
+            FileLink.objects.filter(project_id=project.id, entity_type=entity_type, entity_id=entity_id)
+            .select_related("file")
+            .order_by("-created_at", "-id")
+        )
+
+        listed = {
+            str(file_object.id): file_object
+            for file_object in listed_files(project, slug)
+            .filter(id__in=[link.file_id for link in links])
+            .annotate(link_count=link_count_expression())
+        }
+
+        return Response(
+            {
+                "results": [
+                    {"link": FileLinkSerializer(link).data, "file": FileObjectSerializer(listed[str(link.file_id)]).data}
+                    for link in links
+                    if str(link.file_id) in listed
+                ]
+            },
+            status=status.HTTP_200_OK,
+        )

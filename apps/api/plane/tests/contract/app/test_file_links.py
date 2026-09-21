@@ -34,6 +34,7 @@ from rest_framework.test import APIClient
 # Module imports
 from plane.db.models import (
     FileAccessLog,
+    FileAsset,
     FileLink,
     FileObject,
     FileVersion,
@@ -53,9 +54,21 @@ from plane.settings.storage import S3Storage
 
 PDF_BYTES = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n"
 
+#: A real 1x1 PNG, so the finalize magic-byte check sees the type it was declared as.
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00"
+    b"\x00IEND\xaeB`\x82"
+)
+
 
 def files_url(slug, project_id):
     return f"/api/workspaces/{slug}/projects/{project_id}/files/"
+
+
+def entity_links_url(slug, project_id):
+    """The entity -> files direction the issue and page surfaces read."""
+    return f"{files_url(slug, project_id)}links/"
 
 
 def detail_url(slug, project_id, file_id):
@@ -167,22 +180,31 @@ def issue_key(project, issue):
     return f"{project.identifier}-{issue.sequence_id}"
 
 
-def upload_file(session_client, project, *, name="Report.pdf", link=None, stored_objects):
+def upload_file(
+    session_client,
+    project,
+    *,
+    name="Report.pdf",
+    link=None,
+    stored_objects,
+    payload=PDF_BYTES,
+    mime_type="application/pdf",
+):
     """Create one verified version through the real pipeline; return ``(file_id, key)``."""
-    payload = {"file_name": name, "size_bytes": len(PDF_BYTES), "mime_type": "application/pdf"}
+    body = {"file_name": name, "size_bytes": len(payload), "mime_type": mime_type}
     if link is not None:
-        payload["link"] = {"entity_type": link[0], "entity_id": str(link[1])}
+        body["link"] = {"entity_type": link[0], "entity_id": str(link[1])}
 
-    initiated = session_client.post(upload_url(project.workspace.slug, project.id), payload, format="json")
+    initiated = session_client.post(upload_url(project.workspace.slug, project.id), body, format="json")
     assert initiated.status_code == status.HTTP_200_OK, initiated.data
     file_id = initiated.data["file"]["id"]
 
     upload = initiated.data["upload"]
-    assert requests.put(upload["url"], data=PDF_BYTES, headers=upload["headers"], timeout=30).status_code == 200
+    assert requests.put(upload["url"], data=payload, headers=upload["headers"], timeout=30).status_code == 200
 
     completed = session_client.post(
         complete_url(project.workspace.slug, project.id, file_id),
-        {"version_no": 1, "size_bytes": len(PDF_BYTES)},
+        {"version_no": 1, "size_bytes": len(payload)},
         format="json",
     )
     assert completed.status_code == status.HTTP_200_OK, completed.data
@@ -755,3 +777,229 @@ class TestMilestoneKeySegment:
         planned = FileVersion.objects.get(file_id=file_id, version_no=3).object_key
         assert f"/{module.id}/" in planned
         assert "Renamed" not in planned and "renamed" not in planned
+@pytest.mark.contract
+@pytest.mark.django_db
+class TestEntityLinkListing:
+    """T-115 / AC-16, AC-17: an entity's own files, as the issue and page surfaces read them.
+
+    The upload door already accepts a ``link``, so an attachment is created by the
+    same pipeline a Files-tab upload uses: one ``file_objects`` row, one stored
+    object, one link. What these tests pin is that the entity -> file direction
+    answers with **that** row - the same id the Files view lists - and that
+    unlinking it takes the file off the entity without touching the file.
+    """
+
+    def test_an_upload_that_declares_a_link_is_one_row_in_both_surfaces(
+        self, session_client, project, stored_objects
+    ):
+        issue = make_issue(project)
+
+        file_id, object_key = upload_file(
+            session_client, project, link=("issue", issue.id), stored_objects=stored_objects
+        )
+
+        listed = session_client.get(
+            entity_links_url(project.workspace.slug, project.id),
+            {"entity_type": "issue", "entity_id": str(issue.id)},
+        )
+        assert listed.status_code == status.HTTP_200_OK, listed.data
+        assert len(listed.data["results"]) == 1
+        row = listed.data["results"][0]
+        assert row["file"]["id"] == file_id
+        assert row["file"]["name_display"] == "Report.pdf"
+        assert row["file"]["size_bytes"] == len(PDF_BYTES)
+        assert row["file"]["link_count"] == 1
+        assert row["link"]["entity_type"] == "issue"
+        assert row["link"]["entity_id"] == str(issue.id)
+        assert row["link"]["entity_identifier"] == issue_key(project, issue)
+
+        # The Files view lists the same row, by the same id, once.
+        files = session_client.get(files_url(project.workspace.slug, project.id), {"folder_id": "root"})
+        assert files.status_code == status.HTTP_200_OK, files.data
+        rows = [result for result in files.data["results"] if result["id"] == file_id]
+        assert len(rows) == 1
+        assert rows[0]["link_count"] == 1
+
+        # One stored object, not one per surface (R-LINK-1): an entity link never
+        # duplicates bytes.
+        assert FileObject.objects.filter(project_id=project.id).count() == 1
+        assert FileVersion.objects.filter(file_id=file_id).count() == 1
+        assert FileVersion.objects.get(file_id=file_id).object_key == object_key
+        assert FileLink.objects.filter(file_id=file_id).count() == 1
+
+    def test_a_page_embed_is_a_project_file_the_editor_can_render_inline(
+        self, session_client, create_user, project, stored_objects
+    ):
+        page = Page.objects.create(name="Design notes", workspace=project.workspace, owned_by=create_user)
+        ProjectPage.objects.create(page=page, project=project, workspace=project.workspace)
+
+        file_id, object_key = upload_file(
+            session_client,
+            project,
+            name="diagram.png",
+            link=("page", page.id),
+            stored_objects=stored_objects,
+            payload=PNG_BYTES,
+            mime_type="image/png",
+        )
+
+        stored = FileObject.objects.get(pk=file_id)
+        assert stored.category == FileObject.Category.PAGES
+        assert f"/{page.id}/" in object_key
+        assert f"/{page.id}/" in stored.object_key
+
+        listed = session_client.get(
+            entity_links_url(project.workspace.slug, project.id),
+            {"entity_type": "page", "entity_id": str(page.id)},
+        )
+        assert listed.status_code == status.HTTP_200_OK, listed.data
+        assert [row["file"]["id"] for row in listed.data["results"]] == [file_id]
+
+        # What the editor resolves: a presigned URL for the project-scoped preview.
+        preview = session_client.get(f"{detail_url(project.workspace.slug, project.id, file_id)}preview/")
+        assert preview.status_code == status.HTTP_200_OK, preview.data
+        assert preview.data["disposition"] == "inline"
+        assert preview.data["file_name"] == "diagram.png"
+
+        served = requests.get(preview.data["url"], timeout=30)
+        assert served.status_code == 200
+        assert served.content == PNG_BYTES
+        assert served.headers["Content-Type"].startswith("image/png")
+
+    def test_unlinking_an_issue_attachment_leaves_the_file_listed_and_downloadable(
+        self, session_client, project, stored_objects, independent_store
+    ):
+        issue = make_issue(project)
+        file_id, object_key = upload_file(
+            session_client, project, link=("issue", issue.id), stored_objects=stored_objects
+        )
+        link_id = session_client.get(
+            entity_links_url(project.workspace.slug, project.id),
+            {"entity_type": "issue", "entity_id": str(issue.id)},
+        ).data["results"][0]["link"]["id"]
+
+        removed = session_client.delete(f"{links_url(project.workspace.slug, project.id, file_id)}{link_id}/")
+        assert removed.status_code == status.HTTP_204_NO_CONTENT
+
+        # The entity no longer renders it...
+        after = session_client.get(
+            entity_links_url(project.workspace.slug, project.id),
+            {"entity_type": "issue", "entity_id": str(issue.id)},
+        )
+        assert after.data["results"] == []
+
+        # ...while the file itself, its object and its download are untouched (AC-21).
+        detail = session_client.get(detail_url(project.workspace.slug, project.id, file_id))
+        assert detail.status_code == status.HTTP_200_OK, detail.data
+        assert detail.data["link_count"] == 0
+        assert detail.data["file"]["id"] == file_id
+        assert detail.data["permissions"]["can_download"] is True
+
+        still_listed = session_client.get(files_url(project.workspace.slug, project.id), {"folder_id": "root"})
+        assert [row["id"] for row in still_listed.data["results"]] == [file_id]
+
+        download = session_client.get(download_url(project.workspace.slug, project.id, file_id))
+        assert download.status_code == status.HTTP_200_OK, download.data
+        assert download.data["disposition"] == "attachment"
+        assert requests.get(download.data["url"], timeout=30).content == PDF_BYTES
+        assert object_exists(independent_store, object_key) is True
+        unlinked_row = FileLink.all_objects.get(file_id=file_id)
+        assert unlinked_row.deleted_at is not None
+
+    def test_a_trashed_file_stops_being_an_attachment_and_returns_on_restore(
+        self, session_client, project, stored_objects
+    ):
+        issue = make_issue(project)
+        file_id, _ = upload_file(session_client, project, link=("issue", issue.id), stored_objects=stored_objects)
+        query = {"entity_type": "issue", "entity_id": str(issue.id)}
+
+        trashed = session_client.delete(detail_url(project.workspace.slug, project.id, file_id))
+        assert trashed.status_code == status.HTTP_204_NO_CONTENT
+        assert session_client.get(entity_links_url(project.workspace.slug, project.id), query).data["results"] == []
+        # Trashing marks the link inactive but keeps the row, so restore can revive it.
+        assert FileLink.all_objects.get(file_id=file_id).deleted_at is not None
+
+        restored = session_client.post(restore_url(project.workspace.slug, project.id, file_id))
+        assert restored.status_code == status.HTTP_200_OK, restored.data
+        assert [row["file"]["id"] for row in session_client.get(
+            entity_links_url(project.workspace.slug, project.id), query
+        ).data["results"]] == [file_id]
+
+    def test_the_entity_listing_refuses_an_unusable_query(self, session_client, project):
+        issue = make_issue(project)
+        base = entity_links_url(project.workspace.slug, project.id)
+
+        unknown_type = session_client.get(base, {"entity_type": "epic", "entity_id": str(issue.id)})
+        assert unknown_type.status_code == status.HTTP_400_BAD_REQUEST
+        assert unknown_type.data["code"] == "invalid_request"
+        assert unknown_type.data["field"] == "entity_type"
+
+        missing_id = session_client.get(base, {"entity_type": "issue"})
+        assert missing_id.status_code == status.HTTP_400_BAD_REQUEST
+        assert missing_id.data["field"] == "entity_id"
+
+        malformed_id = session_client.get(base, {"entity_type": "issue", "entity_id": "not-a-uuid"})
+        assert malformed_id.status_code == status.HTTP_400_BAD_REQUEST
+        assert malformed_id.data["field"] == "entity_id"
+
+    def test_an_entity_of_another_project_cannot_be_read_through_this_project(self, project, create_user):
+        other_project = Project.objects.create(name="Elsewhere", identifier="ELSE", workspace=project.workspace)
+        foreign_issue = make_issue(other_project, name="Foreign")
+        outsider = User.objects.create(email="outsider@example.com", username="outsider")
+        outsider.set_password("test-password")
+        outsider.save()
+        client = APIClient()
+        client.force_authenticate(user=outsider)
+
+        response = client.get(
+            entity_links_url(project.workspace.slug, project.id),
+            {"entity_type": "issue", "entity_id": str(foreign_issue.id)},
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+class TestLegacyIssueAttachment:
+    """T-115: the attachments an issue already had keep listing and downloading."""
+
+    def test_a_legacy_file_asset_attachment_still_lists_and_serves_its_bytes(
+        self, session_client, create_user, project, independent_store
+    ):
+        issue = make_issue(project)
+        key = f"{project.workspace_id}/{uuid.uuid4().hex}-legacy.pdf"
+        independent_store.put_object(
+            Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key, Body=PDF_BYTES, ContentType="application/pdf"
+        )
+        try:
+            asset = FileAsset.objects.create(
+                attributes={"name": "legacy.pdf", "type": "application/pdf", "size": len(PDF_BYTES)},
+                asset=key,
+                size=len(PDF_BYTES),
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                issue_id=issue.id,
+                entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+                created_by=create_user,
+                is_uploaded=True,
+            )
+
+            listed = session_client.get(
+                f"/api/assets/v2/workspaces/{project.workspace.slug}/projects/{project.id}"
+                f"/issues/{issue.id}/attachments/"
+            )
+            assert listed.status_code == status.HTTP_200_OK, listed.data
+            rows = [row for row in listed.data if str(row["id"]) == str(asset.id)]
+            assert len(rows) == 1
+            assert rows[0]["attributes"]["name"] == "legacy.pdf"
+
+            # The download the attachment row points at: an app path that redirects
+            # to the signed object URL the legacy path has always used.
+            redirect = session_client.get(rows[0]["asset_url"])
+            assert redirect.status_code == status.HTTP_302_FOUND
+            served = requests.get(redirect["Location"], timeout=30)
+            assert served.status_code == 200
+            assert served.content == PDF_BYTES
+        finally:
+            independent_store.delete_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key)

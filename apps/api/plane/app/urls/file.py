@@ -8,6 +8,7 @@ from plane.app.views import (
     FileActivityEndpoint,
     FileCopyEndpoint,
     FileStorageEndpoint,
+    FileEntityLinkListEndpoint,
     FileLinkDetailEndpoint,
     FileLinkListEndpoint,
     FileVersionActivateEndpoint,
@@ -101,7 +102,14 @@ urlpatterns = [
         FileStorageEndpoint.as_view(),
         name="project-file-storage",
     ),
-    # Entity links (T-109)
+    # Entity links (T-109), and the entity -> file direction T-115's issue and
+    # page surfaces read. The literal segment stays ahead of the parameterised
+    # detail pattern so it is never taken for a file id.
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/links/",
+        FileEntityLinkListEndpoint.as_view(),
+        name="project-file-entity-links",
+    ),
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/links/",
         FileLinkListEndpoint.as_view(),
