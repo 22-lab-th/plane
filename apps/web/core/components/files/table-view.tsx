@@ -9,7 +9,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ChevronDownIcon } from "@plane/propel/icons";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@plane/propel/table";
 import { cn, renderFormattedDate } from "@plane/utils";
-import type { TProjectFileOrdering } from "@/services/project-file.service";
+import type { IProjectFolder, TProjectFileOrdering } from "@/services/project-file.service";
 // helpers
 import {
   FILES_FOCUS_RING,
@@ -21,6 +21,7 @@ import {
   type TFilesRow,
   type TFileSortColumn,
 } from "./helpers";
+import { FolderActions } from "./folder-management";
 
 type Props = {
   rows: TFilesRow[];
@@ -30,8 +31,11 @@ type Props = {
   onOpenFile: (fileId: string) => void;
   registerRow: (rowKey: string, element: HTMLElement | null) => void;
   onRowKeyDown: (event: ReactKeyboardEvent<HTMLElement>, rowKey: string) => void;
+  onRenameFolder: (folder: IProjectFolder) => void;
+  onMoveFolder: (folder: IProjectFolder) => void;
+  onDeleteFolder: (folder: IProjectFolder) => void;
+  canManageFolders: boolean;
 };
-
 /** Owner and Type are the two columns that fold away on a narrow screen. */
 const FILES_TABLE_HEADERS: { key: string; column: TFileSortColumn | null; className?: string }[] = [
   { key: "name", column: "name", className: "w-full" },
@@ -39,15 +43,28 @@ const FILES_TABLE_HEADERS: { key: string; column: TFileSortColumn | null; classN
   { key: "size", column: "size" },
   { key: "owner", column: null, className: "hidden md:table-cell" },
   { key: "updated", column: "updated", className: "hidden md:table-cell" },
+  { key: "actions", column: null, className: "w-10" },
 ];
 
-const STATIC_HEADER_LABELS: Record<string, string> = { type: "Type", owner: "Owner" };
+const STATIC_HEADER_LABELS: Record<string, string> = { type: "Type", owner: "Owner", actions: "" };
 
 const ROW_CLASS_NAME = "cursor-pointer border-b border-subtle hover:bg-layer-1";
 
 /** The table view: folders first, then the files, exactly in response order. */
 export function FilesTable(props: Props) {
-  const { rows, ordering, onOrderingChange, onOpenFolder, onOpenFile, registerRow, onRowKeyDown } = props;
+  const {
+    rows,
+    ordering,
+    onOrderingChange,
+    onOpenFolder,
+    onOpenFile,
+    registerRow,
+    onRowKeyDown,
+    onRenameFolder,
+    onMoveFolder,
+    onDeleteFolder,
+    canManageFolders,
+  } = props;
 
   return (
     <div data-testid="files-view-table" className="flex h-full flex-col">
@@ -108,8 +125,16 @@ export function FilesTable(props: Props) {
                 <TableCell className="text-body-xs-medium text-primary">{row.folder.name}</TableCell>
                 <TableCell className="hidden text-caption-md-regular text-tertiary md:table-cell">Folder</TableCell>
                 <TableCell className="text-caption-md-regular text-tertiary">—</TableCell>
-                <TableCell className="hidden text-caption-md-regular text-tertiary md:table-cell">—</TableCell>
-                <TableCell className="hidden text-caption-md-regular text-tertiary md:table-cell">—</TableCell>
+                <TableCell className="w-10">
+                  {canManageFolders && (
+                    <FolderActions
+                      folder={row.folder}
+                      onRename={onRenameFolder}
+                      onMove={onMoveFolder}
+                      onDelete={onDeleteFolder}
+                    />
+                  )}
+                </TableCell>
               </TableRow>
             ) : (
               <TableRow
@@ -143,6 +168,7 @@ export function FilesTable(props: Props) {
                 <TableCell className="hidden text-caption-md-regular text-tertiary md:table-cell">
                   {renderFormattedDate(row.file.updated_at)}
                 </TableCell>
+                <TableCell className="w-10" />
               </TableRow>
             )
           )}

@@ -3,30 +3,32 @@
 # See the LICENSE file for details.
 
 # Python imports
-import os
 import boto3
 from botocore.exceptions import ClientError
 
 # Django imports
 from django.core.management import BaseCommand
+from plane.license.utils.instance_value import get_storage_configuration
 
 
 class Command(BaseCommand):
     help = "Create the default bucket for the instance"
 
     def handle(self, *args, **options):
-        # Create a session using the credentials from Django settings
+        storage = get_storage_configuration()
+        bucket_name = storage["bucket_name"]
         try:
             s3_client = boto3.client(
                 "s3",
-                endpoint_url=os.environ.get("AWS_S3_ENDPOINT_URL"),  # MinIO endpoint
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),  # MinIO access key
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),  # MinIO secret key
-                region_name=os.environ.get("AWS_REGION"),  # MinIO region
-                config=boto3.session.Config(signature_version="s3v4"),
+                endpoint_url=storage["endpoint_url"],
+                aws_access_key_id=storage["access_key_id"],
+                aws_secret_access_key=storage["secret_access_key"],
+                region_name=storage["region_name"],
+                config=boto3.session.Config(
+                    signature_version=storage["signature_version"],
+                    s3={"addressing_style": storage["addressing_style"]},
+                ),
             )
-            # Get the bucket name from the environment
-            bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
             self.stdout.write(self.style.NOTICE("Checking bucket..."))
             # Check if the bucket exists
             s3_client.head_bucket(Bucket=bucket_name)
@@ -35,7 +37,6 @@ class Command(BaseCommand):
             return
         except ClientError as e:
             error_code = int(e.response["Error"]["Code"])
-            bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
             if error_code == 404:
                 # Bucket does not exist, create it
                 self.stdout.write(self.style.WARNING(f"Bucket '{bucket_name}' does not exist. Creating bucket..."))

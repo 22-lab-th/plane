@@ -58,6 +58,7 @@ from plane.db.models import (
     FileVersion,
 )
 from plane.settings.storage import S3Storage
+from plane.license.utils.instance_value import get_storage_configuration
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import observability, quota
 from plane.utils.file_storage.audit import record_file_access
@@ -247,11 +248,11 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
     folder = folder_or_400(project, payload.get("folder_id"))
     target_id = pinned_file_id if pinned_file_id is not None else payload.get("file_id")
     file_object = _target_file(project, slug, target_id)
+    entity_ref = link["entity_ref"] if link else entity_ref_for(file_object)
 
     category = _category_for(payload.get("category"), link, file_object)
     version_no = _next_version_no(file_object)
-    entity_ref = link["entity_ref"] if link else entity_ref_for(file_object)
-    bucket = settings.AWS_STORAGE_BUCKET_NAME
+    bucket = get_storage_configuration()["bucket_name"]
     file_id = file_object.id if file_object is not None else uuid4()
     display_name = stored_name(payload["file_name"])
     if file_object is None:

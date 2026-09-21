@@ -73,6 +73,11 @@ export interface IProjectFolder {
   created_at: string;
   updated_at: string;
 }
+/** Payload accepted by the folder create and update endpoints. */
+export type TProjectFolderWrite = {
+  name?: string;
+  parent_id?: string | null;
+};
 
 /** One step of the path from the project root down to the browsed folder. */
 export interface IProjectFileBreadcrumb {
@@ -351,8 +356,49 @@ export class ProjectFileService extends APIService {
     return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${this.listQueryString(query)}`)
       .then((response) => response?.data)
       .catch((error) => {
-        // A transport-level failure has no `response`, and the view keys its error
-        // surface off the thrown value, so the raw error is the fallback.
+        // A transport-level failure has no `response`, and the view keys its error surface off the thrown value, so the raw error is the fallback.
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Create a virtual folder under the project root or another folder. */
+  async createProjectFolder(
+    workspaceSlug: string,
+    projectId: string,
+    payload: { name: string; parent_id?: string | null }
+  ): Promise<IProjectFolder> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/folders/`, payload)
+      .then((response) => response?.data?.folder)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Rename or move a virtual folder without changing any stored object key. */
+  async updateProjectFolder(
+    workspaceSlug: string,
+    projectId: string,
+    folderId: string,
+    payload: TProjectFolderWrite
+  ): Promise<IProjectFolder> {
+    return this.patch(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/folders/${folderId}/`, payload)
+      .then((response) => response?.data?.folder)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /** Soft-delete a folder and, when requested, its entire subtree. */
+  async deleteProjectFolder(
+    workspaceSlug: string,
+    projectId: string,
+    folderId: string,
+    options: { recursive?: boolean } = {}
+  ): Promise<void> {
+    const query = options.recursive ? "?recursive=true" : "";
+    return this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/folders/${folderId}/${query}`)
+      .then(() => undefined)
+      .catch((error) => {
         throw error?.response?.data ?? error;
       });
   }

@@ -12,6 +12,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from urllib.parse import quote
 
 # Module imports
+from plane.license.utils.instance_value import get_storage_configuration
 from plane.utils.exception_logger import log_exception
 from storages.backends.s3boto3 import S3Boto3Storage
 
@@ -21,37 +22,23 @@ class S3Storage(S3Boto3Storage):
         return name
 
     """S3 storage class to generate presigned URLs for S3 objects"""
-
     def __init__(self, request=None):
-        # Get the AWS credentials and bucket name from the environment
-        self.aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
-        # Use the AWS_SECRET_ACCESS_KEY environment variable for the secret key
-        self.aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-        # Use the AWS_S3_BUCKET_NAME environment variable for the bucket name
-        self.aws_storage_bucket_name = os.environ.get("AWS_S3_BUCKET_NAME")
-        # R2 requires the SigV4 credential scope region to be "auto", and the
-        # documented variable is AWS_S3_REGION_NAME (ARCH-001 §3); AWS_REGION is
-        # kept as a fallback for existing deployments.
-        self.aws_region = os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION") or "auto"
-        # Addressing style and signature version are provider configuration, not
-        # code branches (AD-01). The default is botocore's "auto", which keeps
-        # hostname-addressed S3-compatible endpoints (local MinIO, custom gateway
-        # hosts) on path-style URLs exactly as before this configuration was
-        # introduced; an operator enables virtual-host addressing - the R2 posture
-        # in ARCH-001 §3 - with AWS_S3_ADDRESSING_STYLE=virtual.
-        self.aws_addressing_style = os.environ.get("AWS_S3_ADDRESSING_STYLE") or "auto"
-        self.aws_signature_version = os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4")
+        configuration = get_storage_configuration()
+        self.aws_access_key_id = configuration["access_key_id"]
+        self.aws_secret_access_key = configuration["secret_access_key"]
+        self.aws_storage_bucket_name = configuration["bucket_name"]
+        self.aws_region = configuration["region_name"] or "auto"
+        self.aws_addressing_style = configuration["addressing_style"]
+        self.aws_signature_version = configuration["signature_version"]
         self.s3_config = boto3.session.Config(
             signature_version=self.aws_signature_version,
             s3={"addressing_style": self.aws_addressing_style},
         )
-        # Use the AWS_S3_ENDPOINT_URL environment variable for the endpoint URL
-        self.aws_s3_endpoint_url = os.environ.get("AWS_S3_ENDPOINT_URL") or os.environ.get("MINIO_ENDPOINT_URL")
+        self.aws_s3_endpoint_url = configuration["endpoint_url"]
         # Optional browser-accessible MinIO endpoint for deployments where the API
         # and object storage are exposed on different hosts or ports.
         self.minio_public_endpoint_url = os.environ.get("MINIO_PUBLIC_ENDPOINT_URL")
-        # Use the SIGNED_URL_EXPIRATION environment variable for the expiration time (default: 3600 seconds)
-        self.signed_url_expiration = int(os.environ.get("SIGNED_URL_EXPIRATION", "3600"))
+        self.signed_url_expiration = configuration["signed_url_expiration"]
 
         if os.environ.get("USE_MINIO") == "1":
             # Determine protocol based on environment variable

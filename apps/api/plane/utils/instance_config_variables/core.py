@@ -250,6 +250,69 @@ unsplash_config_variables = [
     },
 ]
 
+storage_config_variables = [
+    {
+        "key": "STORAGE_PROVIDER",
+        "value": os.environ.get("STORAGE_PROVIDER", "s3"),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "CLOUDFLARE_R2_ACCOUNT_ID",
+        "value": os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID", ""),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "AWS_ACCESS_KEY_ID",
+        "value": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+        "category": "STORAGE",
+        "is_encrypted": True,
+    },
+    {
+        "key": "AWS_SECRET_ACCESS_KEY",
+        "value": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+        "category": "STORAGE",
+        "is_encrypted": True,
+    },
+    {
+        "key": "AWS_S3_BUCKET_NAME",
+        "value": os.environ.get("AWS_S3_BUCKET_NAME", "uploads"),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "AWS_S3_ENDPOINT_URL",
+        "value": os.environ.get("AWS_S3_ENDPOINT_URL") or os.environ.get("MINIO_ENDPOINT_URL", ""),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "AWS_S3_REGION_NAME",
+        "value": os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION", ""),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "AWS_S3_ADDRESSING_STYLE",
+        "value": os.environ.get("AWS_S3_ADDRESSING_STYLE", "auto"),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "AWS_S3_SIGNATURE_VERSION",
+        "value": os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4"),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+    {
+        "key": "SIGNED_URL_EXPIRATION",
+        "value": os.environ.get("SIGNED_URL_EXPIRATION", "3600"),
+        "category": "STORAGE",
+        "is_encrypted": False,
+    },
+]
+
 core_config_variables = [
     *authentication_config_variables,
     *workspace_management_config_variables,
@@ -260,4 +323,5 @@ core_config_variables = [
     *smtp_config_variables,
     *llm_config_variables,
     *unsplash_config_variables,
+    *storage_config_variables,
 ]

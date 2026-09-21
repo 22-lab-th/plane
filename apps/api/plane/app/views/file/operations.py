@@ -73,6 +73,7 @@ from plane.db.models import (
     ProjectStorageUsage,
 )
 from plane.settings.storage import S3Storage
+from plane.license.utils.instance_value import get_storage_configuration
 from plane.throttles.project_file import ProjectFileUploadThrottle
 from plane.utils.file_storage import quota
 from plane.utils.file_storage.audit import record_file_access
@@ -246,6 +247,7 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
         counters, audit rows) and its objects are deleted, and the source is never
         touched (AC-42).
     """
+    bucket = get_storage_configuration()["bucket_name"]
     versions = list(
         source.versions.filter(status__in=GOOD_VERSION_STATUSES, object_deleted_at__isnull=True).order_by(
             "version_no"
@@ -332,7 +334,7 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
                 extension=extension_of(new_name),
                 size_bytes=active_source.size_bytes or 0,
                 checksum_sha256=active_source.client_checksum_sha256,
-                bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                bucket=bucket,
                 object_key=key_by_version[active_source.pk],
                 category=source.category,
                 status=FileObject.Status.ACTIVE,
@@ -348,7 +350,7 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
                     file=file_object,
                     version_no=source_version.version_no,
                     object_key=object_key,
-                    bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                    bucket=bucket,
                     size_bytes=source_version.size_bytes or 0,
                     mime_type=source_version.mime_type,
                     client_checksum_sha256=source_version.client_checksum_sha256,

@@ -7,6 +7,7 @@ import os
 
 # Django imports
 from django.conf import settings
+from django.db import OperationalError, ProgrammingError
 
 # Module imports
 from plane.license.models import InstanceConfiguration
@@ -57,3 +58,51 @@ def get_email_configuration():
             },
         ]
     )
+
+
+def get_storage_configuration():
+    """Return object-storage settings with database configuration overriding env values."""
+    defaults = {
+        "STORAGE_PROVIDER": os.environ.get("STORAGE_PROVIDER", "s3"),
+        "CLOUDFLARE_R2_ACCOUNT_ID": os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID", ""),
+        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+        "AWS_S3_BUCKET_NAME": os.environ.get("AWS_S3_BUCKET_NAME", "uploads"),
+        "AWS_S3_ENDPOINT_URL": os.environ.get("AWS_S3_ENDPOINT_URL")
+        or os.environ.get("MINIO_ENDPOINT_URL", ""),
+        "AWS_S3_REGION_NAME": os.environ.get("AWS_S3_REGION_NAME") or os.environ.get("AWS_REGION", ""),
+        "AWS_S3_ADDRESSING_STYLE": os.environ.get("AWS_S3_ADDRESSING_STYLE", "auto"),
+        "AWS_S3_SIGNATURE_VERSION": os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4"),
+        "SIGNED_URL_EXPIRATION": os.environ.get("SIGNED_URL_EXPIRATION", "3600"),
+    }
+    keys = [{"key": key, "default": value} for key, value in defaults.items()]
+
+    try:
+        values = dict(zip(defaults, get_configuration_value(keys), strict=True))
+    except (OperationalError, ProgrammingError, RuntimeError):
+        # Storage is also constructed by management commands before the
+        # instance-configuration table is available.
+        values = defaults
+
+    provider = str(values["STORAGE_PROVIDER"] or "s3").strip().lower()
+    endpoint_url = str(values["AWS_S3_ENDPOINT_URL"] or "").strip()
+    account_id = str(values["CLOUDFLARE_R2_ACCOUNT_ID"] or "").strip()
+    if provider == "r2" and not endpoint_url and account_id:
+        endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
+
+    try:
+        signed_url_expiration = max(1, int(values["SIGNED_URL_EXPIRATION"] or 3600))
+    except (TypeError, ValueError):
+        signed_url_expiration = 3600
+
+    return {
+        "provider": provider,
+        "access_key_id": str(values["AWS_ACCESS_KEY_ID"] or "").strip(),
+        "secret_access_key": str(values["AWS_SECRET_ACCESS_KEY"] or "").strip(),
+        "bucket_name": str(values["AWS_S3_BUCKET_NAME"] or "uploads").strip(),
+        "endpoint_url": endpoint_url or None,
+        "region_name": str(values["AWS_S3_REGION_NAME"] or ("auto" if provider == "r2" else "")).strip(),
+        "addressing_style": str(values["AWS_S3_ADDRESSING_STYLE"] or "auto").strip(),
+        "signature_version": str(values["AWS_S3_SIGNATURE_VERSION"] or "s3v4").strip(),
+        "signed_url_expiration": signed_url_expiration,
+    }

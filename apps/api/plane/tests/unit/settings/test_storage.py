@@ -243,3 +243,44 @@ class TestS3StorageSignedURLExpiration:
         mock_s3_client.generate_presigned_url.assert_called_once()
         call_kwargs = mock_s3_client.generate_presigned_url.call_args[1]
         assert call_kwargs["ExpiresIn"] == 120
+
+
+@pytest.mark.unit
+@pytest.mark.django_db
+@patch.dict(
+    os.environ,
+    {
+        "AWS_ACCESS_KEY_ID": "env-key",
+        "AWS_SECRET_ACCESS_KEY": "env-secret",
+        "AWS_S3_BUCKET_NAME": "env-bucket",
+    },
+    clear=True,
+)
+@patch("plane.settings.storage.boto3")
+def test_database_storage_configuration_overrides_environment(mock_boto3, settings):
+    settings.SKIP_ENV_VAR = True
+    from plane.license.models import InstanceConfiguration
+
+    values = {
+        "STORAGE_PROVIDER": "r2",
+        "CLOUDFLARE_R2_ACCOUNT_ID": "account-123",
+        "AWS_ACCESS_KEY_ID": "db-key",
+        "AWS_SECRET_ACCESS_KEY": "db-secret",
+        "AWS_S3_BUCKET_NAME": "db-bucket",
+    }
+    InstanceConfiguration.objects.bulk_create(
+        [
+            InstanceConfiguration(key=key, value=value, category="STORAGE")
+            for key, value in values.items()
+        ]
+    )
+    mock_boto3.client.return_value = Mock()
+
+    storage = S3Storage()
+
+    assert storage.aws_access_key_id == "db-key"
+    assert storage.aws_secret_access_key == "db-secret"
+    assert storage.aws_storage_bucket_name == "db-bucket"
+    assert storage.aws_region == "auto"
+    assert storage.aws_s3_endpoint_url == "https://account-123.r2.cloudflarestorage.com"
+    assert mock_boto3.client.call_args.kwargs["endpoint_url"] == "https://account-123.r2.cloudflarestorage.com"

@@ -23,6 +23,7 @@ from plane.db.models import ExporterHistory, Issue, IssueComment, IssueRelation,
 from plane.utils.exception_logger import log_exception
 from plane.utils.porters.exporter import DataExporter
 from plane.utils.porters.serializers.issue import IssueExportSerializer
+from plane.license.utils.instance_value import get_storage_configuration
 
 
 def create_zip_file(files: List[tuple[str, str | bytes]]) -> io.BytesIO:
@@ -46,68 +47,69 @@ def upload_to_s3(zip_file: io.BytesIO, workspace_id: UUID, token_id: str, slug: 
     file_name = f"{workspace_id}/export-{slug}-{token_id[:6]}-{str(timezone.now().date())}.zip"
     expires_in = 7 * 24 * 60 * 60
 
+    storage = get_storage_configuration()
+    bucket_name = storage["bucket_name"]
+    client_config = Config(
+        signature_version=storage["signature_version"],
+        s3={"addressing_style": storage["addressing_style"]},
+    )
+
     if settings.USE_MINIO:
         upload_s3 = boto3.client(
             "s3",
-            endpoint_url=settings.AWS_S3_ENDPOINT_URL,
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            config=Config(signature_version="s3v4"),
+            endpoint_url=storage["endpoint_url"],
+            aws_access_key_id=storage["access_key_id"],
+            aws_secret_access_key=storage["secret_access_key"],
+            region_name=storage["region_name"],
+            config=client_config,
         )
         upload_s3.upload_fileobj(
             zip_file,
-            settings.AWS_STORAGE_BUCKET_NAME,
+            bucket_name,
             file_name,
             ExtraArgs={"ACL": "public-read", "ContentType": "application/zip"},
         )
 
-        # Generate presigned url for the uploaded file with different base
+        custom_domain = getattr(settings, "AWS_S3_CUSTOM_DOMAIN", None)
+        public_endpoint_url = storage["endpoint_url"]
+        if custom_domain:
+            public_domain = str(custom_domain).replace(f"/{settings.AWS_STORAGE_BUCKET_NAME}", "")
+            public_endpoint_url = f"{settings.AWS_S3_URL_PROTOCOL}//{public_domain}/"
+
         presign_s3 = boto3.client(
             "s3",
-            endpoint_url=(
-                f"{settings.AWS_S3_URL_PROTOCOL}//{str(settings.AWS_S3_CUSTOM_DOMAIN).replace('/uploads', '')}/"
-            ),
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            config=Config(signature_version="s3v4"),
+            endpoint_url=public_endpoint_url,
+            aws_access_key_id=storage["access_key_id"],
+            aws_secret_access_key=storage["secret_access_key"],
+            region_name=storage["region_name"],
+            config=client_config,
         )
 
         presigned_url = presign_s3.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": file_name},
+            Params={"Bucket": bucket_name, "Key": file_name},
             ExpiresIn=expires_in,
         )
     else:
-        # If endpoint url is present, use it
-        if settings.AWS_S3_ENDPOINT_URL:
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=settings.AWS_S3_ENDPOINT_URL,
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                config=Config(signature_version="s3v4"),
-            )
-        else:
-            s3 = boto3.client(
-                "s3",
-                region_name=settings.AWS_REGION,
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                config=Config(signature_version="s3v4"),
-            )
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=storage["endpoint_url"],
+            region_name=storage["region_name"],
+            aws_access_key_id=storage["access_key_id"],
+            aws_secret_access_key=storage["secret_access_key"],
+            config=client_config,
+        )
 
-        # Upload the file to S3
         s3.upload_fileobj(
             zip_file,
-            settings.AWS_STORAGE_BUCKET_NAME,
+            bucket_name,
             file_name,
             ExtraArgs={"ContentType": "application/zip"},
         )
 
-        # Generate presigned url for the uploaded file
         presigned_url = s3.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": file_name},
+            Params={"Bucket": bucket_name, "Key": file_name},
             ExpiresIn=expires_in,
         )
 

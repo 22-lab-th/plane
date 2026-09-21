@@ -5,11 +5,12 @@
  */
 
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-// plane imports
 import { FavoriteFolderIcon } from "@plane/propel/icons";
 import { cn, renderFormattedDate } from "@plane/utils";
+import type { IProjectFolder } from "@/services/project-file.service";
 // helpers
 import { FILES_FOCUS_RING, fileKind, formatFileSize, type TFilesRow } from "./helpers";
+import { FolderActions } from "./folder-management";
 
 type Props = {
   rows: TFilesRow[];
@@ -17,6 +18,10 @@ type Props = {
   onOpenFile: (fileId: string) => void;
   registerRow: (rowKey: string, element: HTMLElement | null) => void;
   onRowKeyDown: (event: ReactKeyboardEvent<HTMLElement>, rowKey: string) => void;
+  onRenameFolder: (folder: IProjectFolder) => void;
+  onMoveFolder: (folder: IProjectFolder) => void;
+  onDeleteFolder: (folder: IProjectFolder) => void;
+  canManageFolders: boolean;
 };
 
 const CARD_CLASS_NAME =
@@ -24,29 +29,50 @@ const CARD_CLASS_NAME =
 
 /** The grid view. One column below 768px, two columns from 768px, more where there is room. */
 export function FilesGrid(props: Props) {
-  const { rows, onOpenFolder, onOpenFile, registerRow, onRowKeyDown } = props;
+  const {
+    rows,
+    onOpenFolder,
+    onOpenFile,
+    registerRow,
+    onRowKeyDown,
+    onRenameFolder,
+    onMoveFolder,
+    onDeleteFolder,
+    canManageFolders,
+  } = props;
 
   return (
     <div data-testid="files-view-grid" className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
       {rows.map((row) =>
         row.kind === "folder" ? (
-          <button
-            key={row.key}
-            ref={(element) => registerRow(row.key, element)}
-            type="button"
-            data-testid={`files-folder-${row.folder.id}`}
-            data-name={row.folder.name}
-            aria-label={`Open folder ${row.folder.name}`}
-            className={cn(CARD_CLASS_NAME, FILES_FOCUS_RING)}
-            onClick={() => onOpenFolder(row.folder.id)}
-            onKeyDown={(event) => onRowKeyDown(event, row.key)}
-          >
-            <div className="flex items-center gap-2">
-              <FavoriteFolderIcon className="size-4 shrink-0 text-tertiary" color="currentColor" />
-              <span className="truncate text-body-xs-medium text-primary">{row.folder.name}</span>
-            </div>
-            <span className="text-caption-md-regular text-tertiary">Folder</span>
-          </button>
+          <div key={row.key} className="relative">
+            <button
+              ref={(element) => registerRow(row.key, element)}
+              type="button"
+              data-testid={`files-folder-${row.folder.id}`}
+              data-name={row.folder.name}
+              aria-label={`Open folder ${row.folder.name}`}
+              className={cn(CARD_CLASS_NAME, FILES_FOCUS_RING)}
+              onClick={() => onOpenFolder(row.folder.id)}
+              onKeyDown={(event) => onRowKeyDown(event, row.key)}
+            >
+              <div className="flex items-center gap-2 pr-6">
+                <FavoriteFolderIcon className="size-4 shrink-0 text-tertiary" color="currentColor" />
+                <span className="truncate text-body-xs-medium text-primary">{row.folder.name}</span>
+              </div>
+              <span className="text-caption-md-regular text-tertiary">Folder</span>
+            </button>
+            {canManageFolders && (
+              <div className="absolute top-2 right-2">
+                <FolderActions
+                  folder={row.folder}
+                  onRename={onRenameFolder}
+                  onMove={onMoveFolder}
+                  onDelete={onDeleteFolder}
+                />
+              </div>
+            )}
+          </div>
         ) : (
           <button
             key={row.key}

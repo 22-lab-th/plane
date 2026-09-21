@@ -42,6 +42,8 @@ import {
 import { FilesTable } from "./table-view";
 import { FilesToolbar } from "./toolbar";
 import { FilesUploadSurface, filesUploadTargetName, useFilesUpload } from "./upload";
+import { FolderDialogs } from "./folder-management";
+import { useFolderManagement } from "./use-folder-management";
 // hooks
 import { useUserPermissions } from "@/hooks/store/user";
 import { useAppRouter } from "@/hooks/use-app-router";
@@ -174,6 +176,33 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
     fetchList,
     { keepPreviousData: true, revalidateOnFocus: false }
   );
+  const refreshFiles = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
+
+  const {
+    dialog: folderDialog,
+    folderTree,
+    isFolderTreeLoading,
+    folderTreeError,
+    loadFolderTree,
+    openCreateDialog: handleCreateFolder,
+    openRenameDialog: handleRenameFolder,
+    openMoveDialog: handleMoveFolder,
+    openDeleteDialog: handleDeleteFolder,
+    createFolder: handleCreateFolderSubmit,
+    renameFolder: handleRenameFolderSubmit,
+    moveFolder: handleMoveFolderSubmit,
+    deleteFolder: handleDeleteFolderSubmit,
+    closeDialog: closeFolderDialog,
+  } = useFolderManagement({
+    workspaceSlug,
+    projectId,
+    currentFolderId: folderId,
+    onRefresh: refreshFiles,
+    updateParams,
+  });
+
   // The rows and the storage chip on screen speak for the filter that produced them, not
   // for the filter the URL now asks for: with an error they are withheld unless the failed
   // request was for the filter on screen, in which case the rows stay and the banner
@@ -316,6 +345,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
         onUpload={isReadOnly ? undefined : upload.openPicker}
+        onCreateFolder={isReadOnly ? undefined : handleCreateFolder}
         uploadDisabledReason={upload.isFull ? (upload.quota?.exceeded ?? undefined) : undefined}
       />
       <FilesBreadcrumbs
@@ -351,6 +381,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
                     onOpenFolder={handleOpenFolder}
                     onOpenFile={handleOpenFile}
                     registerRow={registerRow}
+                    onRenameFolder={handleRenameFolder}
+                    onMoveFolder={handleMoveFolder}
+                    onDeleteFolder={handleDeleteFolder}
+                    canManageFolders={!isReadOnly}
                     onRowKeyDown={handleRowKeyDown}
                   />
                 ) : (
@@ -361,6 +395,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
                     onOpenFolder={handleOpenFolder}
                     onOpenFile={handleOpenFile}
                     registerRow={registerRow}
+                    onRenameFolder={handleRenameFolder}
+                    onMoveFolder={handleMoveFolder}
+                    onDeleteFolder={handleDeleteFolder}
+                    canManageFolders={!isReadOnly}
                     onRowKeyDown={handleRowKeyDown}
                   />
                 ))}
@@ -374,6 +412,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
           ) : viewMode === "grid" ? (
             <FilesGrid
               rows={rows}
+              onRenameFolder={handleRenameFolder}
+              onMoveFolder={handleMoveFolder}
+              canManageFolders={!isReadOnly}
+              onDeleteFolder={handleDeleteFolder}
               onOpenFolder={handleOpenFolder}
               onOpenFile={handleOpenFile}
               registerRow={registerRow}
@@ -386,6 +428,10 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
               onOrderingChange={handleOrderingChange}
               onOpenFolder={handleOpenFolder}
               onOpenFile={handleOpenFile}
+              onRenameFolder={handleRenameFolder}
+              onMoveFolder={handleMoveFolder}
+              onDeleteFolder={handleDeleteFolder}
+              canManageFolders={!isReadOnly}
               registerRow={registerRow}
               onRowKeyDown={handleRowKeyDown}
             />
@@ -407,6 +453,18 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
           onFileMutated={handleStored}
         />
       )}
+      <FolderDialogs
+        dialog={folderDialog}
+        folders={folderTree}
+        isFolderTreeLoading={isFolderTreeLoading}
+        folderTreeError={folderTreeError}
+        onRetryFolderTree={() => void loadFolderTree()}
+        onClose={closeFolderDialog}
+        onCreate={handleCreateFolderSubmit}
+        onRename={handleRenameFolderSubmit}
+        onMove={handleMoveFolderSubmit}
+        onDelete={handleDeleteFolderSubmit}
+      />
     </div>
   );
 });

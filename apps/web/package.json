@@ -12,7 +12,7 @@
     "clean": "rm -rf .turbo && rm -rf .next && rm -rf .react-router && rm -rf node_modules && rm -rf dist && rm -rf build",
     "check:lint": "oxlint --max-warnings=11957 .",
     "check:types": "react-router typegen && tsc --noEmit",
-    "check:test": "vitest run helpers/markdown-import.test.ts",
+    "check:test": "vitest run helpers/markdown-import.test.ts core/components/files/folder-management.test.ts core/services/project-file.service.test.ts",
     "check:format": "oxfmt --check .",
     "fix:lint": "oxlint --fix .",
     "fix:format": "oxfmt ."

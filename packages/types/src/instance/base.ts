@@ -12,6 +12,7 @@ import type {
   TInstanceAuthenticationKeys,
   TInstanceWorkspaceConfigurationKeys,
   TCoreLoginMediums,
+  TInstanceStorageConfigurationKeys,
 } from "./";
 import type { TExtendedLoginMediums } from "./auth-ee";
 
@@ -84,13 +85,13 @@ export interface IInstanceAdmin {
   user: string;
   user_detail: IUserLite;
 }
-
 export type TInstanceConfigurationKeys =
   | TInstanceAIConfigurationKeys
   | TInstanceEmailConfigurationKeys
   | TInstanceImageConfigurationKeys
   | TInstanceAuthenticationKeys
-  | TInstanceWorkspaceConfigurationKeys;
+  | TInstanceWorkspaceConfigurationKeys
+  | TInstanceStorageConfigurationKeys;
 
 export interface IInstanceConfiguration {
   id: string;
