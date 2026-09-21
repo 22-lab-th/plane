@@ -34,7 +34,12 @@ import pytest
 from kombu.exceptions import OperationalError
 from rest_framework import status
 
+# Django imports
+from django.utils import timezone
+
 # Module imports
+from plane.bgtasks.project_invitation_task import project_invitation
+from plane.bgtasks.workspace_invitation_task import workspace_invitation
 from plane.db.models import (
     Project,
     ProjectMember,
@@ -193,3 +198,144 @@ class TestMemberAdditionKeepsItsNotificationAsAFollowUp:
         ]
         assert dropped, "the dropped notification left no operator-visible record"
         assert any("project_add_user_email" in message for message in dropped)
+
+
+class TestARetriedInvitationHandOffIsSafe:
+    """DEFECT-014: the retry a refused hand-off invites must not duplicate work.
+
+    A refused hand-off leaves a 500 on the client, who retries. Until this fix the
+    retry could:
+
+    * write a second project-invitation row, so accepting either one would make two
+      members;
+    * dispatch a freshly generated token for the workspace invitation, while the row
+      kept the first token - the task's token+email lookup found nothing, built no
+      email, and the endpoint answered "Emails sent successfully".
+
+    The retry is now safe: the project endpoint reuses the pending invitation, and
+    both endpoints hand the row's own stored token to the task.
+    """
+
+    @pytest.mark.django_db
+    def test_a_workspace_retry_hands_the_stored_token_and_the_task_mails_its_invitee(
+        self, session_client, workspace, mailoutbox
+    ):
+        payload = {"emails": [{"email": INVITEE, "role": 5}]}
+        url = WORKSPACE_INVITATIONS_URL.format(slug=workspace.slug)
+
+        with mock.patch("plane.app.views.workspace.invite.workspace_invitation") as task:
+            task.delay.side_effect = OperationalError("broker unavailable")
+            first = session_client.post(url, payload, format="json")
+
+        # The first attempt's row is durable, and the response names it as a failure:
+        # this fork's view base turns the broker's refusal into its generic 500.
+        assert first.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        invite = WorkspaceMemberInvite.objects.get(workspace_id=workspace.id, email=INVITEE)
+        first_token = invite.token
+
+        with mock.patch("plane.app.views.workspace.invite.workspace_invitation") as task:
+            retry = session_client.post(url, payload, format="json")
+
+        assert retry.status_code == status.HTTP_200_OK, retry.data
+        task.delay.assert_called_once()
+        args = task.delay.call_args.args
+
+        # The row is the row: there is only one, and the dispatched token is the one
+        # it stores. Pre-fix the dispatch minted a new token for this request and the
+        # task's token+email lookup found nothing - 200 for an email that was never
+        # built.
+        assert (
+            WorkspaceMemberInvite.objects.filter(
+                workspace_id=workspace.id, email=INVITEE
+            ).count()
+            == 1
+        )
+        assert args[2] == invite.token == first_token, (
+            "the retry dispatches the row's stored token, not a fresh one"
+        )
+
+        # And the hand-off is useful because the task resolves that row and builds
+        # the invitee's message from it: running the task body on the dispatched
+        # arguments delivers to the invitee and names the stored row's id in the
+        # invitation link.
+        workspace_invitation(*args)
+        assert len(mailoutbox) == 1
+        mail = mailoutbox[0]
+        assert mail.to == [INVITEE]
+        assert any(
+            str(invite.id) in html for html, _ in mail.alternatives
+        ), "the email names the stored row's id"
+
+    @pytest.mark.django_db
+    def test_a_project_retry_reuses_the_pending_invitation_it_already_wrote(
+        self, session_client, workspace, project, create_user, mailoutbox
+    ):
+        payload = {"emails": [{"email": INVITEE, "role": 5}]}
+        url = PROJECT_INVITATIONS_URL.format(slug=workspace.slug, project_id=project.id)
+
+        with mock.patch("plane.app.views.project.invite.project_invitation") as task:
+            task.delay.side_effect = OperationalError("broker unavailable")
+            first = session_client.post(url, payload, format="json")
+
+        assert first.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        invite = ProjectMemberInvite.objects.get(project_id=project.id, email=INVITEE)
+        assert invite.responded_at is None
+
+        with mock.patch("plane.app.views.project.invite.project_invitation") as task:
+            retry = session_client.post(url, payload, format="json")
+
+        assert retry.status_code == status.HTTP_200_OK, retry.data
+        task.delay.assert_called_once()
+        args = task.delay.call_args.args
+
+        # The reuse is the whole point: a second row would have made accepting either
+        # one create two project members.
+        invitations = ProjectMemberInvite.objects.filter(
+            project_id=project.id, email=INVITEE
+        )
+        assert invitations.count() == 1, "a retry must not write a second row"
+        assert invitations.get().pk == invite.pk
+        assert args[2] == invite.token, (
+            "the retry dispatches the row's stored token - the only one its invitee "
+            "can accept with"
+        )
+
+        project_invitation(*args)
+        assert len(mailoutbox) == 1
+        mail = mailoutbox[0]
+        assert mail.to == [INVITEE]
+        assert any(
+            str(invite.id) in html for html, _ in mail.alternatives
+        ), "the email names the stored row's id"
+
+    @pytest.mark.django_db
+    def test_a_refused_project_invitation_can_be_reissued(
+        self, session_client, workspace, project
+    ):
+        """The reuse applies to a *pending* invitation; a refusal can be invited again."""
+        payload = {"emails": [{"email": INVITEE, "role": 5}]}
+        url = PROJECT_INVITATIONS_URL.format(slug=workspace.slug, project_id=project.id)
+
+        with mock.patch("plane.app.views.project.invite.project_invitation"):
+            session_client.post(url, payload, format="json")
+        declined = ProjectMemberInvite.objects.get(project_id=project.id, email=INVITEE)
+        ProjectMemberInvite.objects.filter(pk=declined.pk).update(
+            responded_at=timezone.now(), accepted=False
+        )
+
+        with mock.patch("plane.app.views.project.invite.project_invitation") as task:
+            response = session_client.post(url, payload, format="json")
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        invitations = list(
+            ProjectMemberInvite.objects.filter(
+                project_id=project.id, email=INVITEE
+            ).order_by("created_at")
+        )
+        assert len(invitations) == 2, "a fresh row follows a refused row"
+        assert invitations[0].pk == declined.pk
+        assert invitations[1].responded_at is None
+        task.delay.assert_called_once()
+        # The hand-off is for the new row, with the new row's token.
+        args = task.delay.call_args.args
+        assert args[2] == invitations[1].token

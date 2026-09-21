@@ -118,11 +118,35 @@ class WorkspaceInvitationsViewset(BaseViewSet):
         # Send invitations. The response promises the emails, so this is not a
         # best-effort follow-up: a hand-off the broker refuses must surface here
         # (plane/utils/task_dispatch.py records why the follow-ups differ).
+        #
+        # What is handed over is the *stored* row, never the object built above: the
+        # insert ignores conflicts, so an address that already has an invitation keeps
+        # the row it had, while the object in hand still carries the token this request
+        # generated - a token that names no row. The task resolves the invitation by
+        # that token **and** the address, so dispatching it builds no email at all and
+        # this endpoint answers "Emails sent successfully" for one that was never sent
+        # (DEFECT-014). A row's own token is also the only one its invitee can accept
+        # with, so it is the only one worth mailing.
+        stored_invitations = {}
+        for stored in WorkspaceMemberInvite.objects.filter(
+            workspace_id=workspace.id,
+            email__in=[invitation.email for invitation in workspace_invitations],
+        ).order_by("created_at"):
+            stored_invitations.setdefault(stored.email, stored)
+
         for invitation in workspace_invitations:
+            stored = stored_invitations.get(invitation.email)
+            if stored is None:
+                # The row the insert relied on is gone (a delete landed in between):
+                # there is no invitation to name in an email, and answering "sent"
+                # would be the same lie as mailing a token that matches nothing.
+                raise RuntimeError(
+                    f"no stored workspace invitation for {invitation.email} after the insert"
+                )
             workspace_invitation.delay(
-                invitation.email,
+                stored.email,
                 workspace.id,
-                invitation.token,
+                stored.token,
                 current_site,
                 request.user.email,
             )
