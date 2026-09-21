@@ -79,20 +79,20 @@ function PageDetailsPage({ params }: Route.ComponentProps) {
   const pageRootHandlers: TPageRootHandlers = useMemo(
     () => ({
       create: createPage,
-      fetchAllVersions: async (pageId) =>
-        await projectPageVersionService.fetchAllVersions(workspaceSlug, projectId, pageId),
-      fetchDescriptionBinary: async () => {
-        if (!id) return;
-        return await projectPageService.fetchDescriptionBinary(workspaceSlug, projectId, id);
+      fetchAllVersions: async (targetPageId) =>
+        await projectPageVersionService.fetchAllVersions(workspaceSlug, projectId, targetPageId),
+      fetchDescriptionSnapshot: async () => {
+        if (!id) throw new Error("Missing page identity");
+        return await projectPageService.fetchDescriptionSnapshot(workspaceSlug, projectId, id);
       },
       fetchEntity: fetchEntityCallback,
-      fetchVersionDetails: async (pageId, versionId) =>
-        await projectPageVersionService.fetchVersionById(workspaceSlug, projectId, pageId, versionId),
-      restoreVersion: async (pageId, versionId) =>
-        await projectPageVersionService.restoreVersion(workspaceSlug, projectId, pageId, versionId),
-      getRedirectionLink: (pageId) => {
-        if (pageId) {
-          return `/${workspaceSlug}/projects/${projectId}/pages/${pageId}`;
+      fetchVersionDetails: async (targetPageId, versionId) =>
+        await projectPageVersionService.fetchVersionById(workspaceSlug, projectId, targetPageId, versionId),
+      restoreVersion: async (targetPageId, versionId) =>
+        await projectPageVersionService.restoreVersion(workspaceSlug, projectId, targetPageId, versionId),
+      getRedirectionLink: (targetPageId) => {
+        if (targetPageId) {
+          return `/${workspaceSlug}/projects/${projectId}/pages/${targetPageId}`;
         } else {
           return `/${workspaceSlug}/projects/${projectId}/pages`;
         }

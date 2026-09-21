@@ -872,6 +872,8 @@ class PagesDescriptionViewSet(BaseViewSet):
         response = StreamingHttpResponse(stream_data(), content_type="application/octet-stream")
         response["Content-Disposition"] = 'attachment; filename="page_description.bin"'
         response["ETag"] = page_description_etag(page)
+        # Proxies/GZipMiddleware may weaken ETag; this logical revision must remain intact.
+        response["X-Plane-Document-Version"] = page_description_etag(page)
         response["Cache-Control"] = "no-store"
         return response
 
@@ -914,6 +916,12 @@ class PagesDescriptionViewSet(BaseViewSet):
             return Response(
                 {"error": "Folders cannot contain document content"},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if expected_etag is None:
+            return Response(
+                {"error": "A document revision is required; refresh the editor before saving"},
+                status=status.HTTP_428_PRECONDITION_REQUIRED,
             )
 
         # Store the old description_html before saving (needed for both tasks)

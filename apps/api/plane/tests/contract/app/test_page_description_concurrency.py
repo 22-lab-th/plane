@@ -31,6 +31,7 @@ class TestConditionalPageWrites:
         assert snapshot.status_code == 200
         assert b"".join(snapshot.streaming_content) == b""
         etag = snapshot["ETag"]
+        assert snapshot["X-Plane-Document-Version"] == etag
         first = session_client.patch(
             page.test_url, {"description_html": "<p>first writer</p>"}, format="json", HTTP_IF_MATCH=etag
         )
@@ -80,6 +81,24 @@ class TestConditionalPageWrites:
         assert bytes(page.description_binary) == b"replacement binary"
         assert page.description_html == "<p>API replacement</p>"
 
-    def test_headerless_legacy_client_remains_compatible(self, page, session_client):
+    def test_old_cached_client_cannot_bypass_revision_check(self, page, session_client):
         response = session_client.patch(page.test_url, {"description_html": "<p>legacy</p>"}, format="json")
-        assert response.status_code == 200
+        assert response.status_code == 428
+        page.refresh_from_db()
+        assert page.description_html != "<p>legacy</p>"
+
+    def test_logical_revision_survives_http_compression(self, page, session_client):
+        import gzip
+
+        Page.objects.filter(pk=page.pk).update(description_binary=b"X" * 2048)
+        response = session_client.get(page.test_url, HTTP_ACCEPT_ENCODING="gzip")
+        body = b"".join(response.streaming_content)
+        assert response["Content-Encoding"] == "gzip"
+        assert gzip.decompress(body) == b"X" * 2048
+        version = response["X-Plane-Document-Version"]
+        assert version.startswith('"')
+        assert response["ETag"] == "W/" + version
+        saved = session_client.patch(
+            page.test_url, {"description_html": "<p>saved</p>"}, format="json", HTTP_IF_MATCH=version
+        )
+        assert saved.status_code == 200

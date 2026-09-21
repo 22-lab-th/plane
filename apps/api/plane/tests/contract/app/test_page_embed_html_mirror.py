@@ -40,23 +40,23 @@ class TestPageSaveKeepsTheEmbed:
     def _save_page(self, session_client, workspace, project, page, html, binary_seed):
         """Save the document the way the editor does: the description endpoint."""
         binary = base64.b64encode(binary_seed).decode()
+        url = f"/api/workspaces/{workspace.slug}/projects/{project.id}/pages/{page.id}/description/"
         with (
             mock.patch("plane.app.views.page.base.page_transaction.delay"),
             mock.patch("plane.app.views.page.base.track_page_version.delay"),
         ):
             return session_client.patch(
-                f"/api/workspaces/{workspace.slug}/projects/{project.id}/pages/{page.id}/description/",
+                url,
                 {"description_html": html, "description_binary": binary},
                 format="json",
+                HTTP_IF_MATCH=session_client.get(url)["X-Plane-Document-Version"],
             )
 
     def test_saving_a_page_keeps_a_project_file_embed_in_its_html(self, session_client, create_user, workspace):
         from plane.db.models import Page, Project, ProjectMember, ProjectPage
 
         project = Project.objects.create(name="Mirror", identifier="MIRROR", workspace=workspace)
-        ProjectMember.objects.create(
-            workspace=workspace, project=project, member=create_user, role=20, is_active=True
-        )
+        ProjectMember.objects.create(workspace=workspace, project=project, member=create_user, role=20, is_active=True)
         page = Page.objects.create(
             workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name="Embedded"
         )
@@ -77,12 +77,8 @@ class TestPageSaveKeepsTheEmbed:
         from plane.db.models import Page, Project, ProjectMember, ProjectPage
 
         project = Project.objects.create(name="Mirror2", identifier="MIRROR2", workspace=workspace)
-        ProjectMember.objects.create(
-            workspace=workspace, project=project, member=create_user, role=20, is_active=True
-        )
-        page = Page.objects.create(
-            workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name="Hostile"
-        )
+        ProjectMember.objects.create(workspace=workspace, project=project, member=create_user, role=20, is_active=True)
+        page = Page.objects.create(workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name="Hostile")
         ProjectPage.objects.create(workspace=workspace, project=project, page=page)
 
         html = '<img src="javascript:alert(1)" alt="x">'
@@ -103,12 +99,8 @@ class TestPageMetadataRouteSanitisesTheDescription:
         from plane.db.models import Page, Project, ProjectMember, ProjectPage
 
         project = Project.objects.create(name=name, identifier=identifier, workspace=workspace)
-        ProjectMember.objects.create(
-            workspace=workspace, project=project, member=create_user, role=20, is_active=True
-        )
-        page = Page.objects.create(
-            workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name=name
-        )
+        ProjectMember.objects.create(workspace=workspace, project=project, member=create_user, role=20, is_active=True)
+        page = Page.objects.create(workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name=name)
         ProjectPage.objects.create(workspace=workspace, project=project, page=page)
         return project, page
 

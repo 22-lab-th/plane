@@ -46,18 +46,14 @@ DROPPED = "dropped follow-up task"
 def project(db, workspace, create_user):
     """A project the session user administers."""
     project = Project.objects.create(name="Broker Outage", identifier="BRK", workspace=workspace)
-    ProjectMember.objects.create(
-        project=project, member=create_user, workspace=workspace, role=20, is_active=True
-    )
+    ProjectMember.objects.create(project=project, member=create_user, workspace=workspace, role=20, is_active=True)
     return project
 
 
 @pytest.fixture
 def page(db, workspace, project, create_user):
     """A public page of that project, owned by the session user."""
-    page = Page.objects.create(
-        workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name="Ordered"
-    )
+    page = Page.objects.create(workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name="Ordered")
     ProjectPage.objects.create(workspace=workspace, project=project, page=page)
     return page
 
@@ -96,19 +92,20 @@ class TestWorkItemCreateSurvivesBrokerOutage:
 
 class TestPageSaveSurvivesBrokerOutage:
     @pytest.mark.django_db
-    def test_the_description_is_saved_and_the_response_is_200(
-        self, session_client, workspace, project, page, caplog
-    ):
+    def test_the_description_is_saved_and_the_response_is_200(self, session_client, workspace, project, page, caplog):
         """The endpoint the editor saves through hands off two follow-ups."""
         payload = {"description_html": "<p>Edited while the broker was down</p>"}
         url = PAGE_DESCRIPTION_URL.format(slug=workspace.slug, project_id=project.id, page_id=page.id)
 
-        with mock.patch("plane.app.views.page.base.page_transaction") as transaction_task, mock.patch(
-            "plane.app.views.page.base.track_page_version"
-        ) as version_task:
+        with (
+            mock.patch("plane.app.views.page.base.page_transaction") as transaction_task,
+            mock.patch("plane.app.views.page.base.track_page_version") as version_task,
+        ):
             transaction_task.delay.side_effect = OperationalError("broker unavailable")
             version_task.delay.side_effect = OperationalError("broker unavailable")
-            response = session_client.patch(url, payload, format="json")
+            response = session_client.patch(
+                url, payload, format="json", HTTP_IF_MATCH=session_client.get(url)["X-Plane-Document-Version"]
+            )
 
         assert response.status_code == status.HTTP_200_OK, response.data
         page.refresh_from_db()
@@ -124,9 +121,7 @@ class TestPageSaveSurvivesBrokerOutage:
         assert all(str(page.id) in message for message in messages)
 
     @pytest.mark.django_db
-    def test_a_page_update_is_saved_and_the_response_is_200(
-        self, session_client, workspace, project, page, caplog
-    ):
+    def test_a_page_update_is_saved_and_the_response_is_200(self, session_client, workspace, project, page, caplog):
         """The same page written through the page endpoint, which hands off one follow-up."""
         payload = {"description_html": "<p>Renamed while the broker was down</p>", "name": "Renamed"}
         url = PAGE_URL.format(slug=workspace.slug, project_id=project.id, page_id=page.id)
@@ -148,9 +143,7 @@ class TestPageSaveSurvivesBrokerOutage:
 
 class TestSoftDeleteSurvivesBrokerOutage:
     @pytest.mark.django_db
-    def test_the_row_is_soft_deleted_and_the_response_is_204(
-        self, session_client, workspace, project, page, caplog
-    ):
+    def test_the_row_is_soft_deleted_and_the_response_is_204(self, session_client, workspace, project, page, caplog):
         """``SoftDeleteModel.delete`` soft-deletes, then hands the cascade to a worker.
 
         Deleting is the write; the cascade behind it is a follow-up, so a dead broker

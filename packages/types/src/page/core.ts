@@ -84,3 +84,10 @@ export type TWebhookConnectionQueryParams = {
   teamId?: string;
   workspaceSlug: string;
 };
+
+/** A revision bound to the exact binary/legacy HTML snapshot used for a save. */
+export type TPageDescriptionSnapshot = {
+  binary: ArrayBuffer;
+  etag: string;
+  initialContent?: { name: string; description_html: string };
+};

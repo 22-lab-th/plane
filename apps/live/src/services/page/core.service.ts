@@ -19,8 +19,6 @@ export type TUserMention = {
 export abstract class PageCoreService extends APIService {
   protected abstract basePath: string;
 
-  
-
   async fetchDetails(pageId: string): Promise<TPage> {
     try {
       const response = await this.get(`${this.basePath}/pages/${pageId}/`, {
@@ -53,7 +51,7 @@ export abstract class PageCoreService extends APIService {
       if (!Buffer.isBuffer(data)) {
         throw new Error("Expected response to be a Buffer");
       }
-      const etag = response.headers.etag;
+      const etag = response.headers["x-plane-document-version"];
       if (typeof etag !== "string" || !etag.startsWith('"')) {
         throw new Error("Page snapshot is missing its strong ETag");
       }

@@ -1,3 +1,4 @@
+import type { TPageDescriptionSnapshot } from "@plane/types";
 /**
  * Copyright (c) 2023-present Plane Software, Inc. and contributors
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -158,26 +159,40 @@ export class ProjectPageService extends APIService {
       });
   }
 
-  async fetchDescriptionBinary(workspaceSlug: string, projectId: string, pageId: string): Promise<any> {
-    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/pages/${pageId}/description/`, {
-      headers: {
-        "Content-Type": "application/octet-stream",
-      },
-      responseType: "arraybuffer",
-    })
-      .then((response) => response?.data)
-      .catch((error) => {
-        throw error?.response?.data;
-      });
+  async fetchDescriptionSnapshot(
+    workspaceSlug: string,
+    projectId: string,
+    pageId: string
+  ): Promise<TPageDescriptionSnapshot> {
+    const response = await this.get(
+      `/api/workspaces/${workspaceSlug}/projects/${projectId}/pages/${pageId}/description/`,
+      {
+        responseType: "arraybuffer",
+      }
+    );
+    const etag = response.headers["x-plane-document-version"];
+    if (typeof etag !== "string" || !etag.startsWith('"')) throw new Error("Page snapshot is missing its revision");
+    const binary = response.data as ArrayBuffer;
+    const page = binary.byteLength === 0 ? await this.fetchById(workspaceSlug, projectId, pageId, false) : undefined;
+    return {
+      binary,
+      etag,
+      initialContent: page
+        ? { name: page.name ?? "", description_html: page.description_html ?? "<p></p>" }
+        : undefined,
+    };
   }
 
   async updateDescription(
     workspaceSlug: string,
     projectId: string,
     pageId: string,
-    data: TDocumentPayload
+    data: TDocumentPayload,
+    etag: string
   ): Promise<any> {
-    return this.patch(`/api/workspaces/${workspaceSlug}/projects/${projectId}/pages/${pageId}/description/`, data)
+    return this.patch(`/api/workspaces/${workspaceSlug}/projects/${projectId}/pages/${pageId}/description/`, data, {
+      headers: { "If-Match": etag },
+    })
       .then((response) => response?.data)
       .catch((error) => {
         throw error;

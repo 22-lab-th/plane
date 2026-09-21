@@ -30,7 +30,7 @@ export type TBasePage = TPage & {
   // actions
   update: (pageData: Partial<TPage>) => Promise<Partial<TPage> | undefined>;
   updateTitle: (title: string) => void;
-  updateDescription: (document: TDocumentPayload) => Promise<void>;
+  updateDescription: (document: TDocumentPayload, etag: string) => Promise<void>;
   makePublic: (params: { shouldSync?: boolean }) => Promise<void>;
   makePrivate: (params: { shouldSync?: boolean }) => Promise<void>;
   lock: (params: { shouldSync?: boolean; recursive?: boolean }) => Promise<void>;
@@ -62,7 +62,7 @@ export type TBasePagePermissions = {
 
 export type TBasePageServices = {
   update: (payload: Partial<TPage>) => Promise<Partial<TPage>>;
-  updateDescription: (document: TDocumentPayload) => Promise<void>;
+  updateDescription: (document: TDocumentPayload, etag: string) => Promise<void>;
   updateAccess: (payload: Pick<TPage, "access">) => Promise<void>;
   lock: () => Promise<void>;
   unlock: () => Promise<void>;
@@ -317,14 +317,14 @@ export class BasePage extends ExtendedBasePage implements TBasePage {
    * @description update the page description
    * @param {TDocumentPayload} document
    */
-  updateDescription = async (document: TDocumentPayload) => {
+  updateDescription = async (document: TDocumentPayload, etag: string) => {
     const currentDescription = this.description_html;
     runInAction(() => {
       this.description_html = document.description_html;
     });
 
     try {
-      await this.services.updateDescription(document);
+      await this.services.updateDescription(document, etag);
     } catch (error) {
       runInAction(() => {
         this.description_html = currentDescription;

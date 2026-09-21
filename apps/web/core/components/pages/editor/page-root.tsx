@@ -8,7 +8,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react";
 // plane imports
 import type { CollaborationState, EditorRefApi } from "@plane/editor";
-import type { TDocumentPayload, TPage, TPageVersion, TWebhookConnectionQueryParams } from "@plane/types";
+import type {
+  TDocumentPayload,
+  TPageDescriptionSnapshot,
+  TPage,
+  TPageVersion,
+  TWebhookConnectionQueryParams,
+} from "@plane/types";
 // hooks
 import { usePageFallback } from "@/hooks/use-page-fallback";
 import type { PageUpdateHandler, TCustomEventHandlers } from "@/hooks/use-realtime-page-events";
@@ -28,10 +34,10 @@ import { PageEditorToolbarRoot } from "./toolbar";
 export type TPageRootHandlers = {
   create: (payload: Partial<TPage>) => Promise<Partial<TPage> | undefined>;
   fetchAllVersions: (pageId: string) => Promise<TPageVersion[] | undefined>;
-  fetchDescriptionBinary: () => Promise<ArrayBuffer>;
+  fetchDescriptionSnapshot: () => Promise<TPageDescriptionSnapshot>;
   fetchVersionDetails: (pageId: string, versionId: string) => Promise<TPageVersion | undefined>;
   restoreVersion: (pageId: string, versionId: string) => Promise<void>;
-  updateDescription: (document: TDocumentPayload) => Promise<void>;
+  updateDescription: (document: TDocumentPayload, etag: string) => Promise<void>;
 } & TEditorBodyHandlers;
 
 export type TPageRootConfig = TEditorBodyConfig;
@@ -72,8 +78,7 @@ export const PageRoot = observer(function PageRoot(props: TPageRootProps) {
   // page fallback
   const { isFetchingFallbackBinary } = usePageFallback({
     editorRef,
-    fetchPageDescription: handlers.fetchDescriptionBinary,
-    page,
+    fetchPageDescription: handlers.fetchDescriptionSnapshot,
     collaborationState,
     updatePageDescription: handlers.updateDescription,
   });
