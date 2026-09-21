@@ -68,6 +68,7 @@ from plane.db.models import (
 )
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.utils.issue_filters import issue_filters
+from plane.utils.task_dispatch import best_effort_delay
 
 
 # Public Spaces board writes must bind caller-supplied object ids to the board's
@@ -303,7 +304,8 @@ class IssueCommentPublicViewSet(BaseViewSet):
                 actor=request.user,
                 access="EXTERNAL",
             )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="comment.activity.created",
                 requested_data=json.dumps(serializer.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),
@@ -345,7 +347,8 @@ class IssueCommentPublicViewSet(BaseViewSet):
         serializer = IssueCommentSerializer(comment, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="comment.activity.updated",
                 requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),
@@ -374,7 +377,8 @@ class IssueCommentPublicViewSet(BaseViewSet):
             access="EXTERNAL",
             actor=request.user,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="comment.activity.deleted",
             requested_data=json.dumps({"comment_id": str(pk)}),
             actor_id=str(request.user.id),
@@ -440,7 +444,8 @@ class IssueReactionPublicViewSet(BaseViewSet):
                 _ = ProjectPublicMember.objects.get_or_create(
                     project_id=project_deploy_board.project_id, member=request.user
                 )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue_reaction.activity.created",
                 requested_data=json.dumps(self.request.data, cls=DjangoJSONEncoder),
                 actor_id=str(self.request.user.id),
@@ -470,7 +475,8 @@ class IssueReactionPublicViewSet(BaseViewSet):
             reaction=reaction_code,
             actor=request.user,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_reaction.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),
@@ -537,7 +543,8 @@ class CommentReactionPublicViewSet(BaseViewSet):
                 _ = ProjectPublicMember.objects.get_or_create(
                     project_id=project_deploy_board.project_id, member=request.user
                 )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="comment_reaction.activity.created",
                 requested_data=json.dumps(self.request.data, cls=DjangoJSONEncoder),
                 actor_id=str(self.request.user.id),
@@ -573,7 +580,8 @@ class CommentReactionPublicViewSet(BaseViewSet):
             reaction=reaction_code,
             actor=request.user,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="comment_reaction.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),
@@ -642,7 +650,8 @@ class IssueVotePublicViewSet(BaseViewSet):
             )
         issue_vote.vote = request.data.get("vote", 1)
         issue_vote.save()
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_vote.activity.created",
             requested_data=json.dumps(self.request.data, cls=DjangoJSONEncoder),
             actor_id=str(self.request.user.id),
@@ -662,7 +671,8 @@ class IssueVotePublicViewSet(BaseViewSet):
             project_id=project_deploy_board.project_id,
             workspace_id=project_deploy_board.workspace_id,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_vote.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),

@@ -35,6 +35,7 @@ from plane.app.permissions import allow_permission, ROLE
 from plane.utils.host import base_host
 from plane.utils.filters import ComplexFilterBackend
 from plane.utils.filters import IssueFilterSet
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class CycleIssueViewSet(BaseViewSet):
@@ -298,7 +299,8 @@ class CycleIssueViewSet(BaseViewSet):
         # Update the cycle issues
         CycleIssue.objects.bulk_update(updated_records, ["cycle_id"], batch_size=100)
         # Capture Issue Activity
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.created",
             requested_data=json.dumps({"cycles_list": issues}),
             actor_id=str(self.request.user.id),
@@ -324,7 +326,8 @@ class CycleIssueViewSet(BaseViewSet):
             project_id=project_id,
             cycle_id=cycle_id,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.deleted",
             requested_data=json.dumps(
                 {

@@ -21,6 +21,7 @@ from plane.db.models import IssueLink
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.bgtasks.work_item_link_task import crawl_work_item_link_title
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IssueLinkViewSet(BaseViewSet):
@@ -49,8 +50,9 @@ class IssueLinkViewSet(BaseViewSet):
         serializer = IssueLinkSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(project_id=project_id, issue_id=issue_id)
-            crawl_work_item_link_title.delay(serializer.data.get("id"), serializer.data.get("url"))
-            issue_activity.delay(
+            best_effort_delay(crawl_work_item_link_title, serializer.data.get("id"), serializer.data.get("url"))
+            best_effort_delay(
+                issue_activity,
                 type="link.activity.created",
                 requested_data=json.dumps(serializer.data, cls=DjangoJSONEncoder),
                 actor_id=str(self.request.user.id),
@@ -76,9 +78,10 @@ class IssueLinkViewSet(BaseViewSet):
         serializer = IssueLinkSerializer(issue_link, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            crawl_work_item_link_title.delay(serializer.data.get("id"), serializer.data.get("url"))
+            best_effort_delay(crawl_work_item_link_title, serializer.data.get("id"), serializer.data.get("url"))
 
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="link.activity.updated",
                 requested_data=requested_data,
                 actor_id=str(request.user.id),
@@ -98,7 +101,8 @@ class IssueLinkViewSet(BaseViewSet):
     def destroy(self, request, slug, project_id, issue_id, pk):
         issue_link = IssueLink.objects.get(workspace__slug=slug, project_id=project_id, issue_id=issue_id, pk=pk)
         current_instance = json.dumps(IssueLinkSerializer(issue_link).data, cls=DjangoJSONEncoder)
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="link.activity.deleted",
             requested_data=json.dumps({"link_id": str(pk)}),
             actor_id=str(request.user.id),

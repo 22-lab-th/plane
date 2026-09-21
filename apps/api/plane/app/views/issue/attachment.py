@@ -27,6 +27,7 @@ from plane.settings.storage import S3Storage
 from plane.utils.path_validator import sanitize_filename
 from plane.bgtasks.storage_metadata_task import get_asset_object_metadata
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IssueAttachmentEndpoint(BaseAPIView):
@@ -45,7 +46,8 @@ class IssueAttachmentEndpoint(BaseAPIView):
                 workspace_id=workspace.id,
                 entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
             )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="attachment.activity.created",
                 requested_data=None,
                 actor_id=str(self.request.user.id),
@@ -71,7 +73,8 @@ class IssueAttachmentEndpoint(BaseAPIView):
             )
         issue_attachment.asset.delete(save=False)
         issue_attachment.delete()
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="attachment.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),
@@ -155,7 +158,8 @@ class IssueAttachmentV2Endpoint(BaseAPIView):
         issue_attachment.deleted_at = timezone.now()
         issue_attachment.save()
 
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="attachment.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),
@@ -211,7 +215,8 @@ class IssueAttachmentV2Endpoint(BaseAPIView):
 
         # Send this activity only if the attachment is not uploaded before
         if not issue_attachment.is_uploaded:
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="attachment.activity.created",
                 requested_data=None,
                 actor_id=str(self.request.user.id),
@@ -229,6 +234,6 @@ class IssueAttachmentV2Endpoint(BaseAPIView):
 
         # Get the storage metadata
         if not issue_attachment.storage_metadata:
-            get_asset_object_metadata.delay(str(issue_attachment.id))
+            best_effort_delay(get_asset_object_metadata, str(issue_attachment.id))
         issue_attachment.save()
         return Response(status=status.HTTP_204_NO_CONTENT)

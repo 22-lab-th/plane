@@ -47,6 +47,7 @@ from .. import BaseViewSet
 from plane.db.models import UserFavorite
 from plane.utils.filters import ComplexFilterBackend
 from plane.utils.filters import IssueFilterSet
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class WorkspaceViewViewSet(BaseViewSet):
@@ -108,7 +109,8 @@ class WorkspaceViewViewSet(BaseViewSet):
     def retrieve(self, request, slug, pk):
         issue_view = self.get_queryset().filter(pk=pk).first()
         serializer = IssueViewSerializer(issue_view)
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             project_id=None,
             entity_name="view",
@@ -337,7 +339,8 @@ class IssueViewViewSet(BaseViewSet):
             )
 
         serializer = IssueViewSerializer(issue_view)
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             project_id=project_id,
             entity_name="view",

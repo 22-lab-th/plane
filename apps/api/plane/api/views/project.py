@@ -50,6 +50,7 @@ from plane.api.serializers import (
     ProjectUpdateSerializer,
 )
 from plane.app.permissions import ProjectBasePermission, WorkSpaceAdminPermission
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.openapi import (
     project_docs,
     PROJECT_ID_PARAMETER,
@@ -288,7 +289,8 @@ class ProjectListCreateAPIEndpoint(BaseAPIView):
                     # the locals at construction time and they are never
                     # rebound, so late-binding is not a hazard here.
                     def _dispatch_model_activity():
-                        model_activity.delay(
+                        best_effort_delay(
+                            model_activity,
                             model_name="project",
                             model_id=str(project.id),
                             requested_data=request.data,
@@ -582,7 +584,8 @@ class ProjectDetailAPIEndpoint(BaseAPIView):
 
                 project = self.get_queryset().filter(pk=serializer.instance.id).first()
 
-                model_activity.delay(
+                best_effort_delay(
+                    model_activity,
                     model_name="project",
                     model_id=str(project.id),
                     requested_data=request.data,
@@ -630,7 +633,8 @@ class ProjectDetailAPIEndpoint(BaseAPIView):
         # Delete the user favorite cycle
         UserFavorite.objects.filter(entity_type="project", entity_identifier=pk, project_id=pk).delete()
         project.delete()
-        webhook_activity.delay(
+        best_effort_delay(
+            webhook_activity,
             event="project",
             verb="deleted",
             field=None,

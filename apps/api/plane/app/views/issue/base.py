@@ -72,6 +72,7 @@ from plane.utils.host import base_host
 from plane.utils.issue_filters import issue_filters
 from plane.utils.order_queryset import order_issue_queryset
 from plane.utils.paginator import GroupedOffsetPaginator, SubGroupedOffsetPaginator
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.timezone_converter import user_timezone_converter
 
 from .. import BaseAPIView, BaseViewSet
@@ -161,7 +162,8 @@ class IssueListEndpoint(BaseAPIView):
         # issue queryset
         issue_queryset = issue_queryset_grouper(queryset=issue_queryset, group_by=group_by, sub_group_by=sub_group_by)
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             project_id=project_id,
             entity_name="project",
@@ -300,7 +302,8 @@ class IssueViewSet(BaseViewSet):
         # issue queryset
         issue_queryset = issue_queryset_grouper(queryset=issue_queryset, group_by=group_by, sub_group_by=sub_group_by)
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             project_id=project_id,
             entity_name="project",
@@ -418,7 +421,8 @@ class IssueViewSet(BaseViewSet):
             serializer.save()
 
             # Track the issue
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue.activity.created",
                 requested_data=json.dumps(self.request.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),
@@ -470,7 +474,8 @@ class IssueViewSet(BaseViewSet):
             datetime_fields = ["created_at", "updated_at"]
             issue = user_timezone_converter(issue, datetime_fields, request.user.user_timezone)
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="issue",
                 model_id=str(serializer.data["id"]),
                 requested_data=request.data,
@@ -480,7 +485,8 @@ class IssueViewSet(BaseViewSet):
                 origin=base_host(request=request, is_app=True),
             )
             # updated issue description version
-            issue_description_version_task.delay(
+            best_effort_delay(
+                issue_description_version_task,
                 updated_issue=json.dumps(request.data, cls=DjangoJSONEncoder),
                 issue_id=str(serializer.data["id"]),
                 user_id=request.user.id,
@@ -613,7 +619,8 @@ class IssueViewSet(BaseViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             entity_name="issue",
             entity_identifier=pk,
@@ -684,7 +691,8 @@ class IssueViewSet(BaseViewSet):
             is_migration_description_update = skip_activity and is_description_update
             # Log all the updates
             if not is_migration_description_update:
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="issue.activity.updated",
                     requested_data=requested_data,
                     actor_id=str(request.user.id),
@@ -695,7 +703,8 @@ class IssueViewSet(BaseViewSet):
                     notification=True,
                     origin=base_host(request=request, is_app=True),
                 )
-                model_activity.delay(
+                best_effort_delay(
+                    model_activity,
                     model_name="issue",
                     model_id=str(serializer.data.get("id", None)),
                     requested_data=request.data,
@@ -705,7 +714,8 @@ class IssueViewSet(BaseViewSet):
                     origin=base_host(request=request, is_app=True),
                 )
                 # updated issue description version
-                issue_description_version_task.delay(
+                best_effort_delay(
+                    issue_description_version_task,
                     updated_issue=current_instance,
                     issue_id=str(serializer.data.get("id", None)),
                     user_id=request.user.id,
@@ -725,7 +735,8 @@ class IssueViewSet(BaseViewSet):
             entity_identifier=pk,
             entity_name="issue",
         ).delete(soft=False)
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue.activity.deleted",
             requested_data=json.dumps({"issue_id": str(pk)}),
             actor_id=str(request.user.id),
@@ -1152,7 +1163,8 @@ class IssueBulkUpdateDateEndpoint(BaseAPIView):
                 )
 
             if start_date:
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="issue.activity.updated",
                     requested_data=json.dumps({"start_date": update.get("start_date")}),
                     current_instance=json.dumps({"start_date": str(issue.start_date)}),
@@ -1165,7 +1177,8 @@ class IssueBulkUpdateDateEndpoint(BaseAPIView):
                 issues_to_update.append(issue)
 
             if target_date:
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="issue.activity.updated",
                     requested_data=json.dumps({"target_date": update.get("target_date")}),
                     current_instance=json.dumps({"target_date": str(issue.target_date)}),
@@ -1354,7 +1367,8 @@ class IssueDetailIdentifierEndpoint(BaseAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             entity_name="issue",
             entity_identifier=str(issue.id),

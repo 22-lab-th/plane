@@ -58,6 +58,7 @@ from plane.utils.host import base_host
 from plane.utils.cycle_transfer_issues import transfer_cycle_issues
 from .. import BaseAPIView, BaseViewSet
 from plane.bgtasks.webhook_task import model_activity
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.timezone_converter import convert_to_utc, user_timezone_converter
 
 
@@ -315,7 +316,8 @@ class CycleViewSet(BaseViewSet):
                 cycle = user_timezone_converter(cycle, datetime_fields, project_timezone)
 
                 # Send the model activity
-                model_activity.delay(
+                best_effort_delay(
+                    model_activity,
                     model_name="cycle",
                     model_id=str(cycle["id"]),
                     requested_data=request.data,
@@ -394,7 +396,8 @@ class CycleViewSet(BaseViewSet):
             cycle = user_timezone_converter(cycle, datetime_fields, project_timezone)
 
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="cycle",
                 model_id=str(cycle["id"]),
                 requested_data=request.data,
@@ -465,7 +468,8 @@ class CycleViewSet(BaseViewSet):
         datetime_fields = ["start_date", "end_date"]
         data = user_timezone_converter(data, datetime_fields, project_timezone)
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             entity_name="cycle",
             entity_identifier=pk,
@@ -480,7 +484,8 @@ class CycleViewSet(BaseViewSet):
 
         cycle_issues = list(CycleIssue.objects.filter(cycle_id=self.kwargs.get("pk")).values_list("issue", flat=True))
 
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.deleted",
             requested_data=json.dumps(
                 {

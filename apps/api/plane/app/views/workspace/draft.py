@@ -41,6 +41,7 @@ from .. import BaseViewSet
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.utils.issue_filters import issue_filters
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class WorkspaceDraftIssueViewSet(BaseViewSet):
@@ -224,7 +225,8 @@ class WorkspaceDraftIssueViewSet(BaseViewSet):
         if serializer.is_valid():
             serializer.save()
 
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue.activity.created",
                 requested_data=json.dumps(self.request.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),
@@ -246,7 +248,8 @@ class WorkspaceDraftIssueViewSet(BaseViewSet):
                     updated_by_id=draft_issue.updated_by_id,
                 )
                 # Capture Issue Activity
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="cycle.activity.created",
                     requested_data=None,
                     actor_id=str(self.request.user.id),
@@ -281,7 +284,8 @@ class WorkspaceDraftIssueViewSet(BaseViewSet):
                 )
                 # Update the activity
                 _ = [
-                    issue_activity.delay(
+                    best_effort_delay(
+                        issue_activity,
                         type="module.activity.created",
                         requested_data=json.dumps({"module_id": str(module)}),
                         actor_id=str(request.user.id),

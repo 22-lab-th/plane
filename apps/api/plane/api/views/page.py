@@ -22,6 +22,7 @@ from plane.app.views.page.base import (
 )
 from plane.bgtasks.page_transaction_task import page_transaction
 from plane.db.models import Page, Project, ProjectMember, ProjectPage, Workspace
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class PageQuerysetMixin:
@@ -193,7 +194,8 @@ class PageQuerysetMixin:
                     "updated_at",
                 ]
             )
-            page_transaction.delay(
+            best_effort_delay(
+                page_transaction,
                 new_description_html=page.description_html,
                 old_description_html=old_description_html,
                 page_id=page.id,
@@ -238,7 +240,8 @@ class WorkspacePageListCreateAPIEndpoint(PageQuerysetMixin, BaseAPIView):
             is_global=True,
             created_by=request.user,
         )
-        page_transaction.delay(
+        best_effort_delay(
+            page_transaction,
             new_description_html=page.description_html,
             old_description_html=None,
             page_id=page.id,
@@ -371,7 +374,8 @@ class ProjectPageListCreateAPIEndpoint(PageQuerysetMixin, BaseAPIView):
                 created_by=request.user,
             )
 
-        page_transaction.delay(
+        best_effort_delay(
+            page_transaction,
             new_description_html=page.description_html,
             old_description_html=None,
             page_id=page.id,

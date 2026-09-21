@@ -45,6 +45,7 @@ from plane.utils.openapi import (
     asset_docs,
 )
 from plane.utils.exception_logger import log_exception
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class UserAssetEndpoint(BaseAPIView):
@@ -214,7 +215,7 @@ class UserAssetEndpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(asset_id))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(asset_id))
         # update the attributes
         asset.attributes = request.data.get("attributes", asset.attributes)
         # save the asset
@@ -370,7 +371,7 @@ class UserServerAssetEndpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(asset_id))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(asset_id))
         # update the attributes
         asset.attributes = request.data.get("attributes", asset.attributes)
         # save the asset
@@ -625,7 +626,7 @@ class GenericAssetEndpoint(BaseAPIView):
 
             # Update storage metadata if not present
             if not asset.storage_metadata:
-                get_asset_object_metadata.delay(asset_id=str(asset_id))
+                best_effort_delay(get_asset_object_metadata, asset_id=str(asset_id))
 
             asset.save(update_fields=["is_uploaded"])
 

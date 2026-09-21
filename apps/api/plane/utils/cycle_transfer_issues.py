@@ -30,6 +30,7 @@ from plane.db.models import (
 from plane.utils.analytics_plot import burndown_plot
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 def transfer_cycle_issues(
@@ -458,7 +459,8 @@ def transfer_cycle_issues(
     cycle_issues = CycleIssue.objects.bulk_update(updated_cycles, ["cycle_id"], batch_size=100)
 
     # Capture Issue Activity
-    issue_activity.delay(
+    best_effort_delay(
+        issue_activity,
         type="cycle.activity.created",
         requested_data=json.dumps({"cycles_list": []}),
         actor_id=str(user_id),

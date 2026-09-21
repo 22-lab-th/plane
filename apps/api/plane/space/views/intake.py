@@ -27,6 +27,7 @@ from plane.utils.content_validator import validate_html_content
 from plane.utils.issue_filters import issue_filters
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.db.models.intake import SourceType
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IntakeIssuePublicViewSet(BaseViewSet):
@@ -166,7 +167,8 @@ class IntakeIssuePublicViewSet(BaseViewSet):
         )
 
         # Create an Issue Activity
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue.activity.created",
             requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
             actor_id=str(request.user.id),
@@ -234,7 +236,8 @@ class IntakeIssuePublicViewSet(BaseViewSet):
             # Log all the updates
             requested_data = json.dumps(issue_data, cls=DjangoJSONEncoder)
             if issue is not None:
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="issue.activity.updated",
                     requested_data=requested_data,
                     actor_id=str(request.user.id),

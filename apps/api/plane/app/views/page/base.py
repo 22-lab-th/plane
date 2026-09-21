@@ -55,6 +55,7 @@ from plane.bgtasks.page_version_task import track_page_version
 from plane.bgtasks.recent_visited_task import recent_visited_task
 from plane.bgtasks.copy_s3_object import copy_s3_objects_of_description_and_assets
 from plane.app.permissions import ProjectPagePermission
+from plane.utils.task_dispatch import best_effort_delay
 
 
 def unarchive_archive_page_and_descendants(page_id, archived_at):
@@ -278,7 +279,8 @@ class PageViewSet(BaseViewSet):
             serializer.save()
             # capture the page transaction
             if node_type == Page.PAGE_NODE:
-                page_transaction.delay(
+                best_effort_delay(
+                    page_transaction,
                     new_description_html=description_html,
                     old_description_html=None,
                     page_id=serializer.data["id"],
@@ -362,7 +364,8 @@ class PageViewSet(BaseViewSet):
                 serializer.save()
                 # capture the page transaction
                 if data.get("description_html") and page.node_type == Page.PAGE_NODE:
-                    page_transaction.delay(
+                    best_effort_delay(
+                        page_transaction,
                         new_description_html=data.get("description_html", "<p></p>"),
                         old_description_html=page_description,
                         page_id=page_id,
@@ -411,7 +414,8 @@ class PageViewSet(BaseViewSet):
         data = PageDetailSerializer(page).data
         data["issue_ids"] = issue_ids
         if track_visit:
-            recent_visited_task.delay(
+            best_effort_delay(
+                recent_visited_task,
                 slug=slug,
                 entity_name="page",
                 entity_identifier=page_id,
@@ -904,14 +908,16 @@ class PagesDescriptionViewSet(BaseViewSet):
 
             # Capture the page transaction
             if request.data.get("description_html"):
-                page_transaction.delay(
+                best_effort_delay(
+                    page_transaction,
                     new_description_html=request.data.get("description_html", "<p></p>"),
                     old_description_html=old_description_html,
                     page_id=page_id,
                 )
 
             # Run background tasks
-            track_page_version.delay(
+            best_effort_delay(
+                track_page_version,
                 page_id=page_id,
                 existing_instance=existing_instance,
                 user_id=request.user.id,
@@ -959,14 +965,16 @@ class PageDuplicateEndpoint(BaseAPIView):
                 updated_by_id=page.updated_by_id,
             )
 
-        page_transaction.delay(
+        best_effort_delay(
+            page_transaction,
             new_description_html=page.description_html,
             old_description_html=None,
             page_id=page.id,
         )
 
         # Copy the s3 objects uploaded in the page
-        copy_s3_objects_of_description_and_assets.delay(
+        best_effort_delay(
+            copy_s3_objects_of_description_and_assets,
             entity_name="PAGE",
             entity_identifier=page.id,
             project_id=project_id,

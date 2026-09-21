@@ -51,6 +51,7 @@ from plane.bgtasks.user_deactivation_email_task import user_deactivation_email
 from plane.utils.host import base_host
 from plane.bgtasks.user_email_update_task import send_email_update_magic_code, send_email_update_confirmation
 from plane.authentication.rate_limit import EmailVerificationThrottle
+from plane.utils.task_dispatch import best_effort_delay
 
 
 logger = logging.getLogger("plane")
@@ -241,9 +242,9 @@ class UserEndpoint(BaseViewSet):
         logout(request)
 
         # Send confirmation email to the new email address
-        send_email_update_confirmation.delay(new_email)
+        best_effort_delay(send_email_update_confirmation, new_email)
         # send the email to the old email address
-        send_email_update_confirmation.delay(old_email)
+        best_effort_delay(send_email_update_confirmation, old_email)
 
         # Return updated user data
         serialized_data = UserMeSerializer(user).data
@@ -341,7 +342,7 @@ class UserEndpoint(BaseViewSet):
         user.save()
 
         # Send an email to the user
-        user_deactivation_email.delay(base_host(request=request, is_app=True), user.id)
+        best_effort_delay(user_deactivation_email, base_host(request=request, is_app=True), user.id)
 
         # Logout the user
         logout(request)

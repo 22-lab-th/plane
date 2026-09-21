@@ -20,6 +20,7 @@ from plane.app.permissions import allow_permission, ROLE
 from plane.db.models import IssueReaction
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IssueReactionViewSet(BaseViewSet):
@@ -47,7 +48,8 @@ class IssueReactionViewSet(BaseViewSet):
         serializer = IssueReactionSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(issue_id=issue_id, project_id=project_id, actor=request.user)
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue_reaction.activity.created",
                 requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),
@@ -70,7 +72,8 @@ class IssueReactionViewSet(BaseViewSet):
             reaction=reaction_code,
             actor=request.user,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_reaction.activity.deleted",
             requested_data=None,
             actor_id=str(self.request.user.id),

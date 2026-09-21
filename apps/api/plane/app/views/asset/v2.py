@@ -26,6 +26,7 @@ from plane.utils.cache import invalidate_cache_directly
 from plane.utils.path_validator import sanitize_filename
 from plane.bgtasks.storage_metadata_task import get_asset_object_metadata
 from plane.throttles.asset import AssetRateThrottle
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class UserAssetsV2Endpoint(BaseAPIView):
@@ -176,7 +177,7 @@ class UserAssetsV2Endpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(asset_id))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(asset_id))
         # get the entity and save the asset id for the request field
         self.entity_asset_save(
             asset_id=asset_id,
@@ -428,7 +429,7 @@ class WorkspaceFileAssetEndpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(asset_id))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(asset_id))
         # get the entity and save the asset id for the request field
         self.entity_asset_save(
             asset_id=asset_id,
@@ -652,7 +653,7 @@ class ProjectAssetEndpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(pk))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(pk))
 
         # update the attributes
         asset.attributes = request.data.get("attributes", asset.attributes)

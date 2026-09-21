@@ -32,6 +32,7 @@ from plane.utils.host import base_host
 from plane.utils.content_validator import validate_html_content
 from .base import BaseAPIView
 from plane.db.models.intake import SourceType
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.openapi import (
     intake_docs,
     WORKSPACE_SLUG_PARAMETER,
@@ -209,7 +210,8 @@ class IntakeIssueListCreateAPIEndpoint(BaseAPIView):
             source=SourceType.IN_APP,
         )
         # Create an Issue Activity
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue.activity.created",
             requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
             actor_id=str(request.user.id),
@@ -401,7 +403,8 @@ class IntakeIssueDetailAPIEndpoint(BaseAPIView):
             current_instance = issue
             # Log all the updates
             requested_data = json.dumps(issue_data, cls=DjangoJSONEncoder)
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue.activity.updated",
                 requested_data=requested_data,
                 actor_id=str(request.user.id),
@@ -422,7 +425,8 @@ class IntakeIssueDetailAPIEndpoint(BaseAPIView):
             intake_serializer.save()
 
             # create a activity for status change
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="intake.activity.created",
                 requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
                 actor_id=str(request.user.id),

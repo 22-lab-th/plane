@@ -44,6 +44,7 @@ from .base import BaseAPIView
 from plane.bgtasks.webhook_task import model_activity
 from plane.utils.host import base_host
 from plane.utils.order_queryset import ISSUE_ORDER_BY_ALLOWLIST, MODULE_ORDER_BY_ALLOWLIST, sanitize_order_by
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.openapi import (
     module_docs,
     module_issue_docs,
@@ -228,7 +229,8 @@ class ModuleListCreateAPIEndpoint(BaseAPIView):
                 )
             serializer.save()
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="module",
                 model_id=str(serializer.instance.id),
                 requested_data=request.data,
@@ -486,7 +488,8 @@ class ModuleDetailAPIEndpoint(BaseAPIView):
             serializer.save()
 
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="module",
                 model_id=str(serializer.instance.id),
                 requested_data=request.data,
@@ -559,7 +562,8 @@ class ModuleDetailAPIEndpoint(BaseAPIView):
             )
 
         module_issues = list(ModuleIssue.objects.filter(module_id=pk).values_list("issue", flat=True))
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="module.activity.deleted",
             requested_data=json.dumps(
                 {
@@ -761,7 +765,8 @@ class ModuleIssueListCreateAPIEndpoint(BaseAPIView):
         ModuleIssue.objects.bulk_update(records_to_update, ["module"], batch_size=10)
 
         # Capture Issue Activity
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="module.activity.created",
             requested_data=json.dumps({"modules_list": str(issues)}),
             actor_id=str(self.request.user.id),
@@ -926,7 +931,8 @@ class ModuleIssueDetailAPIEndpoint(BaseAPIView):
 
         module_name = module_issue.module.name if module_issue.module is not None else ""
         module_issue.delete()
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="module.activity.deleted",
             requested_data=json.dumps({"module_id": str(module_id), "issues": [str(module_issue.issue_id)]}),
             actor_id=str(request.user.id),

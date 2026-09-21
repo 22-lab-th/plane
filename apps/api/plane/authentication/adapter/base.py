@@ -28,6 +28,7 @@ from plane.settings.storage import S3Storage
 from plane.utils.exception_logger import log_exception
 from plane.utils.host import base_host
 from plane.utils.ip_address import get_client_ip
+from plane.utils.task_dispatch import best_effort_delay
 
 from .error import AUTHENTICATION_ERROR_CODES, AuthenticationException
 
@@ -247,10 +248,7 @@ class Adapter:
         user.is_active = True
         user.save()
         if was_inactive:
-            try:
-                user_activation_email.delay(base_host(request=self.request), user.id)
-            except Exception as e:
-                log_exception(e)
+            best_effort_delay(user_activation_email, base_host(request=self.request), user.id)
         return user
 
     def delete_old_avatar(self, user):

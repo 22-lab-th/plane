@@ -66,6 +66,7 @@ from plane.bgtasks.webhook_task import model_activity
 from .. import BaseAPIView, BaseViewSet
 from plane.bgtasks.recent_visited_task import recent_visited_task
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class ModuleViewSet(BaseViewSet):
@@ -336,7 +337,8 @@ class ModuleViewSet(BaseViewSet):
                 )
             ).first()
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="module",
                 model_id=str(module["id"]),
                 requested_data=request.data,
@@ -638,7 +640,8 @@ class ModuleViewSet(BaseViewSet):
                 module_id=pk,
             )
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             entity_name="module",
             entity_identifier=pk,
@@ -705,7 +708,8 @@ class ModuleViewSet(BaseViewSet):
             ).first()
 
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="module",
                 model_id=str(module["id"]),
                 requested_data=request.data,
@@ -726,7 +730,8 @@ class ModuleViewSet(BaseViewSet):
 
         module_issues = list(ModuleIssue.objects.filter(module_id=pk).values_list("issue", flat=True))
         _ = [
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="module.activity.deleted",
                 requested_data=json.dumps({"module_id": str(pk)}),
                 actor_id=str(request.user.id),

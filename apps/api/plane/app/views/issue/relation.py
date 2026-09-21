@@ -32,6 +32,7 @@ from plane.db.models import (
 from plane.bgtasks.issue_activities_task import issue_activity
 from plane.utils.issue_relation_mapper import get_actual_relation
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IssueRelationViewSet(BaseViewSet):
@@ -245,7 +246,8 @@ class IssueRelationViewSet(BaseViewSet):
             ignore_conflicts=True,
         )
 
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_relation.activity.created",
             requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
             actor_id=str(request.user.id),
@@ -279,7 +281,8 @@ class IssueRelationViewSet(BaseViewSet):
         issue_relations = issue_relations.first()
         current_instance = json.dumps(IssueRelationSerializer(issue_relations).data, cls=DjangoJSONEncoder)
         issue_relations.delete()
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue_relation.activity.deleted",
             requested_data=json.dumps(request.data, cls=DjangoJSONEncoder),
             actor_id=str(request.user.id),

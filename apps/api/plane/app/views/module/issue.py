@@ -40,6 +40,7 @@ from plane.utils.filters import ComplexFilterBackend
 from plane.utils.filters import IssueFilterSet
 from .. import BaseViewSet
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class ModuleIssueViewSet(BaseViewSet):
@@ -238,7 +239,8 @@ class ModuleIssueViewSet(BaseViewSet):
         )
         # Bulk Update the activity
         _ = [
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="module.activity.created",
                 requested_data=json.dumps({"module_id": str(module_id)}),
                 actor_id=str(request.user.id),
@@ -278,7 +280,8 @@ class ModuleIssueViewSet(BaseViewSet):
             )
             # Bulk Update the activity
             _ = [
-                issue_activity.delay(
+                best_effort_delay(
+                    issue_activity,
                     type="module.activity.created",
                     requested_data=json.dumps({"module_id": module}),
                     actor_id=str(request.user.id),
@@ -299,7 +302,8 @@ class ModuleIssueViewSet(BaseViewSet):
                 module_id=module_id,
                 issue_id=issue_id,
             )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="module.activity.deleted",
                 requested_data=json.dumps({"module_id": str(module_id)}),
                 actor_id=str(request.user.id),
@@ -330,7 +334,8 @@ class ModuleIssueViewSet(BaseViewSet):
             module_id=module_id,
             issue_id=issue_id,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="module.activity.deleted",
             requested_data=json.dumps({"module_id": str(module_id)}),
             actor_id=str(request.user.id),

@@ -22,6 +22,7 @@ from plane.db.models import Project, ProjectMember, ProjectUserProperty, Workspa
 from plane.bgtasks.project_add_user_email_task import project_add_user_email
 from plane.utils.host import base_host
 from plane.app.permissions.base import allow_permission, ROLE
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class ProjectMemberViewSet(BaseViewSet):
@@ -141,7 +142,8 @@ class ProjectMemberViewSet(BaseViewSet):
         )
         # Send emails to notify the users
         [
-            project_add_user_email.delay(
+            best_effort_delay(
+                project_add_user_email,
                 base_host(request=request, is_app=True),
                 project_member.id,
                 request.user.id,

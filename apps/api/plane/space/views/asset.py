@@ -19,6 +19,7 @@ from plane.bgtasks.storage_metadata_task import get_asset_object_metadata
 from plane.db.models import DeployBoard, FileAsset
 from plane.settings.storage import S3Storage
 from plane.utils.path_validator import sanitize_filename
+from plane.utils.task_dispatch import best_effort_delay
 
 # Module imports
 from .base import BaseAPIView
@@ -167,7 +168,7 @@ class EntityAssetEndpoint(BaseAPIView):
         asset.is_uploaded = True
         # get the storage metadata
         if not asset.storage_metadata:
-            get_asset_object_metadata.delay(str(asset.id))
+            best_effort_delay(get_asset_object_metadata, str(asset.id))
 
         # update the attributes
         asset.attributes = request.data.get("attributes", asset.attributes)

@@ -14,6 +14,7 @@ from plane.bgtasks.storage_metadata_task import get_asset_object_metadata
 from plane.db.models import FileAsset, Page, Project
 from plane.settings.storage import S3Storage
 from plane.utils.path_validator import sanitize_filename
+from plane.utils.task_dispatch import best_effort_delay
 
 
 PAGE_IMAGE_MIME_TYPES = {
@@ -159,7 +160,7 @@ class ProjectPageAssetDetailAPIEndpoint(PageAssetMixin, BaseAPIView):
         asset.is_uploaded = bool(request.data.get("is_uploaded", True))
         asset.save(update_fields=["is_uploaded", "updated_at"])
         if asset.is_uploaded and not asset.storage_metadata:
-            get_asset_object_metadata.delay(asset_id=str(asset.id))
+            best_effort_delay(get_asset_object_metadata, asset_id=str(asset.id))
         return Response(self.serialize_asset(asset, request), status=status.HTTP_200_OK)
 
     def delete(self, request, slug, project_id, page_id, asset_id):

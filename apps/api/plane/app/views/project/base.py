@@ -42,6 +42,7 @@ from plane.db.models import (
 from plane.db.models.intake import IntakeIssueStatus
 from plane.utils.host import base_host
 from plane.utils.order_queryset import PROJECT_ORDER_BY_ALLOWLIST, sanitize_order_by
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class ProjectViewSet(BaseViewSet):
@@ -243,7 +244,8 @@ class ProjectViewSet(BaseViewSet):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-        recent_visited_task.delay(
+        best_effort_delay(
+            recent_visited_task,
             slug=slug,
             project_id=pk,
             entity_name="project",
@@ -297,7 +299,8 @@ class ProjectViewSet(BaseViewSet):
             project = self.get_queryset().filter(pk=serializer.data["id"]).first()
 
             # Create the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="project",
                 model_id=str(project.id),
                 requested_data=request.data,
@@ -366,7 +369,8 @@ class ProjectViewSet(BaseViewSet):
 
             project = self.get_queryset().filter(pk=serializer.data["id"]).first()
 
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="project",
                 model_id=str(project.id),
                 requested_data=request.data,
@@ -397,7 +401,8 @@ class ProjectViewSet(BaseViewSet):
         ):
             project = Project.objects.get(pk=pk, workspace__slug=slug)
             project.delete()
-            webhook_activity.delay(
+            best_effort_delay(
+                webhook_activity,
                 event="project",
                 verb="deleted",
                 field=None,

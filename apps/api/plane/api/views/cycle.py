@@ -52,6 +52,7 @@ from plane.utils.host import base_host
 from .base import BaseAPIView
 from plane.bgtasks.webhook_task import model_activity
 from plane.utils.openapi.decorators import cycle_docs
+from plane.utils.task_dispatch import best_effort_delay
 from plane.utils.openapi import (
     CURSOR_PARAMETER,
     PER_PAGE_PARAMETER,
@@ -336,7 +337,8 @@ class CycleListCreateAPIEndpoint(BaseAPIView):
                     )
                 serializer.save(project_id=project_id)
                 # Send the model activity
-                model_activity.delay(
+                best_effort_delay(
+                    model_activity,
                     model_name="cycle",
                     model_id=str(serializer.instance.id),
                     requested_data=request.data,
@@ -592,7 +594,8 @@ class CycleDetailAPIEndpoint(BaseAPIView):
             serializer.save()
 
             # Send the model activity
-            model_activity.delay(
+            best_effort_delay(
+                model_activity,
                 model_name="cycle",
                 model_id=str(serializer.instance.id),
                 requested_data=request.data,
@@ -637,7 +640,8 @@ class CycleDetailAPIEndpoint(BaseAPIView):
 
         cycle_issues = list(CycleIssue.objects.filter(cycle_id=self.kwargs.get("pk")).values_list("issue", flat=True))
 
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.deleted",
             requested_data=json.dumps(
                 {
@@ -1043,7 +1047,8 @@ class CycleIssueListCreateAPIEndpoint(BaseAPIView):
         CycleIssue.objects.bulk_update(updated_records, ["cycle_id"], batch_size=100)
 
         # Capture Issue Activity
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.created",
             requested_data=json.dumps({"cycles_list": issues}),
             actor_id=str(self.request.user.id),
@@ -1153,7 +1158,8 @@ class CycleIssueDetailAPIEndpoint(BaseAPIView):
         )
         issue_id = cycle_issue.issue_id
         cycle_issue.delete()
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="cycle.activity.deleted",
             requested_data=json.dumps(
                 {

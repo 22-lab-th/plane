@@ -48,6 +48,7 @@ from plane.license.utils.instance_value import get_configuration_value
 from plane.bgtasks.workspace_seed_task import workspace_seed
 from plane.utils.url import contains_url
 from plane.utils.csv_utils import sanitize_csv_row
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class WorkSpaceViewSet(BaseViewSet):
@@ -134,7 +135,7 @@ class WorkSpaceViewSet(BaseViewSet):
                 data["total_members"] = total_members
                 data["role"] = 20
 
-                workspace_seed.delay(serializer.data["id"])
+                best_effort_delay(workspace_seed, serializer.data["id"])
 
                 return Response(data, status=status.HTTP_201_CREATED)
             return Response(

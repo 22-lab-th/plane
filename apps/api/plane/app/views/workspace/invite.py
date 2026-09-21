@@ -30,6 +30,7 @@ from plane.bgtasks.workspace_invitation_task import workspace_invitation
 from plane.db.models import User, Workspace, WorkspaceMember, WorkspaceMemberInvite
 from plane.utils.cache import invalidate_cache, invalidate_cache_directly
 from plane.utils.host import base_host
+from plane.utils.task_dispatch import best_effort_delay
 from .. import BaseViewSet
 
 
@@ -117,7 +118,8 @@ class WorkspaceInvitationsViewset(BaseViewSet):
 
         # Send invitations
         for invitation in workspace_invitations:
-            workspace_invitation.delay(
+            best_effort_delay(
+                workspace_invitation,
                 invitation.email,
                 workspace.id,
                 invitation.token,

@@ -48,6 +48,7 @@ from plane.utils.host import base_host
 from .. import BaseViewSet, BaseAPIView
 from plane.utils.filters import ComplexFilterBackend
 from plane.utils.filters import IssueFilterSet
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class IssueArchiveViewSet(BaseViewSet):
@@ -261,7 +262,8 @@ class IssueArchiveViewSet(BaseViewSet):
                 {"error": "Can only archive completed or cancelled state group issue"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue.activity.updated",
             requested_data=json.dumps({"archived_at": str(timezone.now().date()), "automation": False}),
             actor_id=str(request.user.id),
@@ -285,7 +287,8 @@ class IssueArchiveViewSet(BaseViewSet):
             archived_at__isnull=False,
             pk=pk,
         )
-        issue_activity.delay(
+        best_effort_delay(
+            issue_activity,
             type="issue.activity.updated",
             requested_data=json.dumps({"archived_at": None}),
             actor_id=str(request.user.id),
@@ -325,7 +328,8 @@ class BulkArchiveIssuesEndpoint(BaseAPIView):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            issue_activity.delay(
+            best_effort_delay(
+                issue_activity,
                 type="issue.activity.updated",
                 requested_data=json.dumps({"archived_at": str(timezone.now().date()), "automation": False}),
                 actor_id=str(request.user.id),

@@ -11,6 +11,7 @@ from django.utils import timezone
 
 # Module imports
 from plane.bgtasks.deletion_task import soft_delete_related_objects
+from plane.utils.task_dispatch import best_effort_delay
 
 
 class TimeAuditModel(models.Model):
@@ -75,7 +76,15 @@ class SoftDeleteModel(models.Model):
             self.deleted_at = timezone.now()
             self.save(using=using)
 
-            soft_delete_related_objects.delay(self._meta.app_label, self._meta.model_name, self.pk, using=using)
+            # The soft delete above is the write the caller asked for and it is already
+            # durable; the related-object cascade behind it is a follow-up, so an
+            # unreachable broker must not turn a completed delete into an exception
+            # (every DELETE endpoint would answer 500 after removing the row). The
+            # dropped hand-off is recorded on the plane.exception logger with the
+            # row it referred to.
+            best_effort_delay(
+                soft_delete_related_objects, self._meta.app_label, self._meta.model_name, self.pk, using=using
+            )
 
         else:
             # Perform hard delete if soft deletion is not enabled
