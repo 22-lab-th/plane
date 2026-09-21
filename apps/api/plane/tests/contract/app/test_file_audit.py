@@ -21,7 +21,6 @@ import uuid
 from datetime import timedelta
 
 # Django imports
-from django.db.models.query import QuerySet
 from django.utils import timezone
 
 # Third party imports
@@ -31,6 +30,7 @@ from rest_framework import status
 
 # Module imports
 from plane.bgtasks.file_audit_task import mask_audit_pii
+from plane.bgtasks import file_audit_task
 from plane.db.models import (
     FileAccessLog,
     FileFolder,
@@ -746,6 +746,11 @@ class TestAuditMasking:
         is wrapped, and a second run with a wider window clears part of the batch in
         between the selection and the update. Counting the selection would then report
         rows the other run had already cleared.
+
+        The masking task now issues one ``UPDATE ... RETURNING`` per batch through
+        ``_mask_batch``; that is the chokepoint to wrap. The wrapper invokes the real
+        function once the recursive ``mask_audit_pii`` has cleared what it can, so
+        the outer run's ``RETURNING`` reports only what it itself changed.
         """
         rows = [
             self.age(
@@ -764,19 +769,27 @@ class TestAuditMasking:
             )
             for index, age_days in enumerate((400, 390, 380, 375, 370))
         ]
-        cleared_by_the_other_run = rows[:2]
 
-        real_update = QuerySet.update
+        real_mask_batch = file_audit_task._mask_batch
         state = {"fired": False}
 
-        def update(query, **kwargs):
-            if not state["fired"] and query.model is FileAccessLog:
+        def mask_batch(candidate_ids, masked_per_project):
+            if not state["fired"]:
                 state["fired"] = True
                 settings.AUDIT_PII_RETENTION_DAYS = 385
+                # The recursive run goes through the full pipeline (selection +
+                # update + event) so its retention window narrows its own candidate
+                # set to the two rows that are older than 385 days; the outer run's
+                # next call then ``RETURNING``s only the ones the outer run itself
+                # changed.
                 mask_audit_pii(batch_size=10)
-            return real_update(query, **kwargs)
+            # The outer run goes through the real ``_mask_batch`` with its own
+            # (empty) accumulator. The ``UPDATE ... RETURNING`` filters out the two
+            # rows the recursive run already masked, so this ``RETURNING`` returns
+            # exactly the rows the outer run changed.
+            return real_mask_batch(candidate_ids, masked_per_project)
 
-        mocker.patch.object(QuerySet, "update", update)
+        mocker.patch.object(file_audit_task, "_mask_batch", mask_batch)
 
         settings.AUDIT_PII_RETENTION_DAYS = 90
         summary = mask_audit_pii(batch_size=10)

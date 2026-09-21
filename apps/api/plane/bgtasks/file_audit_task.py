@@ -14,7 +14,10 @@ erasure request (R-LEG-2) is satisfied by masking rather than by deleting histor
 It is idempotent without needing a marker column: the selection is "older than the
 window **and** still holding personal data", so a masked row is never selected again
 and no row is rewritten twice. The predicate travels with the ``UPDATE`` as well, so
-two runs that overlap mask each row once and report it once.
+two runs that overlap mask each row once and report it once. The masking is one
+``UPDATE ... RETURNING`` per batch (not per project) - the per-project count comes
+from the ``project_id`` returned for each changed row, so the predicate still rides
+with the statement and an overlap cannot inflate this run's event count.
 
 **The run answers for itself.** One ``pii_masked`` event is appended per project whose
 rows changed, carrying the counts and the window that produced them, so "which run
@@ -68,6 +71,7 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 
 # Django imports
 from django.conf import settings
+from django.db import connection
 from django.db.models import Q
 from django.utils import timezone
 
@@ -86,9 +90,10 @@ MASK_BATCH_SIZE = 1000
 def mask_expired_audit_pii(batch_size=MASK_BATCH_SIZE):
     """Mask every row past ``AUDIT_PII_RETENTION_DAYS``; return what was masked.
 
-    Every count this returns, and every number an event carries, comes from an
-    ``UPDATE`` rowcount - what this run changed - never from what it selected: a row
-    another run got to first is counted by that run alone.
+    Every count this returns, and every number an event carries, comes from a
+    PostgreSQL ``UPDATE ... RETURNING`` - what this run changed - never from
+    what it selected: a row another run got to first is counted by that run
+    alone.
     """
     retention_days = settings.AUDIT_PII_RETENTION_DAYS
     # A window longer than the calendar is still not an error: it means no row can be
@@ -110,39 +115,25 @@ def mask_expired_audit_pii(batch_size=MASK_BATCH_SIZE):
     masked_per_project = {}
 
     while True:
-        batch = list(
+        candidate_ids = list(
             FileAccessLog.objects.filter(created_at__lt=cutoff)
             .filter(still_personal)
             .order_by("created_at")
-            .values_list("id", "project_id")[:batch_size]
+            .values_list("id", flat=True)[:batch_size]
         )
-        if not batch:
+        if not candidate_ids:
             break
 
-        # One statement per project in the batch. The predicate travels with the
-        # ``UPDATE`` and each statement counts the rows *it* changed, so an
-        # overlapping run that cleared part of this batch in between cannot make this
-        # one report phantom work - neither in the total nor in a project's event.
-        ids_per_project = {}
-        for row_id, project_id in batch:
-            ids_per_project.setdefault(project_id, []).append(row_id)
+        # One statement per batch. The predicate travels with the ``UPDATE`` as
+        # ``still_personal`` - exactly the columns being cleared - so a row another
+        # run cleared between this SELECT and our UPDATE is a no-op there and
+        # ``RETURNING`` does not name it. The returned ``(id, project_id)`` pairs
+        # are exactly the rows this run changed, which is what every event's
+        # ``masked_rows`` is built from and what the overlap test asserts.
+        masked_per_project = _mask_batch(candidate_ids, masked_per_project)
+        masked = sum(masked_per_project.values())
 
-        for project_id, row_ids in ids_per_project.items():
-            changed = (
-                FileAccessLog.objects.filter(id__in=row_ids)
-                .filter(still_personal)
-                .update(
-                    ip_address=None,
-                    user_agent="",
-                    actor_display="",
-                    file_name_snapshot="",
-                )
-            )
-            masked += changed
-            if changed:
-                masked_per_project[project_id] = masked_per_project.get(project_id, 0) + changed
-
-        if len(batch) < batch_size:
+        if len(candidate_ids) < batch_size:
             break
 
     unrecorded = (
@@ -157,6 +148,39 @@ def mask_expired_audit_pii(batch_size=MASK_BATCH_SIZE):
         "retention_days": retention_days,
         "cutoff": cutoff.isoformat(),
     }
+
+
+def _mask_batch(candidate_ids, masked_per_project):
+    """Clear the four personal columns on the given candidate ids.
+
+    Returns an updated ``masked_per_project`` accumulator built from the rows
+    ``UPDATE ... RETURNING`` actually changed - so an overlap with another run
+    cannot make this run claim its work.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE file_access_logs
+               SET ip_address = NULL,
+                   user_agent = '',
+                   actor_display = '',
+                   file_name_snapshot = ''
+             WHERE id = ANY(%s)
+               AND (
+                   ip_address IS NOT NULL
+                   OR user_agent <> ''
+                   OR actor_display <> ''
+                   OR file_name_snapshot <> ''
+               )
+            RETURNING id, project_id
+            """,
+            [candidate_ids],
+        )
+        returned = cursor.fetchall()
+
+    for _row_id, project_id in returned:
+        masked_per_project[project_id] = masked_per_project.get(project_id, 0) + 1
+    return masked_per_project
 
 
 @shared_task
