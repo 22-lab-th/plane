@@ -19,9 +19,7 @@ export type TUserMention = {
 export abstract class PageCoreService extends APIService {
   protected abstract basePath: string;
 
-  constructor() {
-    super();
-  }
+  
 
   async fetchDetails(pageId: string): Promise<TPage> {
     try {
@@ -39,6 +37,10 @@ export abstract class PageCoreService extends APIService {
   }
 
   async fetchDescriptionBinary(pageId: string): Promise<Buffer> {
+    return (await this.fetchDescriptionSnapshot(pageId)).binary;
+  }
+
+  async fetchDescriptionSnapshot(pageId: string): Promise<{ binary: Buffer; etag: string }> {
     try {
       const response = await this.get(`${this.basePath}/pages/${pageId}/description/`, {
         headers: {
@@ -51,7 +53,11 @@ export abstract class PageCoreService extends APIService {
       if (!Buffer.isBuffer(data)) {
         throw new Error("Expected response to be a Buffer");
       }
-      return data;
+      const etag = response.headers.etag;
+      if (typeof etag !== "string" || !etag.startsWith('"')) {
+        throw new Error("Page snapshot is missing its strong ETag");
+      }
+      return { binary: data, etag };
     } catch (error) {
       const appError = new AppError(error, {
         context: { operation: "fetchDescriptionBinary", pageId },
@@ -115,10 +121,10 @@ export abstract class PageCoreService extends APIService {
     }
   }
 
-  async updateDescriptionBinary(pageId: string, data: TDocumentPayload): Promise<any> {
+  async updateDescriptionBinary(pageId: string, data: TDocumentPayload, etag: string): Promise<unknown> {
     try {
       const response = await this.patch(`${this.basePath}/pages/${pageId}/description/`, data, {
-        headers: this.getHeader(),
+        headers: { ...this.getHeader(), "If-Match": etag },
       });
       return response?.data as unknown;
     } catch (error) {

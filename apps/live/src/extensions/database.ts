@@ -1,3 +1,4 @@
+/* eslint-disable no-await-in-loop -- Each CAS retry depends on the preceding conflict and fresh snapshot. */
 /**
  * Copyright (c) 2023-present Plane Software, Inc. and contributors
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -5,6 +6,8 @@
  */
 
 import { Database as HocuspocusDatabase } from "@hocuspocus/extension-database";
+import * as Y from "yjs";
+import { persistMergedDocument } from "./document-persistence";
 // plane imports
 import {
   getAllDocumentFormatsFromDocumentEditorBinaryData,
@@ -26,38 +29,34 @@ import { forceCloseDocumentAcrossServers } from "./force-close-handler";
 const fetchDocument = async ({ context, documentName: pageId, instance }: FetchPayloadWithContext) => {
   try {
     const service = getPageService(context.documentType, context);
-    // fetch details
-    const response = (await service.fetchDescriptionBinary(pageId)) as Buffer;
-    const binaryData = new Uint8Array(response);
-    // if binary data is empty, convert HTML to binary data
-    if (binaryData.byteLength === 0) {
+    // A concurrent API replacement must not be overwritten during first conversion.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await service.fetchDescriptionSnapshot(pageId);
+      const binaryData = new Uint8Array(snapshot.binary);
+      if (binaryData.byteLength > 0) return binaryData;
       const pageDetails = await service.fetchDetails(pageId);
       const convertedBinaryData = getBinaryDataFromDocumentEditorHTMLString(
         pageDetails.description_html ?? "<p></p>",
         pageDetails.name
       );
-      if (convertedBinaryData) {
-        // save the converted binary data back to the database
-        try {
-          const { contentBinaryEncoded, contentHTML, contentJSON } = getAllDocumentFormatsFromDocumentEditorBinaryData(
-            convertedBinaryData,
-            true
-          );
-          const payload: TDocumentPayload = {
-            description_binary: contentBinaryEncoded,
-            description_html: contentHTML,
-            description_json: contentJSON,
-          };
-          await service.updateDescriptionBinary(pageId, payload);
-        } catch (e) {
-          const error = new AppError(e);
-          logger.error("Failed to save binary after first conversion from html:", error);
-        }
+      if (!convertedBinaryData) return binaryData;
+      const { contentBinaryEncoded, contentHTML, contentJSON } = getAllDocumentFormatsFromDocumentEditorBinaryData(
+        convertedBinaryData,
+        true
+      );
+      const payload: TDocumentPayload = {
+        description_binary: contentBinaryEncoded,
+        description_html: contentHTML,
+        description_json: contentJSON,
+      };
+      try {
+        await service.updateDescriptionBinary(pageId, payload, snapshot.etag);
         return convertedBinaryData;
+      } catch (error) {
+        if (new AppError(error).statusCode !== 412 || attempt === 2) throw error;
       }
     }
-    // return binary data
-    return binaryData;
+    throw new Error("Page changed repeatedly during initial conversion");
   } catch (error) {
     const appError = new AppError(error, { context: { pageId } });
     logger.error("Error in fetching document", appError);
@@ -77,18 +76,15 @@ const storeDocument = async ({
 }: StorePayloadWithContext) => {
   try {
     const service = getPageService(context.documentType, context);
-    // convert binary data to all formats
-    const { contentBinaryEncoded, contentHTML, contentJSON } = getAllDocumentFormatsFromDocumentEditorBinaryData(
-      pageBinaryData,
-      true
-    );
-    // create payload
-    const payload: TDocumentPayload = {
-      description_binary: contentBinaryEncoded,
-      description_html: contentHTML,
-      description_json: contentJSON,
-    };
-    await service.updateDescriptionBinary(pageId, payload);
+    const activeDocument = instance.documents.get(pageId);
+    const document = activeDocument ?? new Y.Doc();
+    try {
+      // Use current memory, not the earlier hook snapshot, whenever it is available.
+      if (!activeDocument) Y.applyUpdate(document, pageBinaryData);
+      await persistMergedDocument(service, pageId, document);
+    } finally {
+      if (!activeDocument) document.destroy();
+    }
   } catch (error) {
     const appError = new AppError(error, { context: { pageId } });
     logger.error("Error in updating document:", appError);

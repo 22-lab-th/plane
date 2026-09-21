@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 # Python imports
+import hashlib
 import json
 from datetime import datetime
 from django.core.serializers.json import DjangoJSONEncoder
@@ -290,9 +291,11 @@ class PageViewSet(BaseViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    @transaction.atomic
     def partial_update(self, request, slug, project_id, page_id):
         try:
             page = get_project_page(slug, project_id, page_id)
+            page = Page.objects.select_for_update().get(pk=page.pk)
 
             if page.is_locked:
                 return Response({"error": "Page is locked"}, status=status.HTTP_400_BAD_REQUEST)
@@ -433,7 +436,7 @@ class PageViewSet(BaseViewSet):
         )
 
         page.is_locked = True
-        page.save()
+        page.save(update_fields=["is_locked", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def unlock(self, request, slug, project_id, page_id):
@@ -445,7 +448,7 @@ class PageViewSet(BaseViewSet):
         )
 
         page.is_locked = False
-        page.save()
+        page.save(update_fields=["is_locked", "updated_at"])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -482,7 +485,7 @@ class PageViewSet(BaseViewSet):
             )
 
         page.access = access
-        page.save()
+        page.save(update_fields=["access", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @transaction.atomic
@@ -839,6 +842,14 @@ class PageFavoriteViewSet(BaseViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def page_description_etag(page):
+    """Bind conditional writes to the exact document snapshot, including legacy HTML."""
+    binary = bytes(page.description_binary or b"")
+    digest = hashlib.sha256(len(binary).to_bytes(8, "big") + binary)
+    digest.update(json.dumps([page.description_html, page.name], ensure_ascii=False).encode("utf-8"))
+    return f'"{digest.hexdigest()}"'
+
+
 class PagesDescriptionViewSet(BaseViewSet):
     permission_classes = [ProjectPagePermission]
 
@@ -860,16 +871,26 @@ class PagesDescriptionViewSet(BaseViewSet):
 
         response = StreamingHttpResponse(stream_data(), content_type="application/octet-stream")
         response["Content-Disposition"] = 'attachment; filename="page_description.bin"'
+        response["ETag"] = page_description_etag(page)
+        response["Cache-Control"] = "no-store"
         return response
 
+    @transaction.atomic
     def partial_update(self, request, slug, project_id, page_id):
-        page = Page.objects.get(
+        page = Page.objects.select_for_update(of=("self",)).get(
             Q(owned_by=self.request.user) | Q(access=0),
             pk=page_id,
             workspace__slug=slug,
             projects__id=project_id,
             project_pages__deleted_at__isnull=True,
         )
+
+        expected_etag = request.headers.get("If-Match")
+        if expected_etag is not None and expected_etag != page_description_etag(page):
+            return Response(
+                {"error": "Page content changed; reload and merge before saving"},
+                status=status.HTTP_412_PRECONDITION_FAILED,
+            )
 
         if page.is_locked:
             return Response(
@@ -922,7 +943,7 @@ class PagesDescriptionViewSet(BaseViewSet):
                 existing_instance=existing_instance,
                 user_id=request.user.id,
             )
-            return Response({"message": "Updated successfully"})
+            return Response({"message": "Updated successfully"}, headers={"ETag": page_description_etag(page)})
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

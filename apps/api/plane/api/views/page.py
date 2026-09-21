@@ -127,7 +127,10 @@ class PageQuerysetMixin:
             ), None
         return None, data
 
+    @transaction.atomic
     def update_page(self, request, page):
+        # Serialize replacement against collaborative saves, including its conversion base.
+        page = Page.objects.select_for_update().get(Q(owned_by=request.user) | Q(access=Page.PUBLIC_ACCESS), pk=page.pk)
         if page.is_locked:
             return Response({"error": "Page is locked"}, status=status.HTTP_400_BAD_REQUEST)
         if "access" in request.data and request.data["access"] != page.access and page.owned_by_id != request.user.id:
