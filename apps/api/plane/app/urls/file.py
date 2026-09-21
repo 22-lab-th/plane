@@ -7,6 +7,8 @@ from django.urls import path
 from plane.app.views import (
     FileActivityEndpoint,
     FileCopyEndpoint,
+    FileCopyToProjectEndpoint,
+    FileMoveToProjectEndpoint,
     FileStorageEndpoint,
     FileEntityLinkListEndpoint,
     FileLinkDetailEndpoint,
@@ -77,6 +79,19 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/copy/",
         FileCopyEndpoint.as_view(),
         name="project-file-copy",
+    ),
+    # Cross-project copy and move (T-122). Separate routes rather than a field on
+    # ``copy/``: each one authorizes two projects, charges the target and returns its
+    # own payload, so the doors are not the same operation.
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/copy-to-project/",
+        FileCopyToProjectEndpoint.as_view(),
+        name="project-file-copy-to-project",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/move-to-project/",
+        FileMoveToProjectEndpoint.as_view(),
+        name="project-file-move-to-project",
     ),
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/files/<uuid:file_id>/restore/",

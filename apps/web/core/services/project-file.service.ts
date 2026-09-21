@@ -279,6 +279,33 @@ export interface IProjectFileRestoreResult {
   };
 }
 
+/** The counters the cross-project routes report for the target project (AC-41, AC-42). */
+export interface IProjectFileTransferUsage {
+  project_used_bytes: number;
+  limit_bytes: number;
+}
+
+/** `POST files/{id}/copy-to-project/` response: the new file, in the target project. */
+export interface IProjectFileCrossProjectCopy {
+  file: IProjectFile;
+  source_file_id: string;
+  target_project_id: string;
+  copied_versions: number;
+  target_storage_usage: IProjectFileTransferUsage;
+}
+
+/**
+ * `POST files/{id}/move-to-project/` response: the new file in the target project, and
+ * `source_purged` confirming the source row and every one of its objects are gone.
+ */
+export interface IProjectFileCrossProjectMove {
+  file: IProjectFile;
+  source_file_id: string;
+  target_project_id: string;
+  copied_versions: number;
+  source_purged: true;
+}
+
 /** The list query parameters the endpoint documents. */
 export type TProjectFileListQuery = {
   /**
@@ -537,6 +564,48 @@ export class ProjectFileService extends APIService {
   ): Promise<IProjectFile> {
     return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/copy/`, payload)
       .then((response) => response?.data?.file)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Copy this file into **another project of the same workspace** (R-OPS-4, AC-41).
+   *
+   * The server authorizes both projects, copies every version server-side to new keys
+   * under the target's prefix, charges the target's quota and records the copy in both
+   * projects' activity feeds; the source is untouched and the copy carries no links.
+   * A target the caller cannot write to is refused (403), and a target in another
+   * workspace is refused outright (400) - the picker never offers either.
+   */
+  async copyProjectFileToProject(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    payload: { target_project_id: string; folder_id?: string | null; name_display?: string }
+  ): Promise<IProjectFileCrossProjectCopy> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/copy-to-project/`, payload)
+      .then((response) => response?.data)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Move this file to **another project of the same workspace** (R-OPS-4, AC-42).
+   *
+   * The server copies, verifies the copied object (HEAD size, type and ETag) and only
+   * then purges the source file and its objects, so exactly one copy exists; a copy
+   * that fails verification costs the source nothing and is reported as a failure.
+   */
+  async moveProjectFileToProject(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    payload: { target_project_id: string; folder_id?: string | null; name_display?: string }
+  ): Promise<IProjectFileCrossProjectMove> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/move-to-project/`, payload)
+      .then((response) => response?.data)
       .catch((error) => {
         throw error?.response?.data ?? error;
       });

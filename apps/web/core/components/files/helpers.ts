@@ -518,6 +518,34 @@ export const restoredToRootCopy = "Restored to the project root — the original
 export const purgeConfirmCopy = (name: string): string => `Permanently delete ${name}? This cannot be undone.`;
 
 /**
+ * The warning a cross-project **move** shows before confirming (DES-001 §7, verbatim).
+ *
+ * It states the two things the user cannot see from the row: the source is removed only
+ * after the copy verifies, and the links the file has here do not travel with it.
+ */
+export const crossProjectMoveWarningCopy = (project: string): string =>
+  `Moving to ${project} copies the file, verifies the copy, then removes it from this project. File links are not carried over.`;
+
+/** The same warning for a **copy**: nothing leaves this project, the copy is verified. */
+export const crossProjectCopyWarningCopy = (project: string): string =>
+  `Copying to ${project} copies the file, verifies the copy, and leaves this one here. File links are not carried over.`;
+
+/** The toast a completed cross-project copy shows (DES-001 §7). */
+export const crossProjectCopiedCopy = (project: string): string => `Copied to ${project}.`;
+
+/** The toast a completed cross-project move shows (DES-001 §7). */
+export const crossProjectMovedCopy = (project: string): string => `Moved to ${project}.`;
+
+/**
+ * The refusal for a destination project the caller may only read (DES-001 §7).
+ *
+ * The picker renders it on the option (which is also `disabled`) and prints it when a
+ * change to that project is attempted anyway, so the copy is the same in both places -
+ * and it is the message the API returns for the same attempt.
+ */
+export const crossProjectRefusedCopy = (project: string): string => `You need write access to ${project} to do that.`;
+
+/**
  * The folder anchor that means "the project root" (the API's ``folder_id=root``).
  *
  * It is not the same as omitting ``folder_id``: the endpoint reads an absent filter

@@ -4,20 +4,32 @@
  * See the LICENSE file for details.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { observer } from "mobx-react";
+import { orderBy } from "lodash-es";
 // headlessui
 import { Dialog } from "@headlessui/react";
 // plane imports
+import { EUserPermissions } from "@plane/constants";
 import { Button } from "@plane/propel/button";
+import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
 import { cn } from "@plane/utils";
 // services
 import type { IProjectFileBreadcrumb, IProjectFileDetail, IProjectFolder } from "@/services/project-file.service";
 import { ProjectFileService, putPresignedFile } from "@/services/project-file.service";
+// hooks
+import { useProject } from "@/hooks/store/use-project";
+import { useUserPermissions } from "@/hooks/store/user";
 // helpers
 import {
   FILES_FOCUS_RING,
   FILES_UPLOAD_MAX_BYTES,
+  crossProjectCopiedCopy,
+  crossProjectCopyWarningCopy,
+  crossProjectMoveWarningCopy,
+  crossProjectMovedCopy,
+  crossProjectRefusedCopy,
   purgeConfirmCopy,
   restoredToRootCopy,
   uploadTooLargeCopy,
@@ -34,6 +46,9 @@ const fileService = new ProjectFileService();
 
 /** How many files the move picker asks for: it only wants the child folders of a level. */
 const MOVE_PICKER_PAGE_SIZE = 1;
+
+/** What the picker's two buttons offer: leave this project, or leave a copy in it. */
+type TMoveOperation = "move" | "copy";
 
 /** The confirmation the drawer is showing; at most one at a time (DESIGN §1). */
 export type TDrawerDialog =
@@ -273,6 +288,7 @@ export function FileDetailActions(props: Props) {
         projectId={projectId}
         onClose={() => onDialogChange(null)}
         onChanged={onChanged}
+        onPurged={onPurged}
         onNotice={onNotice}
       />
       <PurgeDialog
@@ -426,32 +442,46 @@ function RenameDialog(props: {
 }
 
 /**
- * The folder picker, walked lazily through the listing endpoint.
+ * The move/copy picker: a destination **project** and a folder inside it.
  *
  * The API has no route that returns a project's whole folder tree: the listing answers
  * with the child folders of the folder it was asked about, so the picker asks for one
  * level at a time - exactly the requests the tab behind the drawer makes when a user
  * walks the same folders, and never a tree the user did not open. Choosing and opening
- * are two separate controls, because the file's own folder is a legitimate place to
- * *look* in (it holds the subfolders the file could move into) and not a destination.
+ * are two separate controls, because a file's own folder is a legitimate place to *look*
+ * in (it holds the subfolders the file could move into) and not a destination.
  *
- * Destination root is the project root, which is where a file goes when its folder no
- * longer matters (R-DEL-2 restores there too). Cross-project move is T-122 and is not
- * offered here: the destination is always a folder of this project.
+ * Two destinations, two operations (EXP-001 F-07, AC-41/AC-42):
+ *
+ * * **This project** - Move changes only ``folder_id`` and keeps the object key
+ *   (AC-06), Copy mints a new file id and its own objects inside the project (AC-10).
+ * * **Another project of this workspace** - the server copies every version to the
+ *   target's prefix, verifies the copy and (for a move) purges the source, so the
+ *   warning below states what happens before the user commits to it. A project the
+ *   caller may only read is not selectable, and a scripted attempt to select it is
+ *   refused with the same copy the API returns for the same attempt.
  */
-function MoveDialog(props: {
+const MoveDialog = observer(function MoveDialog(props: {
   workspaceSlug: string;
   projectId: string;
   detail: IProjectFileDetail;
   isOpen: boolean;
   onClose: () => void;
   onChanged: () => void;
+  onPurged: () => void;
   onNotice: (notice: TDrawerNotice | null) => void;
 }) {
-  const { workspaceSlug, projectId, detail, isOpen, onClose, onChanged, onNotice } = props;
+  const { workspaceSlug, projectId, detail, isOpen, onClose, onChanged, onPurged, onNotice } = props;
   const file = detail.file;
   const currentFolderId = file.folder_id ?? null;
 
+  // store hooks
+  const { getProjectById, workspaceProjectIds } = useProject();
+  const { workspaceProjectsPermissions } = useUserPermissions();
+
+  const [operation, setOperation] = useState<TMoveOperation>("move");
+  const [destinationProjectId, setDestinationProjectId] = useState(projectId);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [browsedFolderId, setBrowsedFolderId] = useState<string | null>(null);
   const [folders, setFolders] = useState<IProjectFolder[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<IProjectFileBreadcrumb[]>([]);
@@ -462,14 +492,56 @@ function MoveDialog(props: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The projects the picker may offer: every project of this workspace the caller can
+   * see, writable or not. A read-only one stays in the list (so the user understands why
+   * it is not available) and is refused instead of being offered.
+   *
+   * Writability is read from the project-role map, which is the caller's `ProjectMember`
+   * role - **not** from the permission helper, which reports ADMIN for a workspace admin
+   * in every project. The file endpoints decide on the membership row alone, so an admin
+   * whose project role is GUEST is refused there; offering the project here would turn
+   * that refusal into a surprise after the user committed to it (R-PERM-1).
+   */
+  const projectOptions = useMemo(() => {
+    const ids = Array.from(new Set([projectId, ...(workspaceProjectIds ?? [])]));
+    const roles = workspaceProjectsPermissions[workspaceSlug] ?? {};
+    return orderBy(
+      ids
+        .map((id) => {
+          const project = getProjectById(id);
+          const role = roles[id];
+          return {
+            id,
+            name: project?.name ?? "",
+            isCurrent: id === projectId,
+            // The drawer is only drawn with a move affordance when the server said
+            // ``can_edit`` for this project, so the current project is writable by
+            // definition and never depends on the role map having loaded.
+            writable: id === projectId || role === EUserPermissions.ADMIN || role === EUserPermissions.MEMBER,
+          };
+        })
+        .filter((option) => option.name !== ""),
+      // This project first, then the rest by name: the order is stable across renders.
+      ["isCurrent", "name"],
+      ["desc", "asc"]
+    );
+  }, [getProjectById, projectId, workspaceProjectIds, workspaceProjectsPermissions, workspaceSlug]);
+
+  const destinationProjectName = getProjectById(destinationProjectId)?.name ?? "the destination project";
+  const isCrossProject = destinationProjectId !== projectId;
+
   useEffect(() => {
     if (!isOpen) return;
+    setOperation("move");
+    setDestinationProjectId(projectId);
+    setRefusal(null);
     setBrowsedFolderId(null);
     setFolders([]);
     setBreadcrumbs([]);
     setTarget(null);
     setError(null);
-  }, [isOpen]);
+  }, [isOpen, projectId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -479,7 +551,7 @@ function MoveDialog(props: {
     setLoadFailed(false);
 
     fileService
-      .listProjectFiles(workspaceSlug, projectId, {
+      .listProjectFiles(workspaceSlug, destinationProjectId, {
         folder_id: browsedFolderId ?? undefined,
         page_size: MOVE_PICKER_PAGE_SIZE,
       })
@@ -499,7 +571,7 @@ function MoveDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [browsedFolderId, isOpen, projectId, reloadToken, workspaceSlug]);
+  }, [browsedFolderId, destinationProjectId, isOpen, reloadToken, workspaceSlug]);
 
   const submit = async () => {
     if (!target) return;
@@ -507,15 +579,76 @@ function MoveDialog(props: {
     setSaving(true);
     setError(null);
     try {
-      await fileService.updateProjectFile(workspaceSlug, projectId, file.id, { folder_id: target.folderId });
+      if (!isCrossProject) {
+        // Inside one project: a move is metadata-only, a copy mints a new identity here.
+        if (operation === "move") {
+          await fileService.updateProjectFile(workspaceSlug, projectId, file.id, { folder_id: target.folderId });
+          onNotice({ tone: "info", text: `Moved to ${target.name}.` });
+        } else {
+          await fileService.copyProjectFile(workspaceSlug, projectId, file.id, { folder_id: target.folderId });
+          onNotice({ tone: "info", text: `Copied to ${target.name}.` });
+        }
+        onChanged();
+        onClose();
+        return;
+      }
+
+      if (operation === "move") {
+        // The server copies, verifies and purges; this project no longer holds the file,
+        // so the drawer closes the way a purge closes it and the outcome is a toast
+        // (the drawer's own notice would go with the drawer).
+        await fileService.moveProjectFileToProject(workspaceSlug, projectId, file.id, {
+          target_project_id: destinationProjectId,
+          folder_id: target.folderId,
+        });
+        onPurged();
+        setToast({
+          type: TOAST_TYPE.SUCCESS,
+          title: "Success!",
+          message: crossProjectMovedCopy(destinationProjectName),
+        });
+        return;
+      }
+
+      await fileService.copyProjectFileToProject(workspaceSlug, projectId, file.id, {
+        target_project_id: destinationProjectId,
+        folder_id: target.folderId,
+      });
       onChanged();
-      onNotice({ tone: "info", text: `Moved to ${target.name}.` });
+      onNotice({ tone: "info", text: crossProjectCopiedCopy(destinationProjectName) });
       onClose();
     } catch (failure) {
-      setError(readUploadFailure(failure).message ?? "We could not move this file.");
+      setError(
+        readUploadFailure(failure).message ??
+          (operation === "move" ? "We could not move this file." : "We could not copy this file.")
+      );
     } finally {
       setSaving(false);
     }
+  };
+
+  /**
+   * Switch the destination project.
+   *
+   * A project the caller may only read is refused here rather than offered (EXP-001
+   * F-07 edge case), and the selector stays where it was. Moving to another project also
+   * resets the folder choice to that project's root, because a folder from this project
+   * means nothing there.
+   */
+  const changeProject = (nextProjectId: string) => {
+    const option = projectOptions.find((candidate) => candidate.id === nextProjectId);
+    if (!option) return;
+    if (!option.writable) {
+      setRefusal(crossProjectRefusedCopy(option.name));
+      return;
+    }
+
+    setRefusal(null);
+    setError(null);
+    setDestinationProjectId(nextProjectId);
+    setBrowsedFolderId(null);
+    if (nextProjectId === projectId) setTarget(null);
+    else setTarget({ folderId: null, name: "Project root" });
   };
 
   const choose = (folderId: string | null, name: string) => setTarget({ folderId, name });
@@ -527,7 +660,7 @@ function MoveDialog(props: {
    */
   const openLevel = (folderId: string | null, name: string) => {
     setBrowsedFolderId(folderId);
-    if (folderId !== currentFolderId) choose(folderId, name);
+    if (isCrossProject || folderId !== currentFolderId) choose(folderId, name);
   };
   const destinationClassName = (folderId: string | null) =>
     cn(
@@ -536,16 +669,82 @@ function MoveDialog(props: {
       target?.folderId === folderId
         ? "bg-accent-primary text-on-color"
         : "bg-layer-1 text-primary hover:bg-layer-1-hover",
-      folderId === currentFolderId && folderId !== null ? "opacity-60" : ""
+      !isCrossProject && folderId === currentFolderId && folderId !== null ? "opacity-60" : ""
     );
 
   return (
     <ModalCore isOpen={isOpen} position={EModalPosition.CENTER} width={EModalWidth.XXL} handleClose={onClose}>
       <div data-testid="files-drawer-move-modal" className={DIALOG_BODY_CLASS_NAME}>
-        <Dialog.Title className={DIALOG_TITLE_CLASS_NAME}>Move {file.name_display}</Dialog.Title>
+        <Dialog.Title className={DIALOG_TITLE_CLASS_NAME}>
+          {operation === "move" ? "Move" : "Copy"} {file.name_display}
+        </Dialog.Title>
         <Dialog.Description className={DIALOG_NOTE_CLASS_NAME}>
-          Choose the folder it should live in. The stored object keeps its key.
+          {isCrossProject
+            ? `Choose the folder it should live in inside ${destinationProjectName}.`
+            : "Choose the folder it should live in. The stored object keeps its key."}
         </Dialog.Description>
+
+        <label className={DIALOG_NOTE_CLASS_NAME} htmlFor="files-drawer-move-project">
+          Destination project
+        </label>
+        <select
+          id="files-drawer-move-project"
+          data-testid="files-drawer-move-project"
+          className={cn(
+            "rounded-md border border-strong bg-layer-2 px-2 py-1 text-body-xs-regular text-primary",
+            FILES_FOCUS_RING
+          )}
+          value={destinationProjectId}
+          onChange={(event) => changeProject(event.target.value)}
+        >
+          {projectOptions.map((option) => (
+            <option
+              key={option.id}
+              value={option.id}
+              data-testid={`files-drawer-move-project-${option.id}`}
+              disabled={!option.writable}
+            >
+              {option.writable
+                ? `${option.name}${option.isCurrent ? " (current project)" : ""}`
+                : `${option.name} — ${crossProjectRefusedCopy(option.name)}`}
+            </option>
+          ))}
+        </select>
+
+        {refusal && (
+          <p
+            data-testid="files-drawer-move-refusal"
+            role="alert"
+            className="text-caption-md-regular text-danger-primary"
+          >
+            {refusal}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2" role="group" aria-label="Operation">
+          <Button
+            data-testid="files-drawer-move-op-move"
+            variant={operation === "move" ? "primary" : "secondary"}
+            size="base"
+            className={FILES_FOCUS_RING}
+            aria-pressed={operation === "move"}
+            onClick={() => setOperation("move")}
+          >
+            Move
+          </Button>
+          <Button
+            data-testid="files-drawer-move-op-copy"
+            variant={operation === "copy" ? "primary" : "secondary"}
+            size="base"
+            className={FILES_FOCUS_RING}
+            aria-pressed={operation === "copy"}
+            onClick={() => setOperation("copy")}
+          >
+            Copy
+          </Button>
+        </div>
+
+        <p className={DIALOG_NOTE_CLASS_NAME}>Destination folder in {destinationProjectName}</p>
 
         <nav aria-label="Folder path" className="flex flex-wrap items-center gap-1">
           <button
@@ -597,12 +796,14 @@ function MoveDialog(props: {
                   type="button"
                   data-testid={`files-drawer-move-folder-${folder.id}`}
                   className={cn(destinationClassName(folder.id), "flex-1")}
-                  aria-disabled={folder.id === currentFolderId}
-                  disabled={folder.id === currentFolderId}
+                  aria-disabled={!isCrossProject && folder.id === currentFolderId}
+                  disabled={!isCrossProject && folder.id === currentFolderId}
                   onClick={() => choose(folder.id, folder.name)}
                 >
                   <span className="truncate">{folder.name}</span>
-                  {folder.id === currentFolderId && <span className={DIALOG_NOTE_CLASS_NAME}>· current folder</span>}
+                  {!isCrossProject && folder.id === currentFolderId && (
+                    <span className={DIALOG_NOTE_CLASS_NAME}>· current folder</span>
+                  )}
                 </button>
                 <Button
                   data-testid={`files-drawer-move-open-${folder.id}`}
@@ -620,8 +821,18 @@ function MoveDialog(props: {
         )}
 
         <p data-testid="files-drawer-move-destination" className={DIALOG_NOTE_CLASS_NAME}>
-          {target ? `Destination: ${target.name}` : "Destination: none chosen yet"}
+          {target
+            ? `Destination: ${isCrossProject ? `${destinationProjectName} / ` : ""}${target.name}`
+            : "Destination: none chosen yet"}
         </p>
+
+        {isCrossProject && (
+          <p data-testid="files-drawer-move-cross-warning" className={DIALOG_NOTE_CLASS_NAME}>
+            {operation === "move"
+              ? crossProjectMoveWarningCopy(destinationProjectName)
+              : crossProjectCopyWarningCopy(destinationProjectName)}
+          </p>
+        )}
 
         {error && (
           <p data-testid="files-drawer-move-error" role="alert" className="text-caption-md-regular text-danger-primary">
@@ -647,13 +858,14 @@ function MoveDialog(props: {
             disabled={!target || saving}
             onClick={() => void submit()}
           >
-            Move here
+            {operation === "move" ? "Move" : "Copy"}
+            {isCrossProject ? ` to ${destinationProjectName}` : " here"}
           </Button>
         </div>
       </div>
     </ModalCore>
   );
-}
+});
 
 /** The purge confirmation: irreversible, and only ever offered for a trashed file (AC-12). */
 function PurgeDialog(props: {

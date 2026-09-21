@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 from .activity import FileActivityEndpoint
+from .cross_project import FileCopyToProjectEndpoint, FileMoveToProjectEndpoint
 from .download import FileDownloadEndpoint, FilePreviewEndpoint
 from .folders import FileFolderDetailEndpoint, FileFolderListEndpoint
 from .links import FileEntityLinkListEndpoint, FileLinkDetailEndpoint, FileLinkListEndpoint

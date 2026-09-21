@@ -13,7 +13,9 @@ they exist, not only the ones a test currently asserts.
 Uploads
     ``size_mismatch`` (the stored object's size contradicts the declaration),
     ``mime_mismatch``, ``object_missing`` (nothing at the signed key),
-    ``verification_failed``, ``not_uploading`` (a finalize or abort for an attempt
+    ``verification_failed`` (a finalize could not verify the upload; also a
+    cross-project **move** whose copied object did not match its source),
+    ``not_uploading`` (a finalize or abort for an attempt
     that already settled), ``upload_in_progress`` (a second attempt for a file with
     a live reservation), ``quota_exceeded`` (workspace or project ceiling, carrying
     ``level`` and integer byte fields).
@@ -45,8 +47,17 @@ Links
 
 Requests
     ``invalid_request`` (a value or target that is wrong, carrying ``field``),
-    ``unsupported_field`` (a payload field this endpoint does not implement),
-    ``cross_project_not_supported`` (T-122 owns the cross-project flows).
+    ``unsupported_field`` (a payload field this endpoint does not implement - the
+    cross-project ``target_project_id`` on ``copy/``, whose routes are separate).
+
+Cross-project copy and move (R-OPS-4, AD-17)
+    ``cross_workspace_not_supported`` (the destination project is in another
+    workspace, so the operation is refused entirely), ``verification_failed`` (a
+    move's copied object did not match the source, so the copy was rolled back and
+    the source kept - the body carries ``reason`` and the observed evidence), the
+    shared ``permission_denied`` (the caller may only read the destination) and the
+    neutral 404 (a destination the caller cannot see). A move whose *source* could not
+    be purged answers ``storage_unavailable`` with the source left in the trash.
 
 Subclassing DRF's :class:`APIException` means a raised failure becomes the right
 response without every endpoint re-implementing the mapping, and the body stays

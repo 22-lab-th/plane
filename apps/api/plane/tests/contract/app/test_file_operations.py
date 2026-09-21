@@ -583,9 +583,15 @@ class TestCopy:
         listed = storage.s3_client.list_objects_v2(Bucket=storage.aws_storage_bucket_name, Prefix=prefix)
         assert [item["Key"] for item in listed.get("Contents", [])] == [source.object_key]
 
-    def test_copy_refuses_a_cross_project_target_without_changing_anything(
+    def test_copy_refuses_the_cross_project_field_this_route_does_not_own(
         self, session_client, project, stored_objects
     ):
+        """``copy/`` copies inside one project; another project is the T-122 route.
+
+        The field is refused rather than dropped into an in-project copy (T-106 F-3):
+        a client asking this door for another project must not read a 200 for an
+        operation that did not happen.
+        """
         other_project = Project.objects.create(name="Elsewhere", identifier="ELSE", workspace=project.workspace)
         source = make_file(project, name="StaysPut.pdf", stored_objects=stored_objects)
 
@@ -596,7 +602,8 @@ class TestCopy:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data["code"] == "cross_project_not_supported"
+        assert response.data["code"] == "unsupported_field"
+        assert response.data["field"] == "target_project_id"
         assert FileObject.objects.filter(project=project).count() == 1
         assert FileObject.objects.filter(project=other_project).count() == 0
         assert object_exists(source.object_key)

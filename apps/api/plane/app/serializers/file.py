@@ -407,14 +407,45 @@ class FileOperationSerializer(serializers.Serializer):
 
 
 class FileCopySerializer(serializers.Serializer):
-    """`POST files/{file_id}/copy/` payload."""
+    """`POST files/{file_id}/copy/` payload: an in-project copy.
 
-    PAYLOAD_FIELDS = ("folder_id", "name_display", "target_project_id")
+    ``target_project_id`` is deliberately absent. The cross-project routes
+    (``copy-to-project/``, ``move-to-project/``, T-122) own that field, and an
+    unknown field is refused rather than dropped - so a client that asks this
+    endpoint for another project is told, instead of silently getting a copy in
+    place (T-106 verification F-3).
+    """
+
+    PAYLOAD_FIELDS = ("folder_id", "name_display")
 
     folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
     name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
-    #: Cross-project copy is T-122; the field exists so the refusal is explicit.
+
+    def validate_name_display(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError("name_display must not be empty.")
+        return name
+
+    def validate(self, attrs):
+        reject_unsupported_fields(self.initial_data, self.PAYLOAD_FIELDS)
+        return attrs
+
+
+class FileCrossProjectSerializer(serializers.Serializer):
+    """`POST files/{file_id}/copy-to-project/` and `.../move-to-project/` payload.
+
+    ``target_project_id`` is required in practice but declared optional so the
+    refusal arrives in this surface's own body (``invalid_request`` naming the
+    field) rather than as DRF's ``{"target_project_id": ["…"]}`` shape, which no
+    other project-file endpoint answers with.
+    """
+
+    PAYLOAD_FIELDS = ("target_project_id", "folder_id", "name_display")
+
     target_project_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    folder_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    name_display = serializers.CharField(max_length=255, trim_whitespace=True, required=False)
 
     def validate_name_display(self, value):
         name = value.strip()

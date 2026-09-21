@@ -20,11 +20,15 @@ Three invariants shape this module:
   by exactly what was copied and the ceiling is enforced before any object is
   duplicated.
 
-Cross-project copy and move are T-122: ``target_project_id`` is refused here
-rather than half-implemented, and nothing is aliased in the meantime.
+Cross-project copy and move live in :mod:`plane.app.views.file.cross_project` (T-122)
+and are built on :func:`copy_file_into_project` below, so the copy invariant is written
+once and a cross-project copy cannot drift from an in-project one. ``target_project_id``
+is **not** a field of these endpoints: the cross-project doors are separate routes, and
+a client that sends the field here is refused rather than silently copied in place.
 """
 
 # Python imports
+from dataclasses import dataclass
 from uuid import uuid4
 
 # Django imports
@@ -66,6 +70,7 @@ from plane.db.models import (
     IssueComment,
     Page,
     Project,
+    ProjectStorageUsage,
 )
 from plane.settings.storage import S3Storage
 from plane.throttles.project_file import ProjectFileUploadThrottle
@@ -80,7 +85,7 @@ from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.object_key import build_object_key
 
 
-def _serialize_file(file_object):
+def serialize_file(file_object):
     """Serialise one file with the link count the read endpoints also report."""
     file_object.link_count = file_object.links.count()
     return FileObjectSerializer(file_object).data
@@ -114,7 +119,7 @@ def patch_file(request, slug, project_id, file_id):
     moved = move_requested and (new_folder.id if new_folder else None) != file_object.folder_id
 
     if not (renamed or moved or pin_requested):
-        return Response({"file": _serialize_file(file_object)}, status=status.HTTP_200_OK)
+        return Response({"file": serialize_file(file_object)}, status=status.HTTP_200_OK)
 
     previous_name = file_object.name_display
 
@@ -125,7 +130,7 @@ def patch_file(request, slug, project_id, file_id):
             updated_at=timezone.now(),
         )
         file_object.refresh_from_db()
-        return Response({"file": _serialize_file(file_object)}, status=status.HTTP_200_OK)
+        return Response({"file": serialize_file(file_object)}, status=status.HTTP_200_OK)
 
     try:
         with transaction.atomic():
@@ -191,216 +196,285 @@ def patch_file(request, slug, project_id, file_id):
         )
 
     file_object.refresh_from_db()
-    return Response({"file": _serialize_file(file_object)}, status=status.HTTP_200_OK)
+    return Response({"file": serialize_file(file_object)}, status=status.HTTP_200_OK)
+
+
+@dataclass
+class CopiedFile:
+    """What one server-side copy into a project produced."""
+
+    #: The new row, in the project the bytes were copied into.
+    file: FileObject
+    #: The row it was copied from.
+    source: FileObject
+    #: ``[(source version, new object key)]`` in version order: the whole plan, so a
+    #: caller can verify or discard exactly what this copy wrote.
+    plan: list
+    #: The target project's counters after settlement.
+    usage: ProjectStorageUsage
+    #: The version number the copy's active pointer names (the source's own active one).
+    active_version_no: int
+
+
+def copy_file_into_project(*, source, target_project, folder, name, request, audit=None, verify=None):
+    """Copy every stored version of ``source`` into ``target_project`` and charge it.
+
+    The one implementation of the copy invariant (ARCH-001 §2.3/§2.4), shared by the
+    in-project copy and by the cross-project copy and move doors:
+
+    * every version's object is copied **server-side** (one Class A call each) to a new
+      key built from the *target* project's prefix and the new file id, so no key is
+      ever shared between two rows and purging either file cannot delete the other's
+      bytes;
+    * the copied bytes go through the same reserve/settle helpers an upload uses,
+      charged to the target project under the target's usage lock, so a ceiling refuses
+      the copy before a single byte is duplicated;
+    * the new file carries the source's category, version history and active pointer,
+      and **no entity links** - links are project-scoped, so a copy never carries them;
+    * a source with no active version is refused rather than falling back to the newest
+      stored version (T-106 F-1): that fallback would hand back a copy whose pointer
+      downloads bytes the source's own pointer does not claim.
+
+    :param name: the display name asked for; it is sanitised and suffixed until it is
+        free in ``folder`` (R-FOLD-5), exactly as an upload's would be.
+    :param audit: called once **inside** the copy's transaction with the
+        :class:`CopiedFile`; each door writes the audit rows it owes there, so a copy is
+        never committed without its trail.
+    :param verify: called with the storage client and the :class:`CopiedFile` before
+        the transaction commits - the cross-project **move** passes the HEAD
+        verification here, so a copy that does not match its source rolls back (rows,
+        counters, audit rows) and its objects are deleted, and the source is never
+        touched (AC-42).
+    """
+    versions = list(
+        source.versions.filter(status__in=GOOD_VERSION_STATUSES, object_deleted_at__isnull=True).order_by(
+            "version_no"
+        )
+    )
+    if not versions:
+        raise ProjectFileError(
+            "This file has no stored version to copy.",
+            code="object_unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
+    active_source = next((version for version in versions if version.is_active), None)
+    if active_source is None:
+        raise ProjectFileError(
+            "This file has no active version to copy.",
+            code="object_unavailable",
+            status_code=status.HTTP_409_CONFLICT,
+            version_status=None,
+        )
+
+    new_file_id = uuid4()
+    new_name = available_display_name(target_project, folder, stored_name(name))
+    storage_key = target_project.ensure_storage_key()
+
+    # Each copied version gets its own key under the target project's prefix and the
+    # new file id, so no key is ever shared between two rows.
+    plan = [
+        (
+            version,
+            build_object_key(
+                workspace_slug=target_project.workspace.slug,
+                project_storage_key=storage_key,
+                category=source.category,
+                file_id=new_file_id,
+                version_no=version.version_no,
+                filename=new_name,
+                entity_ref=None,
+            ),
+        )
+        for version in versions
+    ]
+    total_bytes = sum(version.size_bytes or 0 for version, _ in plan)
+    key_by_version = {version.pk: object_key for version, object_key in plan}
+
+    storage = S3Storage(request=request)
+    copied_keys = []
+
+    try:
+        with transaction.atomic():
+            quota_row, usage_row = quota.lock_usage_rows(target_project)
+            # The ceiling is evaluated before a single byte is duplicated, and the
+            # workspace row stays locked for the whole copy, so nothing can take the
+            # capacity between the check and the counters.
+            quota.ensure_within_limits(quota_row, usage_row, requested_bytes=total_bytes)
+
+            for source_version, object_key in plan:
+                # ``copy_object`` reports a failed call as ``None``, but the client can
+                # also raise outside ``ClientError`` (a connection error or a timeout);
+                # both mean the copy did not happen, so both answer the same 502 instead
+                # of an unhandled 500.
+                try:
+                    copied = storage.copy_object(source_version.object_key, object_key)
+                except Exception as exc:
+                    log_exception(exc)
+                    copied = None
+
+                if copied is None:
+                    raise ProjectFileError(
+                        "The storage provider could not copy this object.",
+                        code="storage_unavailable",
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                    )
+                copied_keys.append(object_key)
+
+            file_object = FileObject(
+                id=new_file_id,
+                project=target_project,
+                folder=folder,
+                name_original=new_name,
+                name_display=new_name,
+                name_normalized=normalize_name(new_name),
+                mime_type=active_source.mime_type,
+                extension=extension_of(new_name),
+                size_bytes=active_source.size_bytes or 0,
+                checksum_sha256=active_source.client_checksum_sha256,
+                bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                object_key=key_by_version[active_source.pk],
+                category=source.category,
+                status=FileObject.Status.ACTIVE,
+                visibility=source.visibility,
+                current_version_no=active_source.version_no,
+            )
+            file_object.save(force_insert=True, created_by_id=request.user.id)
+
+            for source_version, object_key in plan:
+                is_active = source_version.pk == active_source.pk
+                version = FileVersion(
+                    project=target_project,
+                    file=file_object,
+                    version_no=source_version.version_no,
+                    object_key=object_key,
+                    bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                    size_bytes=source_version.size_bytes or 0,
+                    mime_type=source_version.mime_type,
+                    client_checksum_sha256=source_version.client_checksum_sha256,
+                    etag=source_version.etag,
+                    magic_bytes_checked_at=source_version.magic_bytes_checked_at,
+                    # The same attempt lifecycle as an upload: reserve, then settle, so
+                    # usage moves from reserved to used exactly once.
+                    status=FileVersion.Status.UPLOADING,
+                    is_active=False,
+                    storage_metadata={
+                        **(source_version.storage_metadata or {}),
+                        "copied_from": {
+                            "file_id": str(source.id),
+                            "object_key": source_version.object_key,
+                        },
+                    },
+                )
+                version.save(force_insert=True, created_by_id=request.user.id)
+                quota.reserve(
+                    quota_row,
+                    usage_row,
+                    version,
+                    requested_bytes=source_version.size_bytes or 0,
+                    expires_at=timezone.now(),
+                )
+                quota.settle(
+                    quota_row,
+                    usage_row,
+                    version,
+                    observed_bytes=source_version.size_bytes or 0,
+                    activate=is_active,
+                )
+
+            copied_file = CopiedFile(
+                file=file_object,
+                source=source,
+                plan=plan,
+                usage=usage_row,
+                active_version_no=active_source.version_no,
+            )
+
+            if verify is not None:
+                verify(storage, copied_file)
+
+            if audit is not None:
+                audit(copied_file)
+
+            return copied_file
+    except Exception:
+        # Objects are copied outside the database transaction's protection, so a failed
+        # copy must not leave bytes nobody can see or purge - the same guard covers a
+        # verification refusal, whose rows the transaction rolls back.
+        if copied_keys:
+            storage.delete_files(copied_keys)
+        raise
 
 
 class FileCopyEndpoint(BaseAPIView):
     """Copy a file into another folder of the same project (ARCH-001 §4.1).
 
-    Every version's object is copied server-side (one Class A operation each) and
-    the copy carries the version history, the source's category and no entity
-    links; the bytes are charged to this project's quota through the reserve and
-    settle helpers, and the source keeps its own keys untouched.
+    Every version's object is copied server-side (one Class A operation each) and the
+    copy carries the version history, the source's category and no entity links; the
+    bytes are charged to this project's quota through the reserve and settle helpers,
+    and the source keeps its own keys untouched.
 
-    ``target_project_id`` is refused: cross-project copy is T-122, which also owns
-    the two-project permission check and the target-project charging rules.
+    ``target_project_id`` is not accepted here: another project is the
+    ``copy-to-project/`` route's job, and this endpoint answers the field it cannot
+    honour rather than dropping it into an in-project copy (T-106 F-3).
 
-    The endpoint shares the project-file upload throttle: a copy consumes quota
-    and duplicates bytes, so it belongs to the same budget as an upload.
+    The endpoint shares the project-file upload throttle: a copy consumes quota and
+    duplicates bytes, so it belongs to the same budget as an upload.
     """
 
     throttle_classes = [ProjectFileUploadThrottle]
 
     def post(self, request, slug, project_id, file_id):
+        if request.data.get("target_project_id"):
+            raise ProjectFileError(
+                "This endpoint copies inside one project; send a cross-project copy to the "
+                "copy-to-project route instead.",
+                code="unsupported_field",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                field="target_project_id",
+            )
+
         serializer = FileCopySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         payload = serializer.validated_data
 
         project = project_or_404(slug, project_id)
         require_project_editor(request, project)
-
-        if payload.get("target_project_id"):
-            raise ProjectFileError(
-                "Copying to another project is not supported yet.",
-                code="cross_project_not_supported",
-                status_code=status.HTTP_400_BAD_REQUEST,
-                field="target_project_id",
-            )
-
         source = file_for_write(project, slug, file_id)
         folder = folder_or_400(project, payload.get("folder_id"))
 
-        versions = list(
-            source.versions.filter(
-                status__in=GOOD_VERSION_STATUSES,
-                object_deleted_at__isnull=True,
-            ).order_by("version_no")
+        def audit(copied):
+            record_file_access(
+                request,
+                action=FileAccessLog.Action.COPIED,
+                project=project,
+                file_name=copied.file.name_display,
+                file_id=copied.file.id,
+                version_no=copied.active_version_no,
+                metadata={
+                    "source_file_id": str(source.id),
+                    "copied_versions": len(copied.plan),
+                    "folder_id": str(folder.id) if folder else None,
+                },
+            )
+
+        copied = copy_file_into_project(
+            source=source,
+            target_project=project,
+            folder=folder,
+            name=payload.get("name_display") or source.name_display,
+            request=request,
+            audit=audit,
         )
-        if not versions:
-            raise ProjectFileError(
-                "This file has no stored version to copy.",
-                code="object_unavailable",
-                status_code=status.HTTP_409_CONFLICT,
-            )
-
-        new_file_id = uuid4()
-        new_name = stored_name(payload.get("name_display") or source.name_display)
-        new_name = available_display_name(project, folder, new_name)
-        storage_key = project.ensure_storage_key()
-
-        # Each copied version gets its own key under this project's prefix and the
-        # new file id, so no key is ever shared between two rows.
-        plan = [
-            (
-                version,
-                build_object_key(
-                    workspace_slug=project.workspace.slug,
-                    project_storage_key=storage_key,
-                    category=source.category,
-                    file_id=new_file_id,
-                    version_no=version.version_no,
-                    filename=new_name,
-                    entity_ref=None,
-                ),
-            )
-            for version in versions
-        ]
-        total_bytes = sum(version.size_bytes or 0 for version, _ in plan)
-        # The copy takes the source's *active* version as its own active one. A
-        # source with none has nothing a copy could be a copy of, so it is refused
-        # here rather than falling back to the newest stored version: that fallback
-        # would hand back a copy that downloads object bytes the source's own
-        # pointer does not claim (the T-104 F-4 shape, on the write side now).
-        active_source = next((version for version in versions if version.is_active), None)
-        if active_source is None:
-            raise ProjectFileError(
-                "This file has no active version to copy.",
-                code="object_unavailable",
-                status_code=status.HTTP_409_CONFLICT,
-                version_status=None,
-            )
-
-        key_by_version = {version.pk: object_key for version, object_key in plan}
-
-        storage = S3Storage(request=request)
-        copied_keys = []
-
-        try:
-            with transaction.atomic():
-                quota_row, usage_row = quota.lock_usage_rows(project)
-                # The ceiling is evaluated before a single byte is duplicated, and
-                # the workspace row stays locked for the whole copy, so nothing can
-                # take the capacity between the check and the counters.
-                quota.ensure_within_limits(quota_row, usage_row, requested_bytes=total_bytes)
-
-                for source_version, object_key in plan:
-                    # ``copy_object`` reports a failed call as ``None``, but the
-                    # client can also raise outside ``ClientError`` (a connection
-                    # error or a timeout); both mean the copy did not happen, so both
-                    # answer the same 502 instead of an unhandled 500.
-                    try:
-                        copied = storage.copy_object(source_version.object_key, object_key)
-                    except Exception as exc:
-                        log_exception(exc)
-                        copied = None
-
-                    if copied is None:
-                        raise ProjectFileError(
-                            "The storage provider could not copy this object.",
-                            code="storage_unavailable",
-                            status_code=status.HTTP_502_BAD_GATEWAY,
-                        )
-                    copied_keys.append(object_key)
-
-                file_object = FileObject(
-                    id=new_file_id,
-                    project=project,
-                    folder=folder,
-                    name_original=new_name,
-                    name_display=new_name,
-                    name_normalized=normalize_name(new_name),
-                    mime_type=active_source.mime_type,
-                    extension=extension_of(new_name),
-                    size_bytes=active_source.size_bytes or 0,
-                    checksum_sha256=active_source.client_checksum_sha256,
-                    bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                    object_key=key_by_version[active_source.pk],
-                    category=source.category,
-                    status=FileObject.Status.ACTIVE,
-                    visibility=source.visibility,
-                    current_version_no=active_source.version_no,
-                )
-                file_object.save(force_insert=True, created_by_id=request.user.id)
-
-                for source_version, object_key in plan:
-                    is_active = source_version.pk == active_source.pk
-                    version = FileVersion(
-                        project=project,
-                        file=file_object,
-                        version_no=source_version.version_no,
-                        object_key=object_key,
-                        bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                        size_bytes=source_version.size_bytes or 0,
-                        mime_type=source_version.mime_type,
-                        client_checksum_sha256=source_version.client_checksum_sha256,
-                        etag=source_version.etag,
-                        magic_bytes_checked_at=source_version.magic_bytes_checked_at,
-                        # The same attempt lifecycle as an upload: reserve, then
-                        # settle, so usage moves from reserved to used exactly once.
-                        status=FileVersion.Status.UPLOADING,
-                        is_active=False,
-                        storage_metadata={
-                            **(source_version.storage_metadata or {}),
-                            "copied_from": {
-                                "file_id": str(source.id),
-                                "object_key": source_version.object_key,
-                            },
-                        },
-                    )
-                    version.save(force_insert=True, created_by_id=request.user.id)
-                    quota.reserve(
-                        quota_row,
-                        usage_row,
-                        version,
-                        requested_bytes=source_version.size_bytes or 0,
-                        expires_at=timezone.now(),
-                    )
-                    quota.settle(
-                        quota_row,
-                        usage_row,
-                        version,
-                        observed_bytes=source_version.size_bytes or 0,
-                        activate=is_active,
-                    )
-
-                record_file_access(
-                    request,
-                    action=FileAccessLog.Action.COPIED,
-                    project=project,
-                    file_name=new_name,
-                    file_id=file_object.id,
-                    version_no=active_source.version_no,
-                    metadata={
-                        "source_file_id": str(source.id),
-                        "copied_versions": len(plan),
-                        "folder_id": str(folder.id) if folder else None,
-                    },
-                )
-        except Exception:
-            # Objects are copied outside the database transaction's protection, so
-            # a failed copy must not leave bytes nobody can see or purge.
-            if copied_keys:
-                storage.delete_files(copied_keys)
-            raise
 
         return Response(
             {
-                "file": _serialize_file(file_object),
+                "file": serialize_file(copied.file),
                 "source_file_id": str(source.id),
-                "copied_versions": len(plan),
+                "copied_versions": len(copied.plan),
                 "storage_usage": {
-                    "project_used_bytes": usage_row.used_bytes,
-                    "limit_bytes": usage_row.limit_bytes,
+                    "project_used_bytes": copied.usage.used_bytes,
+                    "limit_bytes": copied.usage.limit_bytes,
                 },
             },
             status=status.HTTP_200_OK,
@@ -450,28 +524,28 @@ def _trashed_file_or_refuse(project, slug, file_id):
 def _response_file(file_object):
     """Serialise the file as the endpoints return it (link count included)."""
     file_object.refresh_from_db()
-    return _serialize_file(file_object)
+    return serialize_file(file_object)
 
 
-def trash_file(request, slug, project_id, file_id):
-    """Move a file to the trash (R-DEL-1, AC-11).
+def trash_file_row(file_object, *, request, project):
+    """Mark one file trashed, unlink its links, and return the ids it unlinked.
 
-    Both markers move together - ``status='trashed'`` and ``deleted_at`` - because
-    the shared visibility predicate reads both, and the versions and their objects
-    are untouched: trashed files keep consuming quota until they are purged
-    (AD-09), which is why no counter moves here. Links are unlinked so an issue
-    stops showing a deleted attachment; their rows survive so a restore can revive
-    the ones whose entity is still there.
+    Both markers move together - ``status='trashed'`` and ``deleted_at`` - because the
+    shared visibility predicate reads both, and the versions and their objects are
+    untouched: trashed files keep consuming quota until they are purged (AD-09), which
+    is why no counter moves here. Links are unlinked so an issue stops showing a deleted
+    attachment; their rows survive so a restore can revive the ones whose entity is
+    still there.
+
+    Shared by the trash endpoint and the cross-project move (T-122), which must purge
+    the source only after the copied object verified - and which leaves the source in
+    exactly this state (recoverable) when that purge fails (R-OPS-4).
     """
-    project = project_or_404(slug, project_id)
-    require_project_editor(request, project)
-
-    file_object = file_for_write(project, slug, file_id)
     links = list(file_object.links.all())
     versions = file_object.versions.count()
+    now = timezone.now()
 
     with transaction.atomic():
-        now = timezone.now()
         # The links are marked inactive with an update rather than the model's
         # ``delete()``: that helper queues a deferred hard-delete job through the
         # broker, and trashing a file must not depend on a worker being reachable.
@@ -500,6 +574,21 @@ def trash_file(request, slug, project_id, file_id):
                 "versions": versions,
             },
         )
+
+    # The caller may purge the row immediately (the move door does), and ``purge_file``
+    # refuses anything whose in-memory status is not purgeable.
+    file_object.status = FileObject.Status.TRASHED
+    file_object.deleted_at = now
+    return [link.id for link in links]
+
+
+def trash_file(request, slug, project_id, file_id):
+    """Move a file to the trash (R-DEL-1, AC-11)."""
+    project = project_or_404(slug, project_id)
+    require_project_editor(request, project)
+
+    file_object = file_for_write(project, slug, file_id)
+    trash_file_row(file_object, request=request, project=project)
 
     return Response(status=status.HTTP_204_NO_CONTENT)
 

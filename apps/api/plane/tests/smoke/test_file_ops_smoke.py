@@ -242,13 +242,15 @@ class TestFileOpsSmoke:
         assert len({object_key, copy.object_key, second_key}) == 3
         assert object_length(store, second_key) == len(PDF_BYTES)
 
-        # --- cross-project copy is not T-106's to do, and refusing it changes nothing
+        # --- cross-project copy is T-122's own route, and asking this one for it is
+        # refused rather than turned into a second copy in this project
         rows_before = FileObject.objects.filter(project=project).count()
         cross = request(
             session, plane_server, "post", copy_path, token, json={"target_project_id": str(other_project.id)}
         )
         assert cross.status_code == 400, cross.content[:300]
-        assert cross.json()["code"] == "cross_project_not_supported"
+        assert cross.json()["code"] == "unsupported_field"
+        assert cross.json()["field"] == "target_project_id"
         assert FileObject.objects.filter(project=project).count() == rows_before
         assert FileObject.objects.filter(project=other_project).count() == 0
         for key in (object_key, copy.object_key, second_key):
