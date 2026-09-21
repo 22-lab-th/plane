@@ -19,11 +19,20 @@ already uses, wired to the console and ``logs/plane-error.log`` in production -
 naming the task and its arguments, so an operator can see which follow-up was
 dropped and for what. The caller keeps its committed write and answers the client.
 
-This is deliberately *not* used for a task whose delivery is the whole request:
-the magic-link, password-reset, email-update-code and activation emails, and the
-export jobs, where a silent drop would tell the user to check an inbox that will
-never receive anything (or poll a job that was never queued). Those keep a plain
-``.delay()``, so their failure still surfaces while the caller can retry.
+This is deliberately *not* used for a task whose delivery is the whole request,
+where a silent drop would tell the caller something that is not true:
+
+- the magic-link and password-reset emails and the email-update code
+  (`send_email_update_magic_code`, whose endpoint answers its own actionable 400);
+- the invitation emails - ``ProjectInvitationsViewset.create`` and
+  ``WorkspaceInvitationsViewset.create`` answer "Email sent successfully", so a
+  hand-off the broker refused has to surface there too;
+- the export jobs, whose response promise is the artifact.
+
+Those keep a plain ``.delay()``, so their failure surfaces while the caller can
+still retry. The activation email in ``authentication/adapter/base.py`` is guarded,
+like it already was before this module existed - activation is a durable write and
+the email about it is the follow-up.
 """
 
 # Module imports

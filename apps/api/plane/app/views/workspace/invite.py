@@ -30,7 +30,6 @@ from plane.bgtasks.workspace_invitation_task import workspace_invitation
 from plane.db.models import User, Workspace, WorkspaceMember, WorkspaceMemberInvite
 from plane.utils.cache import invalidate_cache, invalidate_cache_directly
 from plane.utils.host import base_host
-from plane.utils.task_dispatch import best_effort_delay
 from .. import BaseViewSet
 
 
@@ -116,10 +115,11 @@ class WorkspaceInvitationsViewset(BaseViewSet):
 
         current_site = base_host(request=request, is_app=True)
 
-        # Send invitations
+        # Send invitations. The response promises the emails, so this is not a
+        # best-effort follow-up: a hand-off the broker refuses must surface here
+        # (plane/utils/task_dispatch.py records why the follow-ups differ).
         for invitation in workspace_invitations:
-            best_effort_delay(
-                workspace_invitation,
+            workspace_invitation.delay(
                 invitation.email,
                 workspace.id,
                 invitation.token,

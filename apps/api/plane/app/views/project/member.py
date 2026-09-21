@@ -140,7 +140,12 @@ class ProjectMemberViewSet(BaseViewSet):
             project_id=project_id,
             member_id__in=[member.get("member_id") for member in members],
         )
-        # Send emails to notify the users
+        # Send emails to notify the users. The write this endpoint promises is the
+        # member rows above (the response serializes them); this email is a
+        # notification *of* that write, so a broker that refuses the hand-off must not
+        # report the addition as failed - see plane/utils/task_dispatch.py, and the
+        # invitation endpoints, whose responses promise the email itself and keep a
+        # plain .delay() for that reason.
         [
             best_effort_delay(
                 project_add_user_email,

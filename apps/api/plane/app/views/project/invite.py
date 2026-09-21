@@ -24,6 +24,7 @@ from plane.app.serializers import (
     ProjectMemberInvitePublicSerializer,
 )
 from plane.app.permissions import allow_permission, ROLE
+from plane.bgtasks.project_invitation_task import project_invitation
 from plane.db.models import (
     ProjectMember,
     Workspace,
@@ -35,7 +36,6 @@ from plane.db.models import (
 )
 from plane.db.models.project import ProjectNetwork
 from plane.utils.host import base_host
-from plane.utils.task_dispatch import best_effort_delay
 
 
 class ProjectInvitationsViewset(BaseViewSet):
@@ -63,12 +63,26 @@ class ProjectInvitationsViewset(BaseViewSet):
             return Response({"error": "Emails are required"}, status=status.HTTP_400_BAD_REQUEST)
 
         for email in emails:
-            workspace_role = WorkspaceMember.objects.filter(
-                workspace__slug=slug, member__email=email.get("email"), is_active=True
-            ).role
+            # An active workspace member already holds a role this invitation must not
+            # contradict: an admin (20) or a guest (5) can only be invited with the role
+            # they hold. The lookup used to compare the *queryset* object to a role
+            # (``WorkspaceMember.objects.filter(...).role``), which raises
+            # AttributeError, so this endpoint answered 500 for every payload before
+            # any invitation was created or any email was queued. A non-member has no
+            # workspace role to conflict with, so the branch does not apply.
+            workspace_role = (
+                WorkspaceMember.objects.filter(
+                    workspace__slug=slug, member__email=email.get("email"), is_active=True
+                )
+                .values_list("role", flat=True)
+                .first()
+            )
 
             if workspace_role in [5, 20] and workspace_role != email.get("role", 5):
-                return Response({"error": "You cannot invite a user with different role than workspace role"})
+                return Response(
+                    {"error": "You cannot invite a user with different role than workspace role"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         workspace = Workspace.objects.get(slug=slug)
 
@@ -104,10 +118,11 @@ class ProjectInvitationsViewset(BaseViewSet):
         )
         current_site = base_host(request=request, is_app=True)
 
-        # Send invitations
+        # Send invitations. The response promises the email, so this is not a
+        # best-effort follow-up: a hand-off the broker refuses must surface here
+        # (plane/utils/task_dispatch.py records why the follow-ups differ).
         for invitation in project_invitations:
-            best_effort_delay(
-                project_invitations,
+            project_invitation.delay(
                 invitation.email,
                 project_id,
                 invitation.token,
