@@ -12,13 +12,19 @@ assertions:
 
 1. a pre-existing object at its legacy key still downloads - the provider
    returns the same bytes and the same content type through the legacy endpoint,
-   and the object at the legacy key is unchanged;
+   and the object at the legacy key is unchanged. Every legacy download handler
+   is addressed by its own real URL shape, including the two no stored
+   ``asset_url`` names (``WorkspaceFileAssetEndpoint.get`` and
+   ``ProjectAssetDownloadEndpoint.get``, NOTE-T117);
 2. every URL a legacy row hands out still resolves - the ``asset_url`` an issue
    attachment, issue description, workspace logo or avatar saved before the
    change is a redirect, not a 404;
 3. the project pipeline never rewrites a legacy key or row - after project
    uploads, a copy, the download path and both sweep jobs have run, the
-   ``FileAsset`` table and the object at the legacy key are identical.
+   ``FileAsset`` table and the object at the legacy key are identical. The
+   resurrection recheck is put in front of a row it actually selects (the marker
+   is aged past ``RESURRECTION_WINDOW``), so its counters are not read off an
+   empty selection.
 
 The fixtures create their rows through the legacy endpoints themselves
 (``IssueAttachmentV2Endpoint``, ``WorkspaceFileAssetEndpoint``,
@@ -59,6 +65,7 @@ from plane.db.models import (
     WorkspaceMember,
 )
 from plane.settings.storage import S3Storage
+from plane.utils.file_storage.sweep import RESURRECTION_WINDOW
 
 MINIO_ENDPOINT = "http://test-minio:9000"
 
@@ -81,6 +88,21 @@ def project_assets_url(slug, project_id):
 
 def user_assets_url():
     return "/api/assets/v2/user-assets/"
+
+
+def workspace_asset_url(slug, asset_id):
+    """The workspace file-asset route a client addresses one asset by.
+
+    The web client builds this shape for PATCH/DELETE only, so no legacy row's
+    ``asset_url`` ever names it - but ``WorkspaceFileAssetEndpoint.get`` serves it,
+    which is why the fence has to reach it by hand (NOTE-T117).
+    """
+    return f"/api/assets/v2/workspaces/{slug}/{asset_id}/"
+
+
+def project_asset_download_url(slug, project_id, asset_id):
+    """The project-scoped download route; nothing in the tree builds it for a legacy row."""
+    return f"/api/assets/v2/workspaces/{slug}/projects/{project_id}/download/{asset_id}/"
 
 
 def attachments_url(slug, project_id, issue_id):
@@ -391,6 +413,69 @@ class TestLegacyObjectStillDownloads:
         assert fetched.content == PNG_BYTES
         assert fetched.headers["Content-Type"] == "image/png"
 
+    def test_a_pre_existing_asset_downloads_on_the_workspace_file_asset_route(
+        self, session_client, project, issue, stored_objects
+    ):
+        """AC-23/R-NFR-10: the workspace file-asset route serves a legacy object too.
+
+        No legacy row's ``asset_url`` names this shape - the web client builds it for
+        PATCH/DELETE only - so before this test nothing in the module reached
+        ``WorkspaceFileAssetEndpoint.get`` and a mutation there failed no test
+        (NOTE-T117). A legacy workspace logo is the row that route really serves, and
+        its bytes have to come back through it like through every other legacy door.
+        """
+        asset = create_legacy_asset(
+            session_client,
+            project,
+            issue,
+            entity_type=FileAsset.EntityTypeContext.WORKSPACE_LOGO,
+            name="LegacyLogo.png",
+            stored_objects=stored_objects,
+        )
+        legacy_key = asset.asset.name
+
+        response = session_client.get(workspace_asset_url(project.workspace.slug, asset.id))
+
+        assert response.status_code == status.HTTP_302_FOUND, response.data
+        fetched = fetch_through(response["Location"])
+        assert fetched.status_code == status.HTTP_200_OK
+        assert fetched.content == PNG_BYTES
+        assert fetched.headers["Content-Type"] == "image/png"
+        assert fetched.headers["Content-Disposition"].startswith("attachment")
+        # The signed URL is for this row's own key, not for a recomputed one.
+        assert fetched.url.split("?")[0].endswith(legacy_key)
+
+    def test_a_pre_existing_attachment_downloads_on_the_project_download_route(
+        self, session_client, project, issue, stored_objects
+    ):
+        """AC-23/R-NFR-10: the project-scoped download route serves a legacy attachment.
+
+        The same gap as the test above: ``ProjectAssetDownloadEndpoint.get`` is a live
+        route over the same legacy keys and nothing in the tree produced its URL for
+        one, so it was outside the fence (NOTE-T117).
+        """
+        asset = create_legacy_asset(
+            session_client,
+            project,
+            issue,
+            entity_type=FileAsset.EntityTypeContext.ISSUE_ATTACHMENT,
+            name="LegacyProjectScoped.png",
+            stored_objects=stored_objects,
+        )
+        legacy_key = asset.asset.name
+
+        response = session_client.get(
+            project_asset_download_url(project.workspace.slug, project.id, asset.id)
+        )
+
+        assert response.status_code == status.HTTP_302_FOUND, response.data
+        fetched = fetch_through(response["Location"])
+        assert fetched.status_code == status.HTTP_200_OK
+        assert fetched.content == PNG_BYTES
+        assert fetched.headers["Content-Type"] == "image/png"
+        assert fetched.headers["Content-Disposition"].startswith("attachment")
+        assert fetched.url.split("?")[0].endswith(legacy_key)
+
 
 @pytest.mark.contract
 @pytest.mark.django_db
@@ -488,11 +573,21 @@ class TestProjectPipelineLeavesLegacyStateAlone:
         stored_objects.append(FileObject.objects.get(id=copied.data["file"]["id"]).object_key)
 
         # (c) The deletion paths, with a real abandoned attempt so the sweep does delete.
-        _, abandoned_key = abandon_project_upload(session_client, project, stored_objects)
+        abandoned_file_id, abandoned_key = abandon_project_upload(session_client, project, stored_objects)
         swept = cleanup_unverified_objects(batch_size=50)
         assert swept["swept"] >= 1, swept
         assert swept["failed"] == 0, swept
+        # The resurrection recheck selects only rows the sweep marked more than
+        # RESURRECTION_WINDOW (24 h) ago, and the sweep has just marked this one: an
+        # un-aged run inspects nothing, and `failed == 0` with `checked == 0` proves
+        # nothing (NOTE-T117). Ageing the marker is exactly what the clock does, and
+        # it puts the row in front of the recheck for real.
+        FileVersion.objects.filter(file_id=abandoned_file_id).update(
+            object_deleted_at=timezone.now() - RESURRECTION_WINDOW - timedelta(minutes=1)
+        )
         rechecked = recheck_deleted_objects(batch_size=50)
+        assert rechecked["checked"] >= 1, rechecked
+        assert rechecked["resurrection_detected"] == 0, rechecked
         assert rechecked["failed"] == 0, rechecked
         purge_expired_files()
 
