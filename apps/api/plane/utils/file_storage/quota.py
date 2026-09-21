@@ -32,6 +32,7 @@ from django.utils import timezone
 
 # Module imports
 from plane.db.models import FileObject, FileVersion, Project, ProjectStorageUsage, StorageQuota
+from plane.utils.file_storage import observability
 from plane.utils.file_storage.errors import ProjectFileError
 
 #: Version states whose bytes ``used_bytes`` accounts for (ARCH-001 §2.8 item 6).
@@ -109,6 +110,11 @@ def ensure_within_limits(quota, usage, *, requested_bytes, released_bytes=0):
     :param released_bytes: capacity this attempt is giving back at the same time,
         which is how settlement re-checks against the server-observed size
         without double-counting the reservation it replaces.
+
+    This is the one place a ceiling refuses a request, so it is also the one place
+    the ``quota_rejections`` counter moves (AC-31): whichever door asked - the
+    presign reservation, the finalize re-check against the server-observed size, or
+    a copy - a refusal is counted once, with the ceiling that refused it.
     """
     if requested_bytes < 0 or released_bytes < 0:
         raise ValueError("byte counts must not be negative")
@@ -116,6 +122,15 @@ def ensure_within_limits(quota, usage, *, requested_bytes, released_bytes=0):
     if quota.enforce and quota.limit_bytes is not None:
         projected = quota.used_bytes + quota.reserved_bytes + requested_bytes - released_bytes
         if projected > quota.limit_bytes:
+            observability.increment(
+                observability.QUOTA_REJECTIONS,
+                workspace_id=quota.workspace_id,
+                project_id=usage.project_id,
+                level="workspace",
+                limit_bytes=quota.limit_bytes,
+                projected_bytes=projected,
+                requested_bytes=requested_bytes,
+            )
             raise QuotaExceeded(
                 "Workspace storage quota exceeded.",
                 limit_bytes=quota.limit_bytes,
@@ -126,6 +141,15 @@ def ensure_within_limits(quota, usage, *, requested_bytes, released_bytes=0):
     if usage.limit_bytes is not None:
         projected = usage.used_bytes + usage.reserved_bytes + requested_bytes - released_bytes
         if projected > usage.limit_bytes:
+            observability.increment(
+                observability.QUOTA_REJECTIONS,
+                workspace_id=quota.workspace_id,
+                project_id=usage.project_id,
+                level="project",
+                limit_bytes=usage.limit_bytes,
+                projected_bytes=projected,
+                requested_bytes=requested_bytes,
+            )
             raise QuotaExceeded(
                 "Project storage limit exceeded.",
                 limit_bytes=usage.limit_bytes,

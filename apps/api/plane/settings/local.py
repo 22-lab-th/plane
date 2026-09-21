@@ -85,5 +85,14 @@ LOGGING = {
             "handlers": ["console"],
             "propagate": False,
         },
+        # Project-file lifecycle records (R-NFR-5/AC-31): the ``plane.files`` logger
+        # writes structured INFO records for presign, finalize and delete, so it is
+        # configured at INFO like its siblings. Without this entry the logger would
+        # inherit the root level (WARNING) and every record would be dropped.
+        "plane.files": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
     },
 }

@@ -41,7 +41,7 @@ from django.utils import timezone
 from plane.db.models import FileAccessLog, FileObject, FileVersion, Project
 from plane.settings.storage import S3Storage
 from plane.utils.exception_logger import log_exception
-from plane.utils.file_storage import quota as quota_module
+from plane.utils.file_storage import observability, quota as quota_module
 from plane.utils.file_storage.quota import ACCOUNTED_VERSION_STATUSES
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.retention import window_days
@@ -102,6 +102,11 @@ def purge_file(file_object, *, request=None, trigger="manual"):
         raise ValueError(f"refusing to purge a file in status {file_object.status!r}")
 
     storage = S3Storage(request=request)
+    # The identifiers the records below carry are read before the row is removed:
+    # reading them afterwards would re-query a row that no longer exists.
+    workspace_id = file_object.project.workspace_id
+    project_id = file_object.project_id
+    file_id = file_object.id
     versions = list(file_object.versions.all())
     purged_bytes = sum(
         version.size_bytes or 0 for version in versions if version.status in ACCOUNTED_VERSION_STATUSES
@@ -124,6 +129,18 @@ def purge_file(file_object, *, request=None, trigger="manual"):
 
         if not deleted:
             _mark_purge_failed(file_object, version)
+            # The delete path's other verdict (AC-31): an object survived, so the
+            # file stays in the trash and this attempt removed nothing.
+            observability.record(
+                observability.EVENT_DELETE,
+                outcome=observability.DELETE_PURGE_FAILED,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                file_id=file_id,
+                version_no=version.version_no,
+                trigger=trigger,
+                object_key=version.object_key,
+            )
             return False
         version.mark_status(FileVersion.Status.PURGED, save=False)
         version.object_deleted_at = timezone.now()
@@ -169,6 +186,20 @@ def purge_file(file_object, *, request=None, trigger="manual"):
         # Last: the row (and, by cascade, its versions and links). Audit rows are
         # not children of the file, so the trail survives this (AD-08, AC-27).
         FileObject.all_objects.filter(pk=file_object.pk).delete()
+
+    # After the commit: the file and every one of its objects are gone, which is the
+    # only state in which the delete is recorded as purged (AC-31).
+    observability.record(
+        observability.EVENT_DELETE,
+        outcome=observability.DELETE_PURGED,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        file_id=file_id,
+        version_no=file_object.current_version_no or None,
+        trigger=trigger,
+        versions=len(versions),
+        bytes=purged_bytes,
+    )
 
     return True
 

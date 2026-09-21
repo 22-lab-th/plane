@@ -59,7 +59,7 @@ from plane.db.models import (
 )
 from plane.settings.storage import S3Storage
 from plane.throttles.project_file import ProjectFileUploadThrottle
-from plane.utils.file_storage import quota
+from plane.utils.file_storage import observability, quota
 from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.links import category_for_entity, entity_ref_for, resolve_link
@@ -383,6 +383,18 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
     if upload is None:
         # The attempt stays uploading with a live reservation; the cleanup
         # sweep releases and deletes it once the URL TTL has passed (AD-13).
+        observability.record(
+            observability.EVENT_PRESIGN,
+            outcome=observability.PRESIGN_STORAGE_UNAVAILABLE,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            file_id=file_object.id,
+            version_no=version_no,
+            object_key=object_key,
+            size_bytes=payload["size_bytes"],
+            mime_type=payload["mime_type"],
+            category=category,
+        )
         return Response(
             {
                 "error": "The storage provider could not sign this upload.",
@@ -390,6 +402,20 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
             },
             status=status.HTTP_502_BAD_GATEWAY,
         )
+
+    observability.record(
+        observability.EVENT_PRESIGN,
+        outcome=observability.PRESIGN_SIGNED,
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        file_id=file_object.id,
+        version_no=version_no,
+        object_key=object_key,
+        size_bytes=payload["size_bytes"],
+        mime_type=payload["mime_type"],
+        category=category,
+        expires_at=expires_at.isoformat(),
+    )
 
     return Response(
         {
@@ -425,12 +451,32 @@ class FileUploadCompleteEndpoint(BaseAPIView):
 
         stored_response = _stored_failure_response(version)
         if stored_response is not None:
+            observability.record(
+                observability.EVENT_FINALIZE,
+                outcome=observability.FINALIZE_REPLAYED,
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                file_id=file_object.id,
+                version_no=version.version_no,
+                status=version.status,
+                reason="stored_failure",
+            )
             return stored_response
 
         if version.status != FileVersion.Status.UPLOADING:
             # Already settled by an earlier (or concurrent) finalize: return the
             # stored result without touching counters or the audit trail.
             _, usage = quota.get_usage_rows(project)
+            observability.record(
+                observability.EVENT_FINALIZE,
+                outcome=observability.FINALIZE_REPLAYED,
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                file_id=file_object.id,
+                version_no=version.version_no,
+                status=version.status,
+                reason="already_settled",
+            )
             return Response(_completion_payload(file_object, version, usage), status=status.HTTP_200_OK)
 
         storage = S3Storage(request=request)
@@ -564,6 +610,15 @@ class FileUploadCompleteEndpoint(BaseAPIView):
 
             if settled_status is None:
                 # Another request settled this attempt first: report its result.
+                observability.record(
+                    observability.EVENT_FINALIZE,
+                    outcome=observability.FINALIZE_REPLAYED,
+                    workspace_id=project.workspace_id,
+                    project_id=project.id,
+                    file_id=file_object.id,
+                    version_no=version.version_no,
+                    reason="settled_concurrently",
+                )
                 return Response(_completion_payload(file_object, version, usage_row), status=status.HTTP_200_OK)
 
             if activate:
@@ -596,6 +651,24 @@ class FileUploadCompleteEndpoint(BaseAPIView):
 
             response_payload = _completion_payload(file_object, version, usage_row)
 
+        # Emitted once the attempt is committed, which is the same gate that makes
+        # this single-fire: a concurrent finalize that matched zero rows recorded a
+        # replay and never reaches this line (R-NFR-6).
+        observability.record(
+            observability.EVENT_FINALIZE,
+            outcome=observability.FINALIZE_ACTIVATED if activate else observability.FINALIZE_SUPERSEDED,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            file_id=file_object.id,
+            version_no=version.version_no,
+            object_key=version.object_key,
+            size_bytes=observed_size,
+            mime_type=observed_type,
+            etag=metadata.get("ETag"),
+            magic_bytes_checked=magic_bytes_match is not None,
+            magic_bytes_match=magic_bytes_match,
+        )
+
         return Response(response_payload, status=status.HTTP_200_OK)
 
     def _reject(self, request, project, file_object, version, *, code, message, **details):
@@ -603,7 +676,9 @@ class FileUploadCompleteEndpoint(BaseAPIView):
 
         The conditional update on ``status='uploading'`` keeps this single-fire:
         if a concurrent request already ended the attempt, this call records
-        nothing and replays the stored outcome instead.
+        nothing and replays the stored outcome instead - and the counters and the
+        ``file.finalize`` record are emitted after the transaction, so a call that
+        matched zero rows moves neither.
         """
         with transaction.atomic():
             quota_row, usage_row = quota.lock_usage_rows(project)
@@ -621,6 +696,16 @@ class FileUploadCompleteEndpoint(BaseAPIView):
 
             if not marked:
                 stored = _stored_failure_response(version)
+                observability.record(
+                    observability.EVENT_FINALIZE,
+                    outcome=observability.FINALIZE_REPLAYED,
+                    workspace_id=project.workspace_id,
+                    project_id=project.id,
+                    file_id=file_object.id,
+                    version_no=version.version_no,
+                    code=code,
+                    reason="already_failed",
+                )
                 return stored or Response(
                     _completion_payload(file_object, version, usage_row), status=status.HTTP_200_OK
                 )
@@ -636,6 +721,38 @@ class FileUploadCompleteEndpoint(BaseAPIView):
                 version_no=version.version_no,
                 metadata={"code": code, **details},
             )
+
+        # The attempt's failure is committed: count it once, and count the
+        # mismatch separately when the object contradicted its declaration
+        # (``MISMATCH_CODES``; ``object_missing``/``verification_failed`` are
+        # failures without a contradiction).
+        observability.increment(
+            observability.UPLOAD_FAILURES,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            file_id=file_object.id,
+            version_no=version.version_no,
+            code=code,
+        )
+        if code in observability.MISMATCH_CODES:
+            observability.increment(
+                observability.VERIFICATION_MISMATCHES,
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                file_id=file_object.id,
+                version_no=version.version_no,
+                code=code,
+            )
+        observability.record(
+            observability.EVENT_FINALIZE,
+            outcome=observability.FINALIZE_FAILED,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            file_id=file_object.id,
+            version_no=version.version_no,
+            code=code,
+            **details,
+        )
 
         return Response({"error": message, "code": code, **details}, status=status.HTTP_400_BAD_REQUEST)
 

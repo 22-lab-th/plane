@@ -41,7 +41,7 @@ from django.utils import timezone
 from plane.db.models import FileObject, FileVersion
 from plane.settings.storage import S3Storage
 from plane.utils.exception_logger import log_exception
-from plane.utils.file_storage import quota as quota_module
+from plane.utils.file_storage import observability, quota as quota_module
 
 #: Versions one sweep run handles, oldest first, so a backlog drains over several
 #: runs instead of holding a worker and its storage calls (ARCH-001 §4.4).
@@ -150,6 +150,19 @@ def sweep_version(version, *, storage):
 
         quota_row, usage_row = quota_module.lock_usage_rows(version.file.project)
         released = quota_module.release(quota_row, usage_row, version)
+
+    # Counted after the marker commits, so the counter and the row that justifies it
+    # agree: this is the deletion mechanism for objects with no verified version, and
+    # the number is what says the sweep is doing work (AC-20, AC-31).
+    observability.increment(
+        observability.SWEEP_DELETIONS,
+        workspace_id=version.file.project.workspace_id,
+        project_id=version.file.project_id,
+        file_id=version.file_id,
+        version_no=version.version_no,
+        object_key=version.object_key,
+        reservation_released=released,
+    )
 
     return True, released
 
