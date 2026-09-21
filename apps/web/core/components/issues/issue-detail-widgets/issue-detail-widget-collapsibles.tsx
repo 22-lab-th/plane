@@ -4,10 +4,11 @@
  * See the LICENSE file for details.
  */
 
-import React from "react";
+import React, { useEffect } from "react";
 import { observer } from "mobx-react";
 // plane imports
 import type { TIssueServiceType, TWorkItemWidgets } from "@plane/types";
+import { EIssueServiceType } from "@plane/types";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useTimeLineRelationOptions } from "@/components/relations";
@@ -32,9 +33,20 @@ export const IssueDetailWidgetCollapsibles = observer(function IssueDetailWidget
   const {
     issue: { getIssueById },
     subIssues: { subIssuesByIssueId },
-    attachment: { getAttachmentsCountByIssueId, getAttachmentsUploadStatusByIssueId },
+    attachment: { getAttachmentsCountByIssueId, getAttachmentsUploadStatusByIssueId, fetchProjectFileAttachments },
     relation: { getRelationCountByIssueId },
   } = useIssueDetail(issueServiceType);
+  // The work item's project files are not in the issue payload - it carries the legacy
+  // file assets only - so they are fetched here, where the decision to render the
+  // Attachments section is taken. Fetching them inside the section would be circular:
+  // a work item whose only attachment is a project file has nothing to count until the
+  // fetch has happened, and the section that would run it is what the count gates
+  // (DEFECT-009, AC-16). Epics have no entity type for a file link and stay legacy.
+  const supportsProjectFiles = issueServiceType === EIssueServiceType.ISSUES;
+  useEffect(() => {
+    if (!supportsProjectFiles || !workspaceSlug || !projectId || !issueId) return;
+    fetchProjectFileAttachments(workspaceSlug, projectId, issueId).catch(() => undefined);
+  }, [supportsProjectFiles, workspaceSlug, projectId, issueId, fetchProjectFileAttachments]);
   // derived values
   const issue = getIssueById(issueId);
   const subIssues = subIssuesByIssueId(issueId);

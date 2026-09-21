@@ -150,9 +150,21 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
     return this.attachmentMap[attachmentId] ?? undefined;
   };
 
+  /**
+   * How many attachments this work item has, as its own surface renders them.
+   *
+   * Both kinds count: the legacy file assets the issue payload carries **and** the
+   * project files linked to it (AC-16). The section's visibility, its header badge
+   * and its row list all read this, so a work item whose only attachment is a
+   * project file still shows the section - and with it the unlink action.
+   *
+   * The number the *server* owns (`issue.attachment_count`) is narrower: it counts
+   * the legacy file assets only, so the two writers below recompute that field from
+   * the legacy map rather than from this total.
+   */
   getAttachmentsCountByIssueId = (issueId: string) => {
     const attachments = this.getAttachmentsByIssueId(issueId);
-    return attachments?.length ?? 0;
+    return (attachments?.length ?? 0) + (this.getProjectFileAttachmentsByIssueId(issueId)?.length ?? 0);
   };
 
   getProjectFileAttachmentsByIssueId = (issueId: string) => {
@@ -296,7 +308,9 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
           update(this.attachments, [issueId], (attachmentIds = []) => uniq(concat(attachmentIds, [response.id])));
           set(this.attachmentMap, response.id, response);
           this.rootIssueStore.issues.updateIssue(issueId, {
-            attachment_count: this.getAttachmentsCountByIssueId(issueId),
+            // The field mirrors the server's own count, which is the legacy file
+            // assets only - not the project files linked to the issue (AC-16).
+            attachment_count: this.getAttachmentsByIssueId(issueId)?.length ?? 0,
           });
         });
       }
@@ -327,7 +341,8 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
       });
       delete this.attachmentMap[attachmentId];
       this.rootIssueStore.issues.updateIssue(issueId, {
-        attachment_count: this.getAttachmentsCountByIssueId(issueId),
+        // The server's counter is the legacy file assets only (see above).
+        attachment_count: this.getAttachmentsByIssueId(issueId)?.length ?? 0,
       });
     });
 

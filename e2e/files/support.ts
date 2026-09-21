@@ -35,7 +35,10 @@ export function requiredEnv(name: string): string {
 export const API_URL = requiredEnv("E2E_API_URL").replace(/\/+$/, "");
 export const WEB_URL = (process.env.E2E_WEB_URL ?? "http://127.0.0.1:3000").replace(/\/+$/, "");
 export const WORKSPACE_SLUG = requiredEnv("E2E_WORKSPACE_SLUG");
-const PROJECT_ID = requiredEnv("E2E_PROJECT_ID");
+export const PROJECT_ID = requiredEnv("E2E_PROJECT_ID");
+/** The seeded work items, one per spec that needs its own (T-115). */
+export const ISSUE_UNLINK_ID = requiredEnv("E2E_ISSUE_UNLINK_ID");
+export const ISSUE_UPLOAD_ID = requiredEnv("E2E_ISSUE_UPLOAD_ID");
 export const OWNER_EMAIL = requiredEnv("E2E_EMAIL");
 export const OWNER_PASSWORD = requiredEnv("E2E_PASSWORD");
 export const GUEST_EMAIL = requiredEnv("E2E_GUEST_EMAIL");

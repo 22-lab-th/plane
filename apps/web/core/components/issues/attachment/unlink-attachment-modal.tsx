@@ -55,6 +55,7 @@ export const IssueProjectFileUnlinkModal = observer(function IssueProjectFileUnl
       isOpen={isOpen}
       variant="primary"
       title="Remove attachment"
+      primaryButtonText={{ loading: "Removing", default: "Remove" }}
       content={
         <>
           Remove <span className="font-bold">{attachment.file.name_display}</span> from this work item? The file stays

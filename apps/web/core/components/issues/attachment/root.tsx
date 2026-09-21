@@ -4,8 +4,10 @@
  * See the LICENSE file for details.
  */
 
+import { useEffect } from "react";
 import { observer } from "mobx-react";
 // hooks
+import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useAttachmentOperations } from "../issue-detail-widgets/attachments/helper";
 // components
 import { IssueAttachmentUpload } from "./attachment-upload";
@@ -21,8 +23,21 @@ export type TIssueAttachmentRoot = {
 export const IssueAttachmentRoot = observer(function IssueAttachmentRoot(props: TIssueAttachmentRoot) {
   // props
   const { workspaceSlug, projectId, issueId, disabled = false } = props;
+  // store hooks
+  const {
+    attachment: { fetchProjectFileAttachments },
+  } = useIssueDetail();
   // hooks
   const attachmentHelpers = useAttachmentOperations(workspaceSlug, projectId, issueId);
+
+  // This surface always renders its attachments, and the work item's project files are
+  // not in the issue payload (only the legacy assets are), so they are read here:
+  // otherwise the cards would render nothing while the file is really attached
+  // (AC-16).
+  useEffect(() => {
+    if (!workspaceSlug || !projectId || !issueId) return;
+    fetchProjectFileAttachments(workspaceSlug, projectId, issueId).catch(() => undefined);
+  }, [workspaceSlug, projectId, issueId, fetchProjectFileAttachments]);
 
   return (
     <div className="relative space-y-3">

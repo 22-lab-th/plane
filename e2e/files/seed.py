@@ -7,7 +7,16 @@ itself produced rather than a hand-written store.
 
 from django.utils import timezone
 
-from plane.db.models import Profile, Project, ProjectMember, User, Workspace, WorkspaceMember
+from plane.db.models import (
+    Issue,
+    Profile,
+    Project,
+    ProjectMember,
+    State,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from plane.license.models import Instance
 
 OWNER_EMAIL = "files.e2e@example.com"
@@ -49,5 +58,25 @@ project = Project.objects.create(name="Files E2E Project", identifier="FE2E", wo
 ProjectMember.objects.create(project=project, member=owner, workspace=workspace, role=20, is_active=True)
 ProjectMember.objects.create(project=project, member=guest, workspace=workspace, role=5, is_active=True)
 
+# Two work items, one per spec that needs its own: the work-item attachment surface is
+# driven from here rather than from the issue-create endpoint, so a spec owns its row and
+# the state it asserts (a work item whose only attachment is a project file) is created
+# once, in the same place as the rest of the fixture.
+state = State.objects.create(
+    name="Todo", color="#60646C", group="unstarted", project=project, workspace=workspace
+)
+issues = [
+    Issue.objects.create(
+        name=f"T-115 attachment surface {index}",
+        project=project,
+        workspace=workspace,
+        state=state,
+        created_by=owner,
+    )
+    for index in (1, 2)
+]
+
 print(f"E2E_WORKSPACE_SLUG={workspace.slug}")
 print(f"E2E_PROJECT_ID={project.id}")
+print(f"E2E_ISSUE_UNLINK_ID={issues[0].id}")
+print(f"E2E_ISSUE_UPLOAD_ID={issues[1].id}")

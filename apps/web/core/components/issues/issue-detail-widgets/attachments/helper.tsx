@@ -4,7 +4,7 @@
  * See the LICENSE file for details.
  */
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { setPromiseToast, TOAST_TYPE, setToast } from "@plane/propel/toast";
 import type { TIssueServiceType } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
@@ -49,7 +49,6 @@ export const useAttachmentOperations = (
       createAttachment,
       removeAttachment,
       getAttachmentsUploadStatusByIssueId,
-      fetchProjectFileAttachments,
       createProjectFileAttachment,
       removeProjectFileAttachment,
       getProjectFileAttachmentByLinkId,
@@ -58,14 +57,6 @@ export const useAttachmentOperations = (
   } = useIssueDetail(issueServiceType);
 
   const supportsProjectFiles = issueServiceType === EIssueServiceType.ISSUES;
-
-  // The work item's project files are read from the API where they are rendered: the
-  // issue payload carries only the legacy file assets (R-LINK-2 keeps that path
-  // working), so the linked files would otherwise never be fetched (AC-16).
-  useEffect(() => {
-    if (!supportsProjectFiles || !workspaceSlug || !projectId || !issueId) return;
-    fetchProjectFileAttachments(workspaceSlug, projectId, issueId).catch(() => undefined);
-  }, [supportsProjectFiles, workspaceSlug, projectId, issueId, fetchProjectFileAttachments]);
 
   const attachmentOperations: TAttachmentOperations = useMemo(
     () => ({

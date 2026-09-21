@@ -156,7 +156,7 @@ say "migrated"
 podman run --rm -i --network "$NETWORK" "${DJANGO_ENV[@]}" -v "$ROOT_DIR/apps/api:/code" -w /code \
   --entrypoint python "$IMAGE" manage.py shell --settings=plane.settings.local \
   <e2e/files/seed.py >"$STATE_DIR/seed.log" 2>&1 || fail "db seed" "$STATE_DIR/seed.log"
-grep -E '^E2E_(WORKSPACE_SLUG|PROJECT_ID)=' "$STATE_DIR/seed.log" >"$STATE_DIR/ids.env"
+grep -E '^E2E_(WORKSPACE_SLUG|PROJECT_ID|ISSUE_UNLINK_ID|ISSUE_UPLOAD_ID)=' "$STATE_DIR/seed.log" >"$STATE_DIR/ids.env"
 # shellcheck disable=SC1091
 source "$STATE_DIR/ids.env"
 say "seeded workspace $E2E_WORKSPACE_SLUG project $E2E_PROJECT_ID"
@@ -202,6 +202,8 @@ export E2E_GUEST_EMAIL=files.guest.e2e@example.com
 export E2E_GUEST_PASSWORD='PlaneE2E!Guest123'
 export E2E_WORKSPACE_SLUG
 export E2E_PROJECT_ID
+export E2E_ISSUE_UNLINK_ID
+export E2E_ISSUE_UPLOAD_ID
 
 # The object store as the browser reaches it, so a spec can read the bytes an upload
 # landed rather than only the row that claims they exist. The credentials are the ones

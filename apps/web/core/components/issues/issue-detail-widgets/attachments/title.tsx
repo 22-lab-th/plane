@@ -29,16 +29,11 @@ export const IssueAttachmentsCollapsibleTitle = observer(function IssueAttachmen
   const { t } = useTranslation();
   // store hooks
   const {
-    issue: { getIssueById },
-    attachment: { getProjectFileAttachmentsByIssueId },
+    attachment: { getAttachmentsCountByIssueId },
   } = useIssueDetail(issueServiceType);
 
   // derived values
-  const issue = getIssueById(issueId);
-  // `attachment_count` is the server's count of the legacy file assets the issue
-  // carries; the project files linked to it (AC-16) are counted from the rows the
-  // widget itself renders, so the badge and the list cannot disagree.
-  const attachmentCount = (issue?.attachment_count ?? 0) + (getProjectFileAttachmentsByIssueId(issueId)?.length ?? 0);
+  const attachmentCount = getAttachmentsCountByIssueId(issueId);
 
   // indicator element
   const indicatorElement = useMemo(
