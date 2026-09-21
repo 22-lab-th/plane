@@ -106,6 +106,7 @@ def unverified_versions(*, limit=SWEEP_BATCH_SIZE):
     )
 
 
+@transaction.atomic
 def sweep_version(version, *, storage):
     """Delete one unverified object and end its attempt; return ``(swept, released)``.
 
@@ -126,6 +127,12 @@ def sweep_version(version, *, storage):
     predicate (``status='uploading'``) and cannot settle a row whose bytes were
     removed.
     """
+    # Match finalize/purge lock ordering and revalidate before deleting bytes.
+    quota_row, usage_row = quota_module.lock_usage_rows(version.file.project)
+    version = FileVersion.objects.select_for_update().filter(pk=version.pk).first()
+    if version is None or version.status not in UNVERIFIED_STATUSES:
+        return False, False
+
     try:
         deleted = storage.delete_files([version.object_key])
     except Exception as exc:
@@ -148,7 +155,6 @@ def sweep_version(version, *, storage):
             update_fields=["status", "status_changed_at", "object_deleted_at", "is_active", "updated_at"]
         )
 
-        quota_row, usage_row = quota_module.lock_usage_rows(version.file.project)
         released = quota_module.release(quota_row, usage_row, version)
 
     # Counted after the marker commits, so the counter and the row that justifies it

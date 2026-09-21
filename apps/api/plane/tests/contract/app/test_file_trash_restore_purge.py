@@ -331,7 +331,9 @@ class TestTrash:
     ):
         guest = add_member(project, email="trash-guest@example.com", role=5)
         outsider = add_member(project, email="trash-outsider@example.com", role=5)
-        ProjectMember.objects.filter(project=project, member__email="trash-outsider@example.com").update(is_active=False)
+        ProjectMember.objects.filter(project=project, member__email="trash-outsider@example.com").update(
+            is_active=False
+        )
         file_object, _ = upload_file(session_client, project, stored_objects=stored_objects)
 
         assert trash(guest, project, file_object).status_code == status.HTTP_403_FORBIDDEN
@@ -551,7 +553,9 @@ class TestPurge:
         member = add_member(project, email="purge-member@example.com", role=15)
         guest = add_member(project, email="purge-guest@example.com", role=5)
         outsider = add_member(project, email="purge-outsider@example.com", role=5)
-        ProjectMember.objects.filter(project=project, member__email="purge-outsider@example.com").update(is_active=False)
+        ProjectMember.objects.filter(project=project, member__email="purge-outsider@example.com").update(
+            is_active=False
+        )
 
         file_object, object_key = upload_file(session_client, project, stored_objects=stored_objects)
         assert trash(session_client, project, file_object).status_code == status.HTTP_204_NO_CONTENT
@@ -842,3 +846,64 @@ class TestRetentionPurgeTask:
         assert purge_expired_files(batch_size=10) == {"purged": 1, "failed": 0, "scanned": 1}
         assert object_exists(independent_store, object_key) is False
         assert FileObject.all_objects.filter(pk=file_object).exists() is False
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("second_operation", ["purge", "restore"])
+def test_concurrent_purges_delete_and_account_once(
+    session_client, project, stored_objects, monkeypatch, second_operation, create_user
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    from django.db import close_old_connections
+    from plane.utils.file_storage.purge import purge_file
+
+    file_id, _ = upload_file(session_client, project, stored_objects=stored_objects)
+    upload_file(session_client, project, name="Keep.pdf", stored_objects=stored_objects)
+    assert session_client.delete(detail_url(project.workspace.slug, project.id, file_id)).status_code == 204
+    snapshots = [FileObject.all_objects.select_related("project").get(pk=file_id) for _ in range(2)]
+    entered, release, duplicate, second_started = Event(), Event(), Event(), Event()
+    calls_lock = Lock()
+    calls = []
+    real_delete = S3Storage.delete_files
+
+    def slow_delete(storage, keys):
+        with calls_lock:
+            calls.append(keys)
+            if len(calls) > 1:
+                duplicate.set()
+        entered.set()
+        assert release.wait(10)
+        return real_delete(storage, keys)
+
+    def run(snapshot, second=False):
+        close_old_connections()
+        try:
+            if second:
+                second_started.set()
+                if second_operation == "restore":
+                    client = APIClient()
+                    client.force_authenticate(user=create_user)
+                    return client.post(restore_url(project.workspace.slug, project.id, file_id)).status_code
+            return purge_file(snapshot)
+        finally:
+            close_old_connections()
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(S3Storage, "delete_files", slow_delete)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(run, snapshots[0])
+            try:
+                assert entered.wait(5)
+                second = pool.submit(run, snapshots[1], True)
+                assert second_started.wait(5)
+                assert not duplicate.wait(0.3)
+            finally:
+                release.set()
+            assert first.result(timeout=10) is True
+            result = second.result(timeout=10)
+            assert result is True if second_operation == "purge" else result == 404
+    assert len(calls) == 1
+    assert FileAccessLog.objects.filter(file_id=file_id, action=FileAccessLog.Action.PURGED).count() == 1
+    assert ProjectStorageUsage.objects.get(project=project).used_bytes == len(PDF_BYTES)

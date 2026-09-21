@@ -40,7 +40,7 @@ class S3Storage(S3Boto3Storage):
         self.minio_public_endpoint_url = os.environ.get("MINIO_PUBLIC_ENDPOINT_URL")
         self.signed_url_expiration = configuration["signed_url_expiration"]
 
-        if os.environ.get("USE_MINIO") == "1":
+        if os.environ.get("USE_MINIO") == "1" and configuration["provider"] != "r2":
             # Determine protocol based on environment variable
             if os.environ.get("MINIO_ENDPOINT_SSL") == "1":
                 endpoint_protocol = "https"
@@ -134,6 +134,13 @@ class S3Storage(S3Boto3Storage):
             # reservation that was taken for this attempt.
             expires_in = self.signed_url_expiration
 
+        # This SDK predates the modeled IfNoneMatch PUT parameter. Inject the
+        # header before signing so clients cannot omit the write-once condition.
+        def write_once(request, **kwargs):
+            request.headers["If-None-Match"] = "*"
+
+        events = self.presign_s3_client.meta.events
+        events.register("before-sign.s3.PutObject", write_once)
         try:
             response = self.presign_s3_client.generate_presigned_url(
                 "put_object",
@@ -149,10 +156,13 @@ class S3Storage(S3Boto3Storage):
             log_exception(e)
             return None
 
+        finally:
+            events.unregister("before-sign.s3.PutObject", write_once)
+
         return {
             "url": response,
             "method": "PUT",
-            "headers": {"Content-Type": content_type},
+            "headers": {"Content-Type": content_type, "If-None-Match": "*"},
             "expires_in": expires_in,
         }
 

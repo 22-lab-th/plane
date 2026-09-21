@@ -89,6 +89,7 @@ def purgeable_files(*, limit=PURGE_BATCH_SIZE):
     )
 
 
+@transaction.atomic
 def purge_file(file_object, *, request=None, trigger="manual"):
     """Purge one file; return ``True`` when the row is gone.
 
@@ -98,6 +99,13 @@ def purge_file(file_object, *, request=None, trigger="manual"):
     a key that is already gone succeeds - so an object that went missing between
     two attempts does not block the purge (R-DEL-4).
     """
+    # Match upload/finalize's lock order: quota first, then file/version rows.
+    # Re-read after locking: a competing purge or restore may have won already.
+    quota_module.lock_usage_rows(file_object.project)
+    original_file = file_object
+    file_object = FileObject.all_objects.select_for_update().filter(pk=file_object.pk).first()
+    if file_object is None:
+        return True
     if file_object.status not in PURGEABLE_STATUSES:
         raise ValueError(f"refusing to purge a file in status {file_object.status!r}")
 
@@ -129,6 +137,7 @@ def purge_file(file_object, *, request=None, trigger="manual"):
 
         if not deleted:
             _mark_purge_failed(file_object, version)
+            original_file.status = file_object.status
             # The delete path's other verdict (AC-31): an object survived, so the
             # file stays in the trash and this attempt removed nothing.
             observability.record(

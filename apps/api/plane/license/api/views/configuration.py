@@ -19,6 +19,7 @@ from django.db.models import Q, Case, When, Value
 # Third party imports
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 
 # Module imports
 from .base import BaseAPIView
@@ -27,7 +28,8 @@ from plane.license.models import InstanceConfiguration
 from plane.license.api.serializers import InstanceConfigurationSerializer
 from plane.license.utils.encryption import encrypt_data
 from plane.utils.cache import cache_response, invalidate_cache
-from plane.license.utils.instance_value import get_email_configuration
+from plane.license.utils.instance_value import get_email_configuration, get_storage_configuration
+from plane.db.models import FileAsset, FileVersion, ExporterHistory
 from plane.authentication.services import (
     has_normal_authentication_method,
     has_usable_sso_authentication,
@@ -60,6 +62,25 @@ AUTHENTICATION_CONFIGURATION_KEYS = {
 }
 
 
+def validate_storage_settings(values):
+    """Reject invalid SDK settings before a successful save can disable storage."""
+    choices = {
+        "STORAGE_PROVIDER": {"s3", "r2"},
+        "AWS_S3_ADDRESSING_STYLE": {"auto", "path", "virtual"},
+        "AWS_S3_SIGNATURE_VERSION": {"s3v4", "s3"},
+    }
+    for key, allowed in choices.items():
+        if key in values and values[key] not in allowed:
+            raise ValidationError({key: "Choose one of: " + ", ".join(sorted(allowed))})
+    if "SIGNED_URL_EXPIRATION" in values:
+        try:
+            expiration = int(values["SIGNED_URL_EXPIRATION"])
+        except (ValueError, TypeError):
+            raise ValidationError({"SIGNED_URL_EXPIRATION": "Enter a whole number of seconds."})
+        if not 1 <= expiration <= 604800:
+            raise ValidationError({"SIGNED_URL_EXPIRATION": "Use 1 to 604800 seconds."})
+
+
 class InstanceConfigurationEndpoint(BaseAPIView):
     permission_classes = [InstanceAdminPermission]
 
@@ -72,8 +93,10 @@ class InstanceConfigurationEndpoint(BaseAPIView):
     @invalidate_cache(path="/api/instances/configurations/", user=False)
     @invalidate_cache(path="/api/instances/", user=False)
     def patch(self, request):
+        validate_storage_settings(request.data)
         denied = False
         with transaction.atomic():
+            previous_storage = get_storage_configuration()
             configurations = InstanceConfiguration.objects.select_for_update().filter(key__in=request.data.keys())
 
             bulk_configurations = []
@@ -87,6 +110,19 @@ class InstanceConfigurationEndpoint(BaseAPIView):
                 bulk_configurations.append(configuration)
 
             InstanceConfiguration.objects.bulk_update(bulk_configurations, ["value"], batch_size=100)
+            current_storage = get_storage_configuration()
+            identity = ("provider", "endpoint_url", "bucket_name")
+            if any(previous_storage[key] != current_storage[key] for key in identity) and (
+                FileAsset.all_objects.exists()
+                or FileVersion.all_objects.exists()
+                or ExporterHistory.all_objects.exclude(key__isnull=True).exclude(key="").exists()
+            ):
+                transaction.set_rollback(True)
+                return Response(
+                    {"error": "Storage provider, endpoint and bucket cannot change while stored files exist. "
+                     "Migrate existing objects before changing storage."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             if AUTHENTICATION_CONFIGURATION_KEYS.intersection(request.data) and not _authentication_remains_available():
                 transaction.set_rollback(True)
                 denied = True

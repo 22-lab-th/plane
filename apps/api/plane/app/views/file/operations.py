@@ -32,7 +32,6 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 # Django imports
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -603,6 +602,7 @@ def trash_file(request, slug, project_id, file_id):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@transaction.atomic
 def restore_file(request, slug, project_id, file_id):
     """Restore a trashed file (R-DEL-2, AC-11).
 
@@ -622,6 +622,10 @@ def restore_file(request, slug, project_id, file_id):
     """
     project = project_or_404(slug, project_id)
     require_project_editor(request, project)
+
+    # Serialize against purge before checking the trash state or restoring links.
+    quota.lock_usage_rows(project)
+    FileObject.all_objects.select_for_update().filter(pk=file_id, project_id=project.id).first()
 
     file_object = _trashed_file_or_refuse(project, slug, file_id)
 

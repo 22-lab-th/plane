@@ -189,7 +189,7 @@ class TestUploadHappyPath:
         # The URL is signed for the exact key and content type.
         assert response.data["version_no"] == 1
         assert upload["method"] == "PUT"
-        assert upload["headers"] == {"Content-Type": "application/pdf"}
+        assert upload["headers"] == {"Content-Type": "application/pdf", "If-None-Match": "*"}
         assert upload["url"].split("?")[0].endswith(object_key)
         assert "X-Amz-Signature=" in upload["url"]
         assert "content-type" in upload["url"].lower()
@@ -743,3 +743,23 @@ class TestUploadThrottle:
         assert throttled.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         # A burst in one project must not starve another (R-UPL-5).
         assert other.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_verified_upload_cannot_be_overwritten(session_client, project, stored_objects):
+    response = _initiate(session_client, project)
+    assert response.status_code == 200
+    upload = response.data["upload"]
+    key = response.data["file"]["object_key"]
+    stored_objects.append(key)
+    assert _put(upload["url"], upload["headers"]).status_code == 200
+    completed = session_client.post(
+        complete_url(project.workspace.slug, project.id, response.data["file"]["id"]),
+        {"version_no": 1, "size_bytes": len(PDF_BYTES)}, format="json",
+    )
+    assert completed.status_code == 200
+    assert _put(upload["url"], upload["headers"], PDF_BYTES + b"changed").status_code == 412
+    # Dropping the conditional header invalidates the signature, too.
+    assert _put(upload["url"], {"Content-Type": "application/pdf"}).status_code in (400, 403)
+    assert S3Storage().get_object_metadata(key)["ContentLength"] == len(PDF_BYTES)

@@ -68,7 +68,7 @@ class TestGeneratePresignedPut:
 
         assert set(result) == {"url", "method", "headers", "expires_in"}
         assert result["method"] == "PUT"
-        assert result["headers"] == {"Content-Type": CONTENT_TYPE}
+        assert result["headers"] == {"Content-Type": CONTENT_TYPE, "If-None-Match": "*"}
         assert result["expires_in"] == 900
 
     def test_url_binds_the_object_key_and_bucket(self):
@@ -90,6 +90,7 @@ class TestGeneratePresignedPut:
         # Content-Type is part of the signed header set, so the provider rejects
         # a PUT that declares a different type with SignatureDoesNotMatch.
         assert "content-type" in query["X-Amz-SignedHeaders"][0].lower()
+        assert "if-none-match" in query["X-Amz-SignedHeaders"][0].lower()
 
     def test_content_type_is_bound_to_the_signature(self):
         storage = make_storage()
@@ -168,7 +169,9 @@ class TestProviderConfiguration:
         storage = make_storage(drop=("AWS_REGION", "AWS_S3_REGION_NAME"))
 
         assert storage.aws_region == "auto"
-        assert "/auto/s3/aws4_request" in credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+        assert "/auto/s3/aws4_request" in credential_scope(
+            storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"]
+        )
 
     def test_region_is_read_from_aws_s3_region_name(self):
         storage = make_storage(extra_env={"AWS_S3_REGION_NAME": "auto", "AWS_REGION": "eu-west-1"})
@@ -183,7 +186,9 @@ class TestProviderConfiguration:
         storage = make_storage(extra_env={"AWS_REGION": "eu-west-1"})
 
         assert storage.aws_region == "eu-west-1"
-        assert "/eu-west-1/s3/aws4_request" in credential_scope(storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"])
+        assert "/eu-west-1/s3/aws4_request" in credential_scope(
+            storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)["url"]
+        )
 
     def test_addressing_style_defaults_to_auto(self):
         """Without the setting, a hostname-addressed endpoint stays path-style.

@@ -54,7 +54,7 @@ def upload_to_s3(zip_file: io.BytesIO, workspace_id: UUID, token_id: str, slug: 
         s3={"addressing_style": storage["addressing_style"]},
     )
 
-    if settings.USE_MINIO:
+    if settings.USE_MINIO and storage["provider"] != "r2":
         upload_s3 = boto3.client(
             "s3",
             endpoint_url=storage["endpoint_url"],

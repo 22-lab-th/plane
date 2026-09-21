@@ -2,8 +2,8 @@
 
 Scope: `feat/project-file-storage` against `origin/preview` at
 `a5be3c1672b8ad8838a2cd8a79d4865e709441de`, including the folder management and
-instance storage configuration changes in the working tree. This is a review
-snapshot, not a release approval. The findings below remain open.
+instance storage configuration changes in the working tree. The original findings below are retained for traceability.
+See the resolution section for the fixes and remaining P2 work.
 
 ## Standards and frontend behavior
 
@@ -76,8 +76,37 @@ No non-tooling violation of the documented repository standards was established.
   these adversarial and concurrent scenarios.
 - No live R2 credentials or production services were exercised.
 
-## Integration status
+## Resolution before integration
 
-The remote's default branch is `preview`; `main` does not exist. The requested
-merge destination needs clarification. Do not treat this snapshot as ready to
-merge while the P1 findings remain open.
+All four original P1 findings have been addressed:
+
+- Upload PUT URLs now sign `If-None-Match: *`. A real MinIO test confirms that
+  writing again after finalize returns 412 and omitting the header is rejected.
+- Purge, restore and sweep acquire quota locks before file/version locks and
+  revalidate stale candidates. Concurrent purge/purge and purge/restore tests
+  prove a single deletion, a single quota debit and refusal of a losing restore.
+- R2 bypasses environment MinIO routing for uploads and exports.
+- Instance configuration refuses provider/endpoint/bucket changes when historical
+  file records exist. Tests confirm rejection rolls back saved settings while
+  fresh-install setup and URL TTL changes remain possible.
+
+Server-side addressing-style/signature/TTL validation also addresses the
+configuration validation P2 finding. The remaining P2 items are frontend
+pagination, ambiguous folder destination names, ambient credentials in the Admin
+form, and durable cleanup records for a failed copy. These remain follow-up work;
+this patch does not claim to resolve them.
+
+Final backend verification: **412 passed in 97.68 seconds**, including the new
+regressions and the existing file contract/unit suite. Independent read-only
+review found no remaining blocker in the lifecycle and configuration fixes.
+Frontend code is unchanged by the security fixes; the prior 10 passing frontend
+tests and Web/Admin typechecks apply to the feature snapshot.
+
+Operational CORS and migration constraints are documented in
+`docs/runbooks/project-file-storage-configuration.md`. Live R2 was not tested.
+
+## Integration destination
+
+The owner requested merging the feature into `preview`, then creating `main`
+from the resulting `preview`. Creating `main` does not change the repository's
+configured default branch.

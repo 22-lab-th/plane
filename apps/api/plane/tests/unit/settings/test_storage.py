@@ -284,3 +284,15 @@ def test_database_storage_configuration_overrides_environment(mock_boto3, settin
     assert storage.aws_region == "auto"
     assert storage.aws_s3_endpoint_url == "https://account-123.r2.cloudflarestorage.com"
     assert mock_boto3.client.call_args.kwargs["endpoint_url"] == "https://account-123.r2.cloudflarestorage.com"
+
+
+@pytest.mark.unit
+@patch.dict(os.environ, {"USE_MINIO": "1", "MINIO_PUBLIC_ENDPOINT_URL": "http://minio:9000"})
+@patch("plane.settings.storage.boto3")
+def test_r2_configuration_bypasses_legacy_minio_routing(mock_boto3):
+    from plane.license.utils.instance_value import get_storage_configuration
+    configuration = get_storage_configuration()
+    configuration.update(provider="r2", endpoint_url="https://account.r2.cloudflarestorage.com")
+    with patch("plane.settings.storage.get_storage_configuration", return_value=configuration):
+        S3Storage(request=Mock(scheme="https", get_host=Mock(return_value="app.example.com")))
+    assert mock_boto3.client.call_args.kwargs["endpoint_url"] == configuration["endpoint_url"]
