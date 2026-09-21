@@ -4,14 +4,17 @@
  * See the LICENSE file for details.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { setPromiseToast, TOAST_TYPE, setToast } from "@plane/propel/toast";
 import type { TIssueServiceType } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 // types
-import type { TAttachmentUploadStatus } from "@/store/issue/issue-details/attachment.store";
+import type {
+  TAttachmentUploadStatus,
+  TIssueProjectFileAttachment,
+} from "@/store/issue/issue-details/attachment.store";
 
 export type TAttachmentOperations = {
   create: (file: File) => Promise<void>;
@@ -20,6 +23,14 @@ export type TAttachmentOperations = {
 
 export type TAttachmentSnapshot = {
   uploadStatus: TAttachmentUploadStatus[] | undefined;
+  /**
+   * The work item's project files (AC-16). Empty for an epic, whose attachments
+   * have no entity type in the file-link vocabulary and stay on the legacy path.
+   */
+  projectFileAttachments: TIssueProjectFileAttachment[] | undefined;
+  /** The scope a project file's download or preview URL is signed for. */
+  workspaceSlug: string;
+  projectId: string;
 };
 
 export type TAttachmentHelpers = {
@@ -34,14 +45,35 @@ export const useAttachmentOperations = (
   issueServiceType: TIssueServiceType = EIssueServiceType.ISSUES
 ): TAttachmentHelpers => {
   const {
-    attachment: { createAttachment, removeAttachment, getAttachmentsUploadStatusByIssueId },
+    attachment: {
+      createAttachment,
+      removeAttachment,
+      getAttachmentsUploadStatusByIssueId,
+      fetchProjectFileAttachments,
+      createProjectFileAttachment,
+      removeProjectFileAttachment,
+      getProjectFileAttachmentByLinkId,
+      getProjectFileAttachmentsByIssueId,
+    },
   } = useIssueDetail(issueServiceType);
+
+  const supportsProjectFiles = issueServiceType === EIssueServiceType.ISSUES;
+
+  // The work item's project files are read from the API where they are rendered: the
+  // issue payload carries only the legacy file assets (R-LINK-2 keeps that path
+  // working), so the linked files would otherwise never be fetched (AC-16).
+  useEffect(() => {
+    if (!supportsProjectFiles || !workspaceSlug || !projectId || !issueId) return;
+    fetchProjectFileAttachments(workspaceSlug, projectId, issueId).catch(() => undefined);
+  }, [supportsProjectFiles, workspaceSlug, projectId, issueId, fetchProjectFileAttachments]);
 
   const attachmentOperations: TAttachmentOperations = useMemo(
     () => ({
       create: async (file) => {
         if (!workspaceSlug || !projectId || !issueId) throw new Error("Missing required fields");
-        const attachmentUploadPromise = createAttachment(workspaceSlug, projectId, issueId, file);
+        const attachmentUploadPromise: Promise<void> = supportsProjectFiles
+          ? createProjectFileAttachment(workspaceSlug, projectId, issueId, file)
+          : createAttachment(workspaceSlug, projectId, issueId, file).then(() => undefined);
         setPromiseToast(attachmentUploadPromise, {
           loading: "Uploading attachment...",
           success: {
@@ -59,13 +91,25 @@ export const useAttachmentOperations = (
       remove: async (attachmentId) => {
         try {
           if (!workspaceSlug || !projectId || !issueId) throw new Error("Missing required fields");
+          // One entry point for both kinds, decided by which store actually holds the
+          // id: a project file is *unlinked* so the file survives (AC-21), while a
+          // legacy file asset keeps the delete it has always had.
+          if (getProjectFileAttachmentByLinkId(attachmentId)) {
+            await removeProjectFileAttachment(workspaceSlug, projectId, issueId, attachmentId);
+            setToast({
+              message: "The file stays in the project's Files view, linked to nothing else.",
+              type: TOAST_TYPE.SUCCESS,
+              title: "Attachment removed",
+            });
+            return;
+          }
           await removeAttachment(workspaceSlug, projectId, issueId, attachmentId);
           setToast({
             message: "The attachment has been successfully removed",
             type: TOAST_TYPE.SUCCESS,
             title: "Attachment removed",
           });
-        } catch (_error) {
+        } catch {
           setToast({
             message: "The Attachment could not be removed",
             type: TOAST_TYPE.ERROR,
@@ -74,12 +118,27 @@ export const useAttachmentOperations = (
         }
       },
     }),
-    [workspaceSlug, projectId, issueId, createAttachment, removeAttachment]
+    [
+      workspaceSlug,
+      projectId,
+      issueId,
+      supportsProjectFiles,
+      createAttachment,
+      createProjectFileAttachment,
+      removeAttachment,
+      removeProjectFileAttachment,
+      getProjectFileAttachmentByLinkId,
+    ]
   );
   const attachmentsUploadStatus = getAttachmentsUploadStatusByIssueId(issueId);
 
   return {
     operations: attachmentOperations,
-    snapshot: { uploadStatus: attachmentsUploadStatus },
+    snapshot: {
+      uploadStatus: attachmentsUploadStatus,
+      projectFileAttachments: supportsProjectFiles ? getProjectFileAttachmentsByIssueId(issueId) : undefined,
+      workspaceSlug,
+      projectId,
+    },
   };
 };

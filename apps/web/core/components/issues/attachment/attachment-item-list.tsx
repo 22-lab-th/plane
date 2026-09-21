@@ -22,6 +22,7 @@ import type { TAttachmentHelpers } from "../issue-detail-widgets/attachments/hel
 // components
 import { IssueAttachmentsListItem } from "./attachment-list-item";
 import { IssueAttachmentsUploadItem } from "./attachment-list-upload-item";
+import { IssueProjectFileAttachmentRow } from "./project-file-attachment-row";
 // types
 import { IssueAttachmentDeleteModal } from "./delete-attachment-modal";
 
@@ -55,7 +56,7 @@ export const IssueAttachmentItemList = observer(function IssueAttachmentItemList
   } = useIssueDetail(issueServiceType);
   const { operations: attachmentOperations, snapshot: attachmentSnapshot } = attachmentHelpers;
   const { create: createAttachment } = attachmentOperations;
-  const { uploadStatus } = attachmentSnapshot;
+  const { uploadStatus, projectFileAttachments } = attachmentSnapshot;
   // file size
   const { maxFileSize } = useFileSize();
   // derived values
@@ -100,7 +101,7 @@ export const IssueAttachmentItemList = observer(function IssueAttachmentItemList
       });
       return;
     },
-    [createAttachment, maxFileSize, workspaceSlug, handleFetchPropertyActivities]
+    [createAttachment, maxFileSize, workspaceSlug, handleFetchPropertyActivities, t]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -112,10 +113,10 @@ export const IssueAttachmentItemList = observer(function IssueAttachmentItemList
 
   return (
     <>
-      {uploadStatus?.map((uploadStatus) => (
-        <IssueAttachmentsUploadItem key={uploadStatus.id} uploadStatus={uploadStatus} />
+      {uploadStatus?.map((status) => (
+        <IssueAttachmentsUploadItem key={status.id} uploadStatus={status} />
       ))}
-      {issueAttachments && (
+      {issueAttachments || projectFileAttachments ? (
         <>
           {attachmentDeleteModalId && (
             <IssueAttachmentDeleteModal
@@ -128,9 +129,9 @@ export const IssueAttachmentItemList = observer(function IssueAttachmentItemList
           )}
           <div
             {...getRootProps()}
-            className={`relative flex flex-col ${isDragActive && issueAttachments.length < 3 ? "min-h-[200px]" : ""} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+            className={`relative flex flex-col ${isDragActive && (issueAttachments?.length ?? 0) < 3 ? "min-h-[200px]" : ""} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
           >
-            <input {...getInputProps()} />
+            <input {...getInputProps()} data-testid="issue-attachment-input" />
             {isDragActive && (
               <div className="absolute top-0 left-0 z-30 flex h-full w-full items-center justify-center bg-surface-2/75">
                 <div className="flex items-center justify-center rounded-md bg-surface-1 p-1">
@@ -149,9 +150,19 @@ export const IssueAttachmentItemList = observer(function IssueAttachmentItemList
                 issueServiceType={issueServiceType}
               />
             ))}
+            {projectFileAttachments?.map((attachment) => (
+              <IssueProjectFileAttachmentRow
+                key={attachment.link.id}
+                workspaceSlug={workspaceSlug}
+                projectId={projectId}
+                attachment={attachment}
+                attachmentHelpers={attachmentHelpers}
+                disabled={disabled}
+              />
+            ))}
           </div>
         </>
-      )}
+      ) : null}
     </>
   );
 });

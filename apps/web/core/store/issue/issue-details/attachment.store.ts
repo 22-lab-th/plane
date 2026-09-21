@@ -12,6 +12,8 @@ import { v4 as uuidv4 } from "uuid";
 import type { TIssueAttachment, TIssueAttachmentMap, TIssueAttachmentIdMap, TIssueServiceType } from "@plane/types";
 // services
 import { IssueAttachmentService } from "@/services/issue";
+import type { IProjectFileEntityLink } from "@/services/project-file.service";
+import { ProjectFileService, uploadProjectFile } from "@/services/project-file.service";
 import type { IIssueRootStore } from "../root.store";
 import type { IIssueDetail } from "./root.store";
 
@@ -22,6 +24,15 @@ export type TAttachmentUploadStatus = {
   size: number;
   type: string;
 };
+
+/**
+ * How the issue's attachment surface reads a project file.
+ *
+ * The API answers with the link and the file together, and both are kept as they
+ * arrived so the row prints the file's own values rather than a projection of them
+ * (the same discipline the Files view follows).
+ */
+export type TIssueProjectFileAttachment = IProjectFileEntityLink;
 
 export interface IIssueAttachmentStoreActions {
   // actions
@@ -39,6 +50,20 @@ export interface IIssueAttachmentStoreActions {
     issueId: string,
     attachmentId: string
   ) => Promise<TIssueAttachment>;
+  /**
+   * T-115: the project files this issue surfaces, and the two operations that change
+   * them. An issue attachment is a project file linked to the issue, so it appears
+   * once in the project's Files view with the id the issue refers to (AC-16), and
+   * removing the attachment unlinks rather than deletes (AC-21).
+   */
+  fetchProjectFileAttachments: (workspaceSlug: string, projectId: string, issueId: string) => Promise<void>;
+  createProjectFileAttachment: (workspaceSlug: string, projectId: string, issueId: string, file: File) => Promise<void>;
+  removeProjectFileAttachment: (
+    workspaceSlug: string,
+    projectId: string,
+    issueId: string,
+    linkId: string
+  ) => Promise<void>;
 }
 
 export interface IIssueAttachmentStore extends IIssueAttachmentStoreActions {
@@ -46,6 +71,8 @@ export interface IIssueAttachmentStore extends IIssueAttachmentStoreActions {
   attachments: TIssueAttachmentIdMap;
   attachmentMap: TIssueAttachmentMap;
   attachmentsUploadStatusMap: Record<string, Record<string, TAttachmentUploadStatus>>;
+  projectFileAttachments: Record<string, string[]>;
+  projectFileAttachmentMap: Record<string, TIssueProjectFileAttachment>;
   // computed
   issueAttachments: string[] | undefined;
   // helper methods
@@ -53,6 +80,8 @@ export interface IIssueAttachmentStore extends IIssueAttachmentStoreActions {
   getAttachmentsByIssueId: (issueId: string) => string[] | undefined;
   getAttachmentById: (attachmentId: string) => TIssueAttachment | undefined;
   getAttachmentsCountByIssueId: (issueId: string) => number;
+  getProjectFileAttachmentsByIssueId: (issueId: string) => TIssueProjectFileAttachment[] | undefined;
+  getProjectFileAttachmentByLinkId: (linkId: string) => TIssueProjectFileAttachment | undefined;
 }
 
 export class IssueAttachmentStore implements IIssueAttachmentStore {
@@ -60,11 +89,15 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
   attachments: TIssueAttachmentIdMap = {};
   attachmentMap: TIssueAttachmentMap = {};
   attachmentsUploadStatusMap: Record<string, Record<string, TAttachmentUploadStatus>> = {};
+  /** Link ids of the project files this issue surfaces, in the API's order. */
+  projectFileAttachments: Record<string, string[]> = {};
+  projectFileAttachmentMap: Record<string, TIssueProjectFileAttachment> = {};
   // root store
   rootIssueStore: IIssueRootStore;
   rootIssueDetailStore: IIssueDetail;
   // services
   issueAttachmentService;
+  projectFileService: ProjectFileService;
 
   constructor(rootStore: IIssueRootStore, serviceType: TIssueServiceType) {
     makeObservable(this, {
@@ -72,6 +105,8 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
       attachments: observable,
       attachmentMap: observable,
       attachmentsUploadStatusMap: observable,
+      projectFileAttachments: observable,
+      projectFileAttachmentMap: observable,
       // computed
       issueAttachments: computed,
       // actions
@@ -79,12 +114,16 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
       fetchAttachments: action,
       createAttachment: action,
       removeAttachment: action,
+      fetchProjectFileAttachments: action,
+      createProjectFileAttachment: action,
+      removeProjectFileAttachment: action,
     });
     // root store
     this.rootIssueStore = rootStore;
     this.rootIssueDetailStore = rootStore.issueDetail;
     // services
     this.issueAttachmentService = new IssueAttachmentService(serviceType);
+    this.projectFileService = new ProjectFileService();
   }
 
   // computed
@@ -114,6 +153,95 @@ export class IssueAttachmentStore implements IIssueAttachmentStore {
   getAttachmentsCountByIssueId = (issueId: string) => {
     const attachments = this.getAttachmentsByIssueId(issueId);
     return attachments?.length ?? 0;
+  };
+
+  getProjectFileAttachmentsByIssueId = (issueId: string) => {
+    if (!issueId) return undefined;
+    const linkIds = this.projectFileAttachments[issueId];
+    if (!linkIds) return undefined;
+    return linkIds.map((linkId) => this.projectFileAttachmentMap[linkId]).filter(Boolean);
+  };
+
+  getProjectFileAttachmentByLinkId = (linkId: string) => {
+    if (!linkId) return undefined;
+    return this.projectFileAttachmentMap[linkId] ?? undefined;
+  };
+
+  // T-115: the issue's project-file attachments. An attachment is a project file
+  // linked to the issue, so it is one row in the project's Files view with the same
+  // id, and removing the attachment unlinks rather than deletes (AC-16, AC-21).
+
+  private replaceProjectFileAttachments = (issueId: string, rows: TIssueProjectFileAttachment[]) => {
+    runInAction(() => {
+      const nextLinkIds = rows.map((row) => row.link.id);
+      (this.projectFileAttachments[issueId] ?? []).forEach((linkId) => {
+        if (!nextLinkIds.includes(linkId)) delete this.projectFileAttachmentMap[linkId];
+      });
+      rows.forEach((row) => set(this.projectFileAttachmentMap, row.link.id, row));
+      update(this.projectFileAttachments, [issueId], () => nextLinkIds);
+    });
+  };
+
+  /**
+   * The project files this issue surfaces, straight from the API (AC-16).
+   *
+   * Re-read rather than patched in place: the entity listing is where the link id,
+   * the file's own name/size/uploader and the order come from, so the rows on screen
+   * are the server's answer rather than this client's reconstruction of it.
+   */
+  fetchProjectFileAttachments = async (workspaceSlug: string, projectId: string, issueId: string) => {
+    const rows = await this.projectFileService.listEntityFileLinks(workspaceSlug, projectId, {
+      entity_type: "issue",
+      entity_id: issueId,
+    });
+    this.replaceProjectFileAttachments(issueId, rows);
+  };
+
+  /**
+   * Upload one file as this issue's attachment (AC-16).
+   *
+   * The link travels with the initiation, so the file and its issue binding commit
+   * together and the file cannot end up attached to nothing. The progress row is the
+   * same one the legacy path shows, because the widget renders one upload list.
+   */
+  createProjectFileAttachment = async (workspaceSlug: string, projectId: string, issueId: string, file: File) => {
+    const tempId = uuidv4();
+    try {
+      runInAction(() => {
+        set(this.attachmentsUploadStatusMap, [issueId, tempId], {
+          id: tempId,
+          name: file.name,
+          progress: 0,
+          size: file.size,
+          type: file.type,
+        });
+      });
+      await uploadProjectFile({
+        workspaceSlug,
+        projectId,
+        file,
+        link: { entity_type: "issue", entity_id: issueId },
+        onProgress: (percentage) => this.debouncedUpdateProgress(issueId, tempId, percentage),
+      });
+      await this.fetchProjectFileAttachments(workspaceSlug, projectId, issueId);
+    } finally {
+      runInAction(() => {
+        delete this.attachmentsUploadStatusMap[issueId][tempId];
+      });
+    }
+  };
+
+  /**
+   * Detach one project file from this issue (AC-21).
+   *
+   * The file, its versions and its bytes are untouched: the link goes inactive and
+   * the file stays listed, downloadable, and an orphan if nothing else links to it.
+   */
+  removeProjectFileAttachment = async (workspaceSlug: string, projectId: string, issueId: string, linkId: string) => {
+    const attachment = this.getProjectFileAttachmentByLinkId(linkId);
+    if (!attachment) return;
+    await this.projectFileService.unlinkProjectFile(workspaceSlug, projectId, attachment.file.id, linkId);
+    await this.fetchProjectFileAttachments(workspaceSlug, projectId, issueId);
   };
 
   // actions

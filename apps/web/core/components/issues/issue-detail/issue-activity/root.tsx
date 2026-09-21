@@ -14,7 +14,7 @@ import { useLocalStorage } from "@plane/hooks";
 // i18n
 import { useTranslation } from "@plane/i18n";
 //types
-import type { TFileSignedURLResponse, TIssueComment } from "@plane/types";
+import type { TIssueComment } from "@plane/types";
 // components
 import { CommentCreate } from "@/components/comments/comment-create";
 // hooks
@@ -37,7 +37,7 @@ export type TActivityOperations = {
   createComment: (data: Partial<TIssueComment>) => Promise<TIssueComment>;
   updateComment: (commentId: string, data: Partial<TIssueComment>) => Promise<void>;
   removeComment: (commentId: string) => Promise<void>;
-  uploadCommentAsset: (blockId: string, file: File, commentId?: string) => Promise<TFileSignedURLResponse>;
+  uploadCommentAsset: (blockId: string, file: File, commentId?: string) => Promise<{ asset_id: string }>;
 };
 
 export const IssueActivity = observer(function IssueActivity(props: TIssueActivity) {

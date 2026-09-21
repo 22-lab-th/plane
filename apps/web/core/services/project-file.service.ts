@@ -164,6 +164,39 @@ export interface IProjectFileDetail {
   activity: IProjectFileActivity[];
 }
 
+/** One file an entity surfaces, with the link a surface unlinks by (R-LINK-2, AC-16). */
+export interface IProjectFileEntityLink {
+  link: IProjectFileLink;
+  file: IProjectFile;
+}
+
+/** `GET files/links/` response: the entity -> file direction, newest link first. */
+export interface IProjectFileEntityLinksResponse {
+  results: IProjectFileEntityLink[];
+}
+
+/** The entity an upload or a lookup is attached to. */
+export type TProjectFileEntityRef = {
+  entity_type: "issue" | "page" | "comment" | "milestone";
+  entity_id: string;
+};
+
+/**
+ * How an editor document refers to a project file (R-LINK-3).
+ *
+ * The editor stores whatever `upload` returns as the image node's `src` and resolves
+ * it later through `getAssetSrc`, so the value has to be distinguishable from a
+ * legacy asset id (a bare UUID) without being a URL: a presigned URL expires, and
+ * DESIGN §8 forbids leaving one in markup that outlives its TTL. The prefix is that
+ * marker, and the id after it is the same file id the Files view lists.
+ */
+export const PROJECT_FILE_REF_PREFIX = "project-file:";
+
+/** A stored reference to a project file, as an editor document holds it. */
+export type TProjectFileRef = `${typeof PROJECT_FILE_REF_PREFIX}${string}`;
+
+export const isProjectFileRef = (value: string): value is TProjectFileRef => value.startsWith(PROJECT_FILE_REF_PREFIX);
+
 /** The file summary the upload endpoints return (ARCH-001 §4.1). */
 export interface IProjectFileUploadFile {
   id: string;
@@ -435,6 +468,81 @@ export class ProjectFileService extends APIService {
   }
 
   /**
+   * The files this project surfaces for one entity (R-LINK-2, AC-16).
+   *
+   * The entity → file direction: an issue's attachments and a page's embeds are the
+   * same rows the Files view lists, so a surface reads them here rather than keeping
+   * a second copy of the file. Each row carries its link, which is what an unlink
+   * needs, and the file, which is what the row prints.
+   */
+  async listEntityFileLinks(
+    workspaceSlug: string,
+    projectId: string,
+    entity: TProjectFileEntityRef
+  ): Promise<IProjectFileEntityLink[]> {
+    const params = new URLSearchParams({ entity_type: entity.entity_type, entity_id: entity.entity_id });
+    return this.get(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/links/?${params.toString()}`)
+      .then((response) => response?.data?.results ?? [])
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Attach an existing file to an entity (R-LINK-1).
+   *
+   * A row, never a copy: the file keeps its id, its key and its bytes, and the
+   * entity starts showing it in the place its surface renders (the issue's
+   * attachments, the page's embeds).
+   */
+  async linkProjectFile(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    entity: TProjectFileEntityRef
+  ): Promise<IProjectFileLink> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/links/`, entity)
+      .then((response) => response?.data?.link)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Detach one entity from a file without touching the file (AC-21, AC-16).
+   *
+   * A row operation by design: the object is shared by every link, so removing the
+   * last one leaves the file listed and downloadable rather than deleted.
+   */
+  async unlinkProjectFile(workspaceSlug: string, projectId: string, fileId: string, linkId: string): Promise<void> {
+    return this.delete(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/links/${linkId}/`)
+      .then(() => undefined)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
+   * Duplicate a file inside this project (AC-10).
+   *
+   * The copy gets a new file id and its own objects; the source is untouched. Used
+   * when a page's embedded image is duplicated inside the editor, so the copy is a
+   * project file like the original rather than a second reference to its bytes.
+   */
+  async copyProjectFile(
+    workspaceSlug: string,
+    projectId: string,
+    fileId: string,
+    payload: { name_display?: string; folder_id?: string | null } = {}
+  ): Promise<IProjectFile> {
+    return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/${fileId}/copy/`, payload)
+      .then((response) => response?.data?.file)
+      .catch((error) => {
+        throw error?.response?.data ?? error;
+      });
+  }
+
+  /**
    * Reserve quota and get the presigned PUT for one file (R-UPL-1).
    *
    * `file_id` is what makes an upload a **retry** (the same file row, a fresh
@@ -452,6 +560,13 @@ export class ProjectFileService extends APIService {
       folder_id?: string | null;
       file_id?: string | null;
       checksum_sha256?: string | null;
+      /**
+       * The entity the new file is attached to (R-LINK-1). The server validates the
+       * target inside the transaction that writes the link, and derives the file's
+       * category from it, so an attachment is one upload rather than an upload plus
+       * a second call that could fail on its own.
+       */
+      link?: TProjectFileEntityRef | null;
     }
   ): Promise<IProjectFileUploadInitiation> {
     return this.post(`/api/workspaces/${workspaceSlug}/projects/${projectId}/files/initiate-upload/`, payload)
@@ -547,4 +662,57 @@ export const putPresignedFile = (params: {
   });
 
   return { promise, abort: () => request.abort() };
+};
+
+const uploadService = new ProjectFileService();
+
+/**
+ * Upload one file into a project and return the stored file (R-UPL-1..4).
+ *
+ * The same three steps the Files tab's queue runs per row - reserve and sign, PUT the
+ * bytes straight to the store with progress, then have the server verify and store
+ * them - without the queue's row bookkeeping: a queue also cancels, retries and
+ * resolves name collisions, while an issue attachment or a page embed only needs the
+ * file that came out of it. A failed attempt is given up here so its reservation is
+ * released and the surface's retry is not refused with `upload_in_progress`
+ * (ARCH-001 §2.4).
+ */
+export const uploadProjectFile = async (params: {
+  workspaceSlug: string;
+  projectId: string;
+  file: File;
+  folderId?: string | null;
+  link?: TProjectFileEntityRef | null;
+  onProgress?: (percentage: number) => void;
+}): Promise<IProjectFileUploadCompletion> => {
+  const { workspaceSlug, projectId, file, folderId, link, onProgress } = params;
+
+  const initiation = await uploadService.initiateFileUpload(workspaceSlug, projectId, {
+    file_name: file.name,
+    size_bytes: file.size,
+    mime_type: file.type,
+    folder_id: folderId ?? null,
+    link: link ?? null,
+  });
+
+  const handle = putPresignedFile({
+    url: initiation.upload.url,
+    file,
+    headers: initiation.upload.headers,
+    onProgress,
+  });
+
+  try {
+    await handle.promise;
+  } catch (error) {
+    await uploadService
+      .abortFileUpload(workspaceSlug, projectId, initiation.file.id, initiation.version_no)
+      .catch(() => undefined);
+    throw error;
+  }
+
+  return uploadService.completeFileUpload(workspaceSlug, projectId, initiation.file.id, {
+    version_no: initiation.version_no,
+    size_bytes: file.size,
+  });
 };

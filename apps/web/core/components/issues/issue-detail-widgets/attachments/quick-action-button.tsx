@@ -96,13 +96,17 @@ export const IssueAttachmentActionButton = observer(function IssueAttachmentActi
 
   return (
     <div
+      role="presentation"
       onClick={(e) => {
         // TODO: Remove extra div and move event propagation to button
         e.stopPropagation();
       }}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+      }}
     >
       <button {...getRootProps()} type="button" disabled={disabled}>
-        <input {...getInputProps()} />
+        <input {...getInputProps()} data-testid="issue-attachment-quick-input" />
         {customButton ? customButton : <PlusIcon className="h-4 w-4" />}
       </button>
     </div>

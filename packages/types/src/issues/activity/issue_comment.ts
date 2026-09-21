@@ -6,7 +6,6 @@
 
 import type { JSONContent } from "../../editor";
 import type { EIssueCommentAccessSpecifier } from "../../enums";
-import type { TFileSignedURLResponse } from "../../file";
 import type { IUserLite } from "../../users";
 import type { IWorkspaceLite } from "../../workspace";
 import type {
@@ -52,7 +51,7 @@ export type TCommentsOperations = {
   createComment: (data: Partial<TIssueComment>) => Promise<Partial<TIssueComment> | undefined>;
   updateComment: (commentId: string, data: Partial<TIssueComment>) => Promise<void>;
   removeComment: (commentId: string) => Promise<void>;
-  uploadCommentAsset: (blockId: string, file: File, commentId?: string) => Promise<TFileSignedURLResponse>;
+  uploadCommentAsset: (blockId: string, file: File, commentId?: string) => Promise<{ asset_id: string }>;
   duplicateCommentAsset: (assetId: string, commentId?: string) => Promise<{ asset_id: string }>;
   addCommentReaction: (commentId: string, reactionEmoji: string) => Promise<void>;
   deleteCommentReaction: (commentId: string, reactionEmoji: string) => Promise<void>;

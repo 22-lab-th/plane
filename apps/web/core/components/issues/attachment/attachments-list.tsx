@@ -12,6 +12,7 @@ import type { TAttachmentHelpers } from "../issue-detail-widgets/attachments/hel
 // components
 import { IssueAttachmentsDetail } from "./attachment-detail";
 import { IssueAttachmentsUploadDetails } from "./attachment-upload-details";
+import { IssueProjectFileAttachmentCard } from "./project-file-attachment-card";
 
 type TIssueAttachmentsList = {
   issueId: string;
@@ -27,13 +28,13 @@ export const IssueAttachmentsList = observer(function IssueAttachmentsList(props
   } = useIssueDetail();
   // derived values
   const { snapshot: attachmentSnapshot } = attachmentHelpers;
-  const { uploadStatus } = attachmentSnapshot;
+  const { uploadStatus, projectFileAttachments, workspaceSlug, projectId } = attachmentSnapshot;
   const issueAttachments = getAttachmentsByIssueId(issueId);
 
   return (
     <>
-      {uploadStatus?.map((uploadStatus) => (
-        <IssueAttachmentsUploadDetails key={uploadStatus.id} uploadStatus={uploadStatus} />
+      {uploadStatus?.map((status) => (
+        <IssueAttachmentsUploadDetails key={status.id} uploadStatus={status} />
       ))}
       {issueAttachments?.map((attachmentId) => (
         <IssueAttachmentsDetail
@@ -41,6 +42,16 @@ export const IssueAttachmentsList = observer(function IssueAttachmentsList(props
           attachmentId={attachmentId}
           disabled={disabled}
           attachmentHelpers={attachmentHelpers}
+        />
+      ))}
+      {projectFileAttachments?.map((attachment) => (
+        <IssueProjectFileAttachmentCard
+          key={attachment.link.id}
+          workspaceSlug={workspaceSlug}
+          projectId={projectId}
+          attachment={attachment}
+          attachmentHelpers={attachmentHelpers}
+          disabled={disabled}
         />
       ))}
     </>
