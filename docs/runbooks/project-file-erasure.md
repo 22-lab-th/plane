@@ -32,11 +32,16 @@ plain id, not a foreign key, so the rows describing the file survive its deletio
 the action (`purged`), the file id and name snapshot, and `metadata.object_keys` — the
 exact keys that were deleted.
 
-What happens if storage refuses: the file row's status becomes `purge_failed`, its
-objects stay, no `purged` row is written, and the endpoint answers `502
-storage_unavailable`. The daily `purge_expired_files` task retries every `purge_failed`
-row regardless of age until the objects are gone. **A `502` is not a completed erasure**
-— retry and read step 4 back before confirming completion.
+What happens if storage refuses: the purge deletes versions one at a time, and a
+storage failure aborts the loop on the failing call. Versions the loop had already
+deleted before the failure are gone; the failing version and the ones after it are
+still stored; no `purged` row is written. The file row's status becomes
+`purge_failed`, the endpoint answers `502 storage_unavailable`, and the daily
+`purge_expired_files` task retries every `purge_failed` row regardless of age. The
+state is "some objects may already be gone, none recorded, repair pending" — not
+"objects stay" — so a `502` is **not** a completed erasure. Read step 4 back before
+confirming completion; the repair path (restore, then re-activate a version whose
+object is intact, or the next retry) is what restores the invariant.
 
 The audit residue itself is masked, not deleted: `mask_audit_pii` clears `ip_address`,
 `user_agent`, `actor_display` and `file_name_snapshot` after `AUDIT_PII_RETENTION_DAYS`
@@ -53,9 +58,17 @@ set cite, so record it for the project's notice once set.
 - `null` → `PROJECT_FILE_TRASH_DAYS` (owner-set default **30** days).
 - The purge selects a trashed file once `deleted_at + window` has passed, and the restore
   endpoint refuses the same file (`409 retention_expired`): a file is restorable exactly
-  while it is not yet purgeable, and the purge wins at the boundary (R-LIFE-1).
+  while it is not yet purgeable, and the purge wins at the boundary (R-LIFE-1) —
+  except a `purge_failed` row whose window has _not_ yet elapsed: the purge has
+  selected it, but the restore endpoint deliberately returns `200` so a partial purge
+  can be repaired, which the activation path enforces by refusing a version whose
+  bytes are gone.
 - The API refuses a value below 1 day. A stored `0` would be read as "not set" by the
   purge, which would silently grant a 30-day window to a project that asked for none.
+- The setting is read back on the project detail, create and update responses
+  (`ProjectSerializer`/`ProjectListSerializer`); the workspace project list
+  projection (`list_detail`) currently omits it. Read the setting from the project
+  detail when a quick-view is needed.
 
 ## 3. Holdings outside the automated mechanism
 
@@ -106,9 +119,14 @@ held by a processor are outside this system's reach.
 
 ### 3.4 What is not promised
 
-No claim is made that 3.1–3.3 are sufficient in law. The scope question — whether these
-exclusions satisfy the erasure obligation for this data — is item 5 of the required legal
-review and is an **owner action** recorded as open (REQ-001 R-LEG-4).
+No claim is made that 3.1–3.3 are sufficient in law. Whether these exclusions satisfy
+the erasure obligation for this data is an open legal question outside this runbook —
+the requirement is R-LEG-2, the erasure-scope sufficiency is R-LEG-2's residual, and
+the engineering side delivers the mechanism regardless. The owner decisions recorded
+against R-LEG-4 (no external counsel engaged, 2026-09-20; DPA assessment not performed;
+residual risk accepted with revisit triggers) and R-LEG-5 (default R2 placement, no
+jurisdiction) are accepted owner decisions, not open blockers — and the erasure-scope
+sufficiency is not one of the items the runbook can close.
 
 ## 4. Completion record
 
