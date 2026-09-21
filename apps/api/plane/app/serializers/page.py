@@ -131,6 +131,23 @@ class PageSerializer(BaseSerializer):
 class PageDetailSerializer(PageSerializer):
     description_html = serializers.CharField()
 
+    def validate_description_html(self, value):
+        """Sanitise the description on **every** route that writes it (DEFECT-012).
+
+        The description endpoint validates this field through
+        :class:`PageBinaryUpdateSerializer`; this serializer - used by the page
+        metadata route - accepted it too and stored it verbatim, so a malicious or
+        merely careless write could put script-capable markup into the row through a
+        door the sanitiser never saw. One rule, both routes.
+        """
+        if not value:
+            return value
+
+        is_valid, error_message, sanitized_html = validate_html_content(value)
+        if not is_valid:
+            raise serializers.ValidationError(error_message)
+        return sanitized_html if sanitized_html is not None else value
+
     class Meta(PageSerializer.Meta):
         fields = PageSerializer.Meta.fields + ["description_html"]
 

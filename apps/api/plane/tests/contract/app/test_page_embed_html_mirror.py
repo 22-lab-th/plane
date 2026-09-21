@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
 
-"""T-115 / DEFECT-011: a saved page keeps a project-file embed in its html mirror.
+"""T-115 / DEFECT-011 + DEFECT-012: the page's html mirror is sanitised on every route.
 
-``PageBinaryUpdateSerializer.validate_description_html`` writes the sanitised string
-back, so a reference the sanitiser drops is dropped from the row every save. These two
-tests pin the mirror: the reference survives, and a script-capable source does not.
+DEFECT-011: ``PageBinaryUpdateSerializer.validate_description_html`` writes the sanitised
+string back, so a reference the sanitiser drops is dropped from the row every save -
+the mirror must keep a project-file embed, and must still strip script-capable markup.
+
+DEFECT-012: the page **metadata** route wrote ``description_html`` through
+``PageDetailSerializer``, which validated nothing, so the same body that was sanitised on
+the description route put raw script markup in the row. Both routes now share one rule.
 """
 
 # Python imports
@@ -88,3 +92,64 @@ class TestPageSaveKeepsTheEmbed:
 
         page.refresh_from_db()
         assert "javascript:" not in (page.description_html or "")
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+class TestPageMetadataRouteSanitisesTheDescription:
+    """DEFECT-012: the metadata route is not a second, unvalidated door."""
+
+    def _page(self, workspace, create_user, name, identifier):
+        from plane.db.models import Page, Project, ProjectMember, ProjectPage
+
+        project = Project.objects.create(name=name, identifier=identifier, workspace=workspace)
+        ProjectMember.objects.create(
+            workspace=workspace, project=project, member=create_user, role=20, is_active=True
+        )
+        page = Page.objects.create(
+            workspace=workspace, owned_by=create_user, access=Page.PUBLIC_ACCESS, name=name
+        )
+        ProjectPage.objects.create(workspace=workspace, project=project, page=page)
+        return project, page
+
+    def test_hostile_markup_sent_to_the_metadata_route_is_stored_sanitised(
+        self, session_client, create_user, workspace
+    ):
+        project, page = self._page(workspace, create_user, "Metadata", "METADATA")
+
+        html = '<p>kept</p><img src="javascript:alert(1)" alt="x"><script>alert(2)</script>'
+        with (
+            mock.patch("plane.app.views.page.base.page_transaction.delay"),
+            mock.patch("plane.app.views.page.base.track_page_version.delay"),
+        ):
+            response = session_client.patch(
+                f"/api/workspaces/{workspace.slug}/projects/{project.id}/pages/{page.id}/",
+                {"description_html": html},
+                format="json",
+            )
+
+        assert response.status_code == 200, response.data
+        page.refresh_from_db()
+        stored = page.description_html or ""
+        assert "<p>kept</p>" in stored
+        assert "javascript:" not in stored
+        assert "<script" not in stored
+
+    def test_the_metadata_route_still_keeps_a_project_file_embed(self, session_client, create_user, workspace):
+        """The door is closed without losing what DEFECT-011 opened it for."""
+        project, page = self._page(workspace, create_user, "Metadata embed", "METAEMBED")
+
+        html = f'<image-component src="{REF}" status="uploaded"></image-component>'
+        with (
+            mock.patch("plane.app.views.page.base.page_transaction.delay"),
+            mock.patch("plane.app.views.page.base.track_page_version.delay"),
+        ):
+            response = session_client.patch(
+                f"/api/workspaces/{workspace.slug}/projects/{project.id}/pages/{page.id}/",
+                {"description_html": html},
+                format="json",
+            )
+
+        assert response.status_code == 200, response.data
+        page.refresh_from_db()
+        assert f'src="{REF}"' in (page.description_html or "")
