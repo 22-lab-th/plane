@@ -34,10 +34,13 @@ an incident is running.
 - **Awareness** for this system is fixed as: the moment a person on the team
   reads a report, alert or message that describes the event — not the moment an
   unattended alert fired, and not the moment the investigation concluded. Write
-  that timestamp down first; every later deadline is computed from it.
-  Consequence: if nobody reads the file-related signals, the clock is not
-  governed by this runbook at all. A monitoring window (who reads what, how
-  often) is an owner action (§7).
+  that timestamp down first; every later deadline is computed from it. This is
+  the runbook's **working reading of an unsettled statutory term**, not a
+  verified construction of "becoming aware" (no counsel has reviewed it, R-LEG-4)
+  — it exists so an incident has one timestamp everyone uses, and the owner
+  should confirm it. Consequence: if nobody reads the file-related signals, the
+  clock is not governed by this runbook at all. A monitoring window (who reads
+  what, how often) is an owner action (§7).
 - **The clock does not pause for the processor leg** (§5). Start the Office
   filing on 22lab's own awareness and 22lab's own evidence.
 - If the deadline cannot be met, the PDPC notification's Clause 7 provides a
@@ -90,6 +93,15 @@ columns in that window have already been cleared.
 
 - **Who files:** the 22lab owner. **Where:** the PDPC Office's notification
   channel. **By when:** 72 hours from awareness (§1).
+- **This presumes 22lab owes a controller's filing duty.** Whether 22lab is
+  controller or processor for customer-uploaded project files is an explicitly
+  open question (`RSCH-002` §7 item 1: whether those files contain personal data
+  at all, and which role 22lab holds, is unsettled and unreviewed). The duties in
+  this runbook are the controller's; a processor's duty is to notify the
+  controller, and if that analysis lands differently this section changes with
+  it. The markers are the same kind as the definition in §2 and the Clause 6
+  list below: what is verified here is the mechanism, not the role. Owner action,
+  listed in §7.
 - **What the notification carries.** The PDPC notification's Clause 6 makes the
   content mandatory; the _exact enumeration in the Thai text has not been
   verified in this tree_ (the retrieved source records the Clause's existence,
@@ -163,23 +175,24 @@ Operational consequence, and why this section exists as a separate path:
 Fill this in as the incident runs; the row that is empty at the end is a gap in
 the notice, not a detail to reconstruct later.
 
-| #   | Item                                                                                | Where it comes from                                           | Filled by         |
-| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------- |
-| 1   | Awareness timestamp (who read what, when)                                           | §1                                                            | incident lead     |
-| 2   | What happened, in one paragraph                                                     | §2                                                            | incident lead     |
-| 3   | Event class from §2's table                                                         | §2                                                            | incident lead     |
-| 4   | Affected workspace, project, file ids, version numbers and object keys              | `file_objects`, `file_versions`                               | platform engineer |
-| 5   | Affected data subjects or categories, and the count                                 | `file_access_logs` actor ids, uploader ids, workspace members | platform engineer |
-| 6   | Audit rows: actor, action, timestamp, ip_address, user_agent (never the signed URL) | `file_access_logs` for the affected files and window          | platform engineer |
-| 7   | System records: presign / finalize / delete events and outcomes in the window       | `plane.files` JSON records (`file_record` payloads)           | platform engineer |
-| 8   | Whether any signed URL is still live, and when it expires                           | `SIGNED_URL_EXPIRATION` and the issuing timestamp             | platform engineer |
-| 9   | Containment actions with timestamps and the resulting state                         | §2 surfaces + the deployment log                              | whoever acts      |
-| 10  | R2 Data Access Logs request and response (or the reason they cannot be used)        | Cloudflare console/API                                        | owner             |
-| 11  | Cloudflare written notice (reference, timeframe, keys)                              | §5                                                            | owner             |
-| 12  | Office notification: filed at (UTC), reference, and the text sent                   | §3                                                            | owner             |
-| 13  | Data-subject notice: trigger decision, the text, and the time sent                  | §4                                                            | owner             |
-| 14  | Reportability decision and reasoning, including "not reportable"                    | §3                                                            | owner             |
-| 15  | Data-subject erasure requests that arrive as a follow-on                            | `docs/runbooks/project-file-erasure.md`                       | platform engineer |
+| #   | Item                                                                                | Where it comes from                                                | Filled by         |
+| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------- |
+| 1   | Awareness timestamp (who read what, when)                                           | §1                                                                 | incident lead     |
+| 2   | What happened, in one paragraph                                                     | §2                                                                 | incident lead     |
+| 3   | Event class from §2's table                                                         | §2                                                                 | incident lead     |
+| 4   | Affected workspace, project, file ids, version numbers and object keys              | `file_objects`, `file_versions`                                    | platform engineer |
+| 5   | Affected data subjects or categories, and the count                                 | `file_access_logs` actor ids, uploader ids, workspace members      | platform engineer |
+| 6   | Audit rows: actor, action, timestamp, ip_address, user_agent (never the signed URL) | `file_access_logs` for the affected files and window               | platform engineer |
+| 7   | System records: presign / finalize / delete events and outcomes in the window       | `plane.files` JSON records (`file_record` payloads)                | platform engineer |
+| 8   | Whether any signed URL is still live, and when it expires                           | `SIGNED_URL_EXPIRATION` and the issuing timestamp                  | platform engineer |
+| 9   | Containment actions with timestamps and the resulting state                         | §2 surfaces + the deployment log                                   | whoever acts      |
+| 10  | R2 Data Access Logs request and response (or the reason they cannot be used)        | Cloudflare console/API                                             | owner             |
+| 11  | Cloudflare written notice (reference, timeframe, keys)                              | §5                                                                 | owner             |
+| 12  | Office notification: filed at (UTC), reference, and the text sent                   | §3                                                                 | owner             |
+| 13  | Data-subject notice: trigger decision, the text, and the time sent                  | §4                                                                 | owner             |
+| 14  | Reportability decision and reasoning, including "not reportable"                    | §3                                                                 | owner             |
+| 15  | Data-subject erasure requests that arrive as a follow-on                            | `docs/runbooks/project-file-erasure.md`                            | platform engineer |
+| 16  | The contact person for follow-up (name, role, channel) that the notice names        | §3's content list; an owner appointment, not recorded in this tree | owner             |
 
 Two properties of the design worth knowing while filling this in: the audit rows
 survive the file they describe (so a purge does not erase the evidence), and once
@@ -190,11 +203,12 @@ task runs; after masking they cannot be recovered.
 
 ## 7. What this runbook does not cover — owner actions
 
-| Item                                                                                                         | Why it matters                                                                                                                                                                                         | Status                                                                |
-| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| The individual incident lead and on-call rota, and the monitoring window that reads the file-related signals | §1's awareness definition assumes a person reads them                                                                                                                                                  | Not recorded anywhere in this tree — owner action                     |
-| Reportability analysis and the notification wording                                                          | §3, §4                                                                                                                                                                                                 | Owner action; no counsel engaged (R-LEG-4, 2026-09-20)                |
-| The Cloudflare account id, contact route and whether R2 Data Access Logs are enabled                         | §5, checklist 10                                                                                                                                                                                       | Not recorded in this tree — owner action                              |
-| A tabletop walkthrough of this runbook                                                                       | R-NFR-12 asks for the runbook to be reviewed by the owner **and** a tabletop walkthrough recorded as evidence. Neither has happened: the runbook is written and registered, no walkthrough is recorded | Owner action                                                          |
-| Breaches outside project files (SSO/OIDC, billing, the legacy `FileAsset` surface)                           | This runbook scopes to project-file personal data                                                                                                                                                      | Separate surfaces — the OIDC runbook is `docs/bmad/sso-operations.md` |
-| Whether the R2 Data Access Logs are themselves personal data that needs notice, retention and erasure        | The logs carry IP and user agent (RSCH-002 §7 item 7)                                                                                                                                                  | Open legal question, owner decision with no counsel engaged           |
+| Item                                                                                                                                          | Why it matters                                                                                                                                                                                         | Status                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Whether 22lab is controller or processor for project-file personal data, and whether those files hold personal data at all (§3's presumption) | The filing duty this runbook organises is the controller's; RSCH-002 §7 item 1 records the role analysis as an open question needing a qualified Thai review                                           | Open legal question, owner decision with no counsel engaged           |
+| The individual incident lead and on-call rota, and the monitoring window that reads the file-related signals                                  | §1's awareness definition assumes a person reads them                                                                                                                                                  | Not recorded anywhere in this tree — owner action                     |
+| Reportability analysis and the notification wording                                                                                           | §3, §4                                                                                                                                                                                                 | Owner action; no counsel engaged (R-LEG-4, 2026-09-20)                |
+| The Cloudflare account id, contact route and whether R2 Data Access Logs are enabled                                                          | §5, checklist 10                                                                                                                                                                                       | Not recorded in this tree — owner action                              |
+| A tabletop walkthrough of this runbook                                                                                                        | R-NFR-12 asks for the runbook to be reviewed by the owner **and** a tabletop walkthrough recorded as evidence. Neither has happened: the runbook is written and registered, no walkthrough is recorded | Owner action                                                          |
+| Breaches outside project files (SSO/OIDC, billing, the legacy `FileAsset` surface)                                                            | This runbook scopes to project-file personal data                                                                                                                                                      | Separate surfaces — the OIDC runbook is `docs/bmad/sso-operations.md` |
+| Whether the R2 Data Access Logs are themselves personal data that needs notice, retention and erasure                                         | The logs carry IP and user agent (RSCH-002 §7 item 7)                                                                                                                                                  | Open legal question, owner decision with no counsel engaged           |

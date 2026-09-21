@@ -7,12 +7,14 @@ production, MinIO in the local stack). Requirement R-NFR-7; acceptance AC-32.
 A recorded restore drill is in §4.
 
 **The database backup and the object store are one recovery unit.** Neither half
-is a recovery on its own: with the rows restored and the objects missing, the
+is a recovery on its own. With the rows restored and the objects missing, the
 application answers normally and every download fails at the fetch (§4, step 8 —
-observed, not assumed); with the objects restored and the rows missing, the
-objects cannot be reached at all, because no application job deletes or lists
-keys the database does not name (AD-12, AD-13). Restore both, from the same
-point in time, or you have restored nothing.
+observed, not assumed). With the objects restored and the rows missing, the
+objects cannot be reached at all, because no file-serving or file-cleanup path
+finds work by listing the bucket and nothing deletes a key the database does not
+name (AD-12, AD-13) — that half is a design argument from those decisions, not a
+drill result, and §4 lists it as such. Restore both, from the same point in
+time, or you have restored nothing.
 
 Owner: the **22lab owner** — the accountable role recorded in the decision log
 and named in the erasure runbook. The database backup's schedule, retention,
@@ -39,12 +41,15 @@ Two properties that decide what a restore can be:
   restore that changes a key breaks the row that names it, permanently: the old
   object is unreachable and the row points at nothing. Copy objects back to the
   keys the rows carry, and nothing else.
-- **An object whose row does not exist is invisible, not merely orphaned.** The
-  application never lists the bucket to discover work: the unverified-object
-  sweep evaluates its predicate in the database and deletes exact stored keys
-  (AD-13), and no lifecycle rule targets a project prefix (AD-12). A stray
-  object therefore sits in the bucket with nothing pointing at it and no job
-  that will ever collect it — clean it up by hand or not at all.
+- **An object whose row does not exist is invisible, not merely orphaned.** No
+  file-serving or file-cleanup path discovers work by listing the bucket: the
+  unverified-object sweep evaluates its predicate in the database and deletes
+  exact stored keys (AD-13), and no lifecycle rule targets a project prefix
+  (AD-12). The one command in the tree that does list the bucket is
+  `db/management/commands/update_bucket.py`, which reads the listing to probe
+  `s3:ListBucket` and to build a bucket policy — it deletes nothing and repairs
+  nothing. A stray object therefore sits in the bucket with nothing pointing at
+  it and no job that will ever collect it — clean it up by hand or not at all.
 
 ## 2. The restore procedure
 
@@ -63,16 +68,25 @@ undefined.
 
 **2. Restore the database, then the objects.**
 
+The restore itself starts from a backup you already hold. In the drill the
+backup was taken from the healthy stack immediately before the destruction — that
+is how a drill gets a known-good recovery point — and the commands below are the
+pair as executed; **in an incident, take the dump from an existing pre-incident
+backup set, never by dumping the database you suspect is damaged** (step 1's
+recovery point is what you restore from):
+
 ```bash
-# database — custom-format dump, then restore into an empty database
+# taking the backup (the drill's step 6; how the deployment's backup job should read)
 pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/plane.dump
+mc mirror --overwrite local/uploads /path/to/object-backup/uploads   # the object half, same run
+
+# restoring from it (the drill's steps 8-9)
 psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\" WITH (FORCE)"
 psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""
 pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges /tmp/plane.dump
 python manage.py migrate --noinput   # when the dump predates the release that will run
 
-# objects — copy the mirrored tree back under the keys it came from
-mc mirror --overwrite /path/to/object-backup/uploads local/uploads   # MinIO / S3-compatible
+mc mirror --overwrite /path/to/object-backup/uploads local/uploads   # back under the keys it came from
 # against R2: the same relative paths through an R2 alias, rclone, or the provider's
 # tool. Never rename a key.
 ```
@@ -139,10 +153,13 @@ covers. It does not, and none of them is claimed elsewhere in this repository:
   deployment has exactly the durability its provider offers and whatever copy
   the backup job makes.
 - **Retention, schedule and medium of the database backup.** Owner/deployment
-  configuration. The erasure runbook records the same gap for the same reason
-  (its §3.2), and R-LEG-2 makes the backup copies part of the erasure scope.
-  Until the owner fixes these numbers, RPO cannot be stated — R-NFR-7 says only
-  that the deployment's RPO/RTO must not be worsened.
+  configuration. R-LEG-2 **excludes** 22lab's database backups from the automated
+  purge and requires them to be named with a manual executor instead
+  (`artifacts/REQUIREMENTS.md:172`), and the erasure runbook's §3.2 is that manual
+  procedure: it names the 22lab platform owner, the confirm-against-retention or
+  restore-and-repurge choice, and the record to write. Until the owner fixes the
+  backup's numbers, RPO cannot be stated — R-NFR-7 says only that the
+  deployment's RPO/RTO must not be worsened.
 - **The drill proves the procedure, not production scale.** The recorded run
   restores one 1 MiB object on a local Postgres 15.7 and MinIO; its seconds are
   not an RTO. It also does not exercise: R2's own copy/restore tools, R2 Data
@@ -150,20 +167,25 @@ covers. It does not, and none of them is claimed elsewhere in this repository:
   parallel restore, or a restore into a different host.
 - **The legacy `FileAsset` objects.** They live in the same bucket under their
   own keys with their own rows, so the same procedure moves them; nothing here
-  verifies the legacy asset surface. The regression guarantee is T-117's.
+  verifies the legacy asset surface. The regression guarantee is T-117's, and it
+  is a fence with known gaps: two legacy routes are not fenced at all
+  (`asset/v2.py:483`, `:915`), two of its assertions cannot fail in its fixture,
+  and the legacy PATCH path is not exercised
+  (`artifacts/verification/NOTE-T117-legacy-fence-coverage.md`).
 - **Backup of anything else in the database** (issues, pages, SSO identities,
   etc.) is covered by the deployment's PostgreSQL backup — the same dump — but
   this runbook only verifies the file surfaces.
 
 ## 4. The recorded restore drill
 
-Run date **2026-09-21**, recorded at head `74ab9a57ac`, on this machine against
+Run date **2026-09-21**, recorded at head `87a8eaf3df`, on this machine against
 an isolated podman stack (project `drdrill`; `podman 6.0.0`,
-`podman-compose 1.6.0`; `postgres:15.7-alpine` + the MinIO image the test stack
-pins — the S3-compatible stack the contract suite is proven against). The API
+`podman-compose 1.6.0`; `postgres:15.7-alpine` plus the test stack's MinIO image,
+which `docker-compose-test.yml:75` names as `minio/minio` **untagged** — the
+valkey and rabbitmq images beside it are pinned, MinIO is not). The API
 code under test is the working tree mounted into `localhost/plane_api-tests:latest`.
 The drill's inputs are the local containers, that image and the seed script;
-the documentation commit that adds this runbook changes none of them. Script:
+the documentation commits that carry this runbook change none of them. Script:
 `artifacts/evidence/T-121/drill.sh`; transcript with every command, exit code
 and timestamp: `artifacts/evidence/T-121/transcript.txt`; the two helper scripts
 it drives (`drill_seed.py`, `drill_verify.py`), the manifest, the dump, the
@@ -177,10 +199,10 @@ What the drill did, in order:
 | 3    | Seeded one file through the product's code path: workspace → project → `build_object_key` → `S3Storage.upload_file` → `file_objects` + `file_versions` rows                                                                                                                                                          | 1 MiB, sha256 `09358cb6…d107fcab`, ETag `b4790067…920354c` recorded in `manifest.json`                                                                                                                                                                                                                                                                            |
 | 4    | Baseline verification (see below)                                                                                                                                                                                                                                                                                    | 5/5 checks PASS, exit 0                                                                                                                                                                                                                                                                                                                                           |
 | 5    | Pre-disaster inventory: row counts, the version row (id, key, size, ETag), the full object listing as JSON                                                                                                                                                                                                           | recorded to `pre-db-rows.txt`, `pre-objects.jsonl`                                                                                                                                                                                                                                                                                                                |
-| 6    | **Backup:** `pg_dump -Fc` → `backup/plane.dump` (724 588 bytes, sha256 `f538f706…05ca69d9` in the transcript); bucket mirrored → `backup/objects/uploads/<key>` (object sha256 `09358cb6…d107fcab`, identical to the seeded bytes); the in-container mirror was then deleted so the only copy is outside both stores | backup_elapsed **1 s**                                                                                                                                                                                                                                                                                                                                            |
+| 6    | **Backup:** `pg_dump -Fc` → `backup/plane.dump` (724 590 bytes, sha256 `7e7daab4…949f7fe5` in the transcript); bucket mirrored → `backup/objects/uploads/<key>` (object sha256 `09358cb6…d107fcab`, identical to the seeded bytes); the in-container mirror was then deleted so the only copy is outside both stores | backup_elapsed **1 s**                                                                                                                                                                                                                                                                                                                                            |
 | 7    | **Destroy both halves:** every object removed from the bucket; the database dropped (`DROP DATABASE plane WITH (FORCE)`) and recreated empty                                                                                                                                                                         | object listing empty; `public_tables=0`                                                                                                                                                                                                                                                                                                                           |
-| 8    | **Restore the database only**, then verify                                                                                                                                                                                                                                                                           | rows present (1 file, 1 version) and the endpoint answers `200` with a signed URL, but the fetch is **HTTP 404 `NoSuchKey`** and the HEAD returns nothing → verification exits 0 only because "degraded" was the expected observation. **This is the drill's central result: a database-only restore looks healthy and is not.** restore_database_elapsed **3 s** |
-| 9    | **Restore the objects**, re-run the verification with "full" expected                                                                                                                                                                                                                                                | 5/5 checks PASS: rows consistent, HEAD size matches, endpoint `200`, fetched sha256 equals the pre-disaster sha256, audit row present → total restore **5 s**                                                                                                                                                                                                     |
+| 8    | **Restore the database only**, then verify                                                                                                                                                                                                                                                                           | rows present (1 file, 1 version) and the endpoint answers `200` with a signed URL, but the fetch is **HTTP 404 `NoSuchKey`** and the HEAD returns nothing → verification exits 0 only because "degraded" was the expected observation. **This is the drill's central result: a database-only restore looks healthy and is not.** restore_database_elapsed **2 s** |
+| 9    | **Restore the objects**, re-run the verification with "full" expected                                                                                                                                                                                                                                                | 5/5 checks PASS: rows consistent, HEAD size matches, endpoint `200`, fetched sha256 equals the pre-disaster sha256, audit row present → total restore **4 s**                                                                                                                                                                                                     |
 | 9b   | The operator command of §2 step 3, verbatim                                                                                                                                                                                                                                                                          | `live_versions=1 size_mismatches=0`                                                                                                                                                                                                                                                                                                                               |
 | 10   | Post-restore inventory compared with the pre-disaster one                                                                                                                                                                                                                                                            | object identity (key, size, ETag) identical, database rows identical, table count identical — three diffs, all empty. The raw object listing differs in exactly one field: `lastModified` (the restore rewrote the object)                                                                                                                                        |
 | 11   | Summary                                                                                                                                                                                                                                                                                                              | every step's exit code 0 → `DRILL RESULT: PASS`; total wall clock 83 s                                                                                                                                                                                                                                                                                            |
@@ -196,20 +218,27 @@ The two verification phases report five checks each:
 5. the `downloaded` row the endpoint wrote to `file_access_logs` is present
    (the audit tail survives the disaster and the restore).
 
-What the drill demonstrated: the backup and restore procedure in §2 is
-executable and repeatable; the two halves really are one recovery unit (a
-database-only restore fails only at the fetch); a completed restore is
-byte-identical at the object level and row-identical at the database level; the
-download path of the restored system serves the original bytes; the audit trail
-comes back with the database.
+What the drill demonstrated: **§2 steps 2–4** — the dump plus object mirror, the
+drop and recreate, the restore of both halves, the per-version sweep and the
+fetch through the download endpoint — are executable and repeatable (the
+verifier's own re-run produced the same outcomes); the two halves really are one
+recovery unit (a database-only restore fails only at the fetch); a completed
+restore is byte-identical at the object level and row-identical at the database
+level; the download path of the restored system serves the original bytes; the
+audit trail comes back with the database.
 
-What the drill did not demonstrate, and must not be read into it: anything about
-R2 as a provider (its own copy tools, snapshot semantics, tokens, Data Access
-Logs, jurisdictional behaviour); the production bucket or database; the backup
-schedule, retention or medium; a restore at production size; a restore on a
-different host; and the reconciliation job of §2 step 5, whose bucket cross-check
-the local MinIO cannot answer. The drill also did not exercise an _upload_
-through the restored system — only the read path.
+What the drill did not demonstrate, and must not be read into it: **§2 step 1**
+(the freeze) — the drill stack runs no persistent API or worker, so there were no
+live writers to stop, and the drill cannot show what a freeze costs or whether
+the maintenance window is realistic; **§2 step 5** — the reconciliation job was
+not run (it needs a Celery-less direct call, and its bucket cross-check cannot
+answer against MinIO); the reverse half of the "one recovery unit" claim
+(objects without rows are unreachable) is a design argument from AD-12/AD-13, not
+an observation. Nothing about R2 as a provider (its own copy tools, snapshot
+semantics, tokens, Data Access Logs, jurisdictional behaviour); the production
+bucket or database; the backup schedule, retention or medium; a restore at
+production size; a restore on a different host. The drill also did not exercise
+an _upload_ through the restored system — only the read path.
 
 ## 5. After a real recovery
 
