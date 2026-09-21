@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IProjectFolder } from "@/services/project-file.service";
-import { getFolderMoveDestinations } from "./folder-management";
+import { getFolderMoveDestinations, getFolderPath } from "./folder-management";
 
 const makeFolder = (id: string, name: string, parent_id: string | null, depth: number): IProjectFolder => ({
   id,
@@ -37,5 +37,18 @@ describe("getFolderMoveDestinations", () => {
       "zulu",
       "deep",
     ]);
+  });
+});
+
+describe("folder destination paths", () => {
+  it("distinguishes identically named folders in separate branches", () => {
+    const folders = [
+      makeFolder("engineering", "Engineering", null, 0),
+      makeFolder("finance", "Finance", null, 0),
+      makeFolder("a", "Archive", "engineering", 1),
+      makeFolder("b", "Archive", "finance", 1),
+    ];
+    expect(getFolderPath(folders, "a")).toBe("Engineering / Archive");
+    expect(getFolderPath(folders, "b")).toBe("Finance / Archive");
   });
 });

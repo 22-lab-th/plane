@@ -18,7 +18,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: [["list"], ["html", { outputFolder: "playwright-report/files", open: "never" }]],
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: process.env.E2E_WEB_URL || "http://127.0.0.1:3000",
     ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

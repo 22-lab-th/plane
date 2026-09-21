@@ -22,6 +22,7 @@ from .file import (
     FileFolder,
     FileJob,
     FileLink,
+    FileCopyCleanup,
     FileObject,
     FileVersion,
     ProjectStorageUsage,

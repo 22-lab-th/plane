@@ -29,7 +29,7 @@ from plane.license.api.serializers import InstanceConfigurationSerializer
 from plane.license.utils.encryption import encrypt_data
 from plane.utils.cache import cache_response, invalidate_cache
 from plane.license.utils.instance_value import get_email_configuration, get_storage_configuration
-from plane.db.models import FileAsset, FileVersion, ExporterHistory
+from plane.db.models import FileAsset, FileVersion, ExporterHistory, FileCopyCleanup
 from plane.authentication.services import (
     has_normal_authentication_method,
     has_usable_sso_authentication,
@@ -111,9 +111,14 @@ class InstanceConfigurationEndpoint(BaseAPIView):
 
             InstanceConfiguration.objects.bulk_update(bulk_configurations, ["value"], batch_size=100)
             current_storage = get_storage_configuration()
+            if {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}.intersection(request.data) and (
+                bool(current_storage["access_key_id"]) != bool(current_storage["secret_access_key"])
+            ):
+                raise ValidationError({"AWS_ACCESS_KEY_ID": "Provide both credentials or leave both blank."})
             identity = ("provider", "endpoint_url", "bucket_name")
             if any(previous_storage[key] != current_storage[key] for key in identity) and (
-                FileAsset.all_objects.exists()
+                FileCopyCleanup.objects.exists()
+                or FileAsset.all_objects.exists()
                 or FileVersion.all_objects.exists()
                 or ExporterHistory.all_objects.exclude(key__isnull=True).exclude(key="").exists()
             ):

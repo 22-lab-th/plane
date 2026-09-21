@@ -78,6 +78,10 @@ app.conf.beat_schedule = {
         "task": "plane.bgtasks.file_sweep_task.cleanup_unverified_objects",
         "schedule": crontab(minute=40),  # UTC :40 of every hour
     },
+    "check-every-hour-to-clean-up-failed-copies": {
+        "task": "plane.bgtasks.file_sweep_task.cleanup_failed_copies",
+        "schedule": crontab(minute=50),
+    },
     "check-every-day-to-recheck-deleted-objects": {
         "task": "plane.bgtasks.file_sweep_task.recheck_deleted_objects",
         "schedule": crontab(hour=2, minute=45),  # UTC 02:45

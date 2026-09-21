@@ -26,6 +26,7 @@ from rest_framework.test import APIClient
 # Module imports
 from plane.db.models import (
     FileAccessLog,
+    FileCopyCleanup,
     FileFolder,
     FileLink,
     FileObject,
@@ -752,3 +753,55 @@ class TestOperationPermissions:
 
         assert rename.status_code == status.HTTP_404_NOT_FOUND
         assert copy.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_timed_out_copy_keeps_durable_key_and_retries_cleanup(session_client, project, stored_objects):
+    from datetime import timedelta
+    from plane.utils.file_storage.copy_cleanup import cleanup_copy_keys
+
+    source = make_file(project, name="Timeout.pdf", stored_objects=stored_objects)
+    original_copy = S3Storage.copy_object
+    attempted_keys = []
+
+    def write_then_timeout(storage, source_key, target_key):
+        # Ownership must already be committed before the remote write happens.
+        assert FileCopyCleanup.objects.filter(object_key=target_key).exists()
+        original_copy(storage, source_key, target_key)
+        attempted_keys.append(target_key)
+        stored_objects.append(target_key)
+        raise TimeoutError("response lost after remote write")
+
+    with mock.patch.object(S3Storage, "copy_object", write_then_timeout), mock.patch.object(
+        S3Storage, "delete_files", return_value=False
+    ):
+        response = session_client.post(copy_url(project.workspace.slug, project.id, source.id), {}, format="json")
+    assert response.status_code == 502
+    assert FileObject.objects.filter(project=project).count() == 1
+    row = FileCopyCleanup.objects.get(object_key=attempted_keys[0])
+    assert row.last_deleted_at is None
+    assert object_exists(row.object_key)
+    FileCopyCleanup.objects.filter(pk=row.pk).update(next_cleanup_at=timezone.now() - timedelta(seconds=1))
+    assert cleanup_copy_keys()["deleted"] == 1
+    assert not object_exists(row.object_key)
+    assert object_exists(source.object_key)
+    # A provider can finish late, even after an acknowledged delete. The key
+    # remains journalled and the scheduled retry removes the resurrection.
+    original_copy(S3Storage(), source.object_key, row.object_key)
+    FileCopyCleanup.objects.filter(pk=row.pk).update(next_cleanup_at=timezone.now() - timedelta(seconds=1))
+    assert cleanup_copy_keys()["deleted"] == 1
+    assert not object_exists(row.object_key)
+    assert FileCopyCleanup.objects.filter(pk=row.pk).exists()
+
+
+@pytest.mark.contract
+@pytest.mark.django_db(transaction=True)
+def test_successful_copy_transfers_journal_ownership_to_version(session_client, project, stored_objects):
+    source = make_file(project, name="Success.pdf", stored_objects=stored_objects)
+    response = session_client.post(copy_url(project.workspace.slug, project.id, source.id), {}, format="json")
+    assert response.status_code == 200
+    copied = FileObject.objects.get(pk=response.data["file"]["id"])
+    stored_objects.append(copied.object_key)
+    assert not FileCopyCleanup.objects.exists()
+    assert object_exists(copied.object_key)

@@ -239,3 +239,18 @@ class TestProviderConfiguration:
         for client in (storage.s3_client, storage.presign_s3_client):
             assert client.meta.config.s3["addressing_style"] == "virtual"
             assert client.meta.config.signature_version == "s3v4"
+
+
+@pytest.mark.unit
+def test_blank_credentials_use_botocore_provider_chain(monkeypatch):
+    import boto3
+    from botocore.credentials import Credentials
+
+    session = boto3.Session()
+    monkeypatch.setattr(boto3, "client", session.client)
+    credentials = Credentials("role-key", "role-secret")
+    with patch.object(session._session, "get_credentials", return_value=credentials) as chain:
+        storage = make_storage({"AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "", "USE_MINIO": "0"})
+        result = storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)
+    chain.assert_called_once()
+    assert credential_scope(result["url"]).startswith("role-key/")

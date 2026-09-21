@@ -30,6 +30,7 @@ a client that sends the field here is refused rather than silently copied in pla
 # Python imports
 from dataclasses import dataclass
 from uuid import uuid4
+from datetime import timedelta
 
 # Django imports
 from django.db import IntegrityError, transaction
@@ -63,6 +64,7 @@ from plane.db.models import (
     FileAccessLog,
     FileFolder,
     FileLink,
+    FileCopyCleanup,
     FileObject,
     FileVersion,
     Issue,
@@ -246,7 +248,8 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
         counters, audit rows) and its objects are deleted, and the source is never
         touched (AC-42).
     """
-    bucket = get_storage_configuration()["bucket_name"]
+    configuration = get_storage_configuration()
+    bucket = configuration["bucket_name"]
     versions = list(
         source.versions.filter(status__in=GOOD_VERSION_STATUSES, object_deleted_at__isnull=True).order_by(
             "version_no"
@@ -293,10 +296,23 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
     key_by_version = {version.pk: object_key for version, object_key in plan}
 
     storage = S3Storage(request=request)
-    copied_keys = []
+    # Commit ownership before any provider call, even one that times out after
+    # writing. durable=True refuses callers that would roll this journal back.
+    with transaction.atomic(durable=True):
+        cleanup_rows = FileCopyCleanup.objects.bulk_create([
+            FileCopyCleanup(
+                object_key=key, bucket=bucket, provider=configuration["provider"],
+                endpoint_url=configuration["endpoint_url"] or "",
+                next_cleanup_at=timezone.now() + timedelta(hours=1),
+            )
+            for _, key in plan
+        ])
+    cleanup_ids = [row.pk for row in cleanup_rows]
 
     try:
         with transaction.atomic():
+            # A cleaner skips locked attempts while this copy is still running.
+            list(FileCopyCleanup.objects.select_for_update().filter(pk__in=cleanup_ids))
             quota_row, usage_row = quota.lock_usage_rows(target_project)
             # The ceiling is evaluated before a single byte is duplicated, and the
             # workspace row stays locked for the whole copy, so nothing can take the
@@ -306,8 +322,8 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
             for source_version, object_key in plan:
                 # ``copy_object`` reports a failed call as ``None``, but the client can
                 # also raise outside ``ClientError`` (a connection error or a timeout);
-                # both mean the copy did not happen, so both answer the same 502 instead
-                # of an unhandled 500.
+                # both have an unknown remote outcome. The journal owns every key
+                # before the call, including a timed-out copy that completes later.
                 try:
                     copied = storage.copy_object(source_version.object_key, object_key)
                 except Exception as exc:
@@ -320,7 +336,6 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
                         code="storage_unavailable",
                         status_code=status.HTTP_502_BAD_GATEWAY,
                     )
-                copied_keys.append(object_key)
 
             file_object = FileObject(
                 id=new_file_id,
@@ -397,21 +412,17 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
             if audit is not None:
                 audit(copied_file)
 
+            FileCopyCleanup.objects.filter(pk__in=cleanup_ids).delete()
             return copied_file
     except Exception:
-        # Objects are copied outside the database transaction's protection, so a failed
-        # copy must not leave bytes nobody can see or purge - the same guard covers a
-        # verification refusal, whose rows the transaction rolls back. The rollback is
-        # best-effort by necessity (the original failure is what the caller must see),
-        # but a provider that refuses the delete leaves orphan bytes with no row, so that
-        # verdict is said out loud instead of swallowed.
-        if copied_keys and not storage.delete_files(copied_keys):
-            log_exception(
-                RuntimeError(
-                    f"the rollback of a failed copy could not delete {len(copied_keys)} object(s); they are "
-                    "stored under the target project's prefix with no row naming them"
-                )
-            )
+        # Preserve the original error if cleanup also fails. Tombstones survive
+        # successful deletion too, so a late provider write remains discoverable.
+        from plane.utils.file_storage.copy_cleanup import cleanup_copy_keys
+
+        try:
+            cleanup_copy_keys(ids=cleanup_ids)
+        except Exception as exc:
+            log_exception(exc)
         raise
 
 

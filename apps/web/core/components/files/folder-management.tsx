@@ -195,6 +195,20 @@ export function getFolderMoveDestinations(folders: IProjectFolder[], movingFolde
     }, []);
 }
 
+/** Include ancestors so equal names in different branches remain distinguishable. */
+export function getFolderPath(folders: IProjectFolder[], folderId: string): string {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const names: string[] = [];
+  const visited = new Set<string>();
+  let current = byId.get(folderId);
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    names.unshift(current.name);
+    current = current.parent_id ? byId.get(current.parent_id) : undefined;
+  }
+  return names.join(" / ");
+}
+
 function FolderMoveDialog(props: FolderMoveDialogProps) {
   const { isOpen, folder, folders, isLoading, loadError, onRetry, onClose, onSubmit } = props;
   const [parentId, setParentId] = useState<string | null>(folder.parent_id);
@@ -273,12 +287,12 @@ function FolderMoveDialog(props: FolderMoveDialogProps) {
                   role="radio"
                   aria-checked={parentId === destination.id}
                   className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-body-xs-regular text-primary hover:bg-layer-1"
-                  style={{ paddingLeft: `${8 + Math.min(destination.depth, 8) * 16}px` }}
+                  title={getFolderPath(folders, destination.id)}
                   onClick={() => setParentId(destination.id)}
                   disabled={isSubmitting || folder.parent_id === destination.id}
                 >
                   <FolderPlus className="size-4 shrink-0 text-tertiary" aria-hidden="true" />
-                  <span className="truncate">{destination.name}</span>
+                  <span className="break-words">{getFolderPath(folders, destination.id)}</span>
                 </button>
               ))
             )}

@@ -11,6 +11,8 @@ an overwrite), and quota counters live under one row per workspace and one row
 per project so the ceiling is serialised at a single point.
 """
 
+from uuid import uuid4
+
 # Django imports
 from django.db import models
 from django.db.models import Q
@@ -515,3 +517,23 @@ class ProjectStorageUsage(BaseModel):
 
     def __str__(self):
         return f"usage <{self.project_id}>"
+
+
+class FileCopyCleanup(models.Model):
+    """Durable ownership of attempted copy keys, independent of project deletion.
+
+    Created before external writes; removed atomically when FileVersion takes
+    ownership. Failed attempts remain as tombstones to catch late provider writes.
+    No user names or credentials are stored here.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    object_key = models.CharField(max_length=1024, unique=True)
+    bucket = models.CharField(max_length=63)
+    provider = models.CharField(max_length=16)
+    endpoint_url = models.TextField(blank=True, default="")
+    next_cleanup_at = models.DateTimeField(db_index=True)
+    last_deleted_at = models.DateTimeField(null=True)
+
+    class Meta:
+        db_table = "file_copy_cleanup"

@@ -24,8 +24,8 @@ class S3Storage(S3Boto3Storage):
     """S3 storage class to generate presigned URLs for S3 objects"""
     def __init__(self, request=None):
         configuration = get_storage_configuration()
-        self.aws_access_key_id = configuration["access_key_id"]
-        self.aws_secret_access_key = configuration["secret_access_key"]
+        self.aws_access_key_id = configuration["access_key_id"] or None
+        self.aws_secret_access_key = configuration["secret_access_key"] or None
         self.aws_storage_bucket_name = configuration["bucket_name"]
         self.aws_region = configuration["region_name"] or "auto"
         self.aws_addressing_style = configuration["addressing_style"]

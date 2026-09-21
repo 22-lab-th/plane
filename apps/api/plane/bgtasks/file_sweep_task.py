@@ -43,3 +43,11 @@ def recheck_deleted_objects(batch_size=RECHECK_BATCH_SIZE):
     ``resurrection_detected`` is the signal that the sweep's margin is too narrow.
     """
     return recheck_deleted_batch(limit=batch_size)
+
+
+@shared_task
+def cleanup_failed_copies(batch_size=100):
+    """Retry durable copy attempts, including writes that outlive a timeout."""
+    from plane.utils.file_storage.copy_cleanup import cleanup_copy_keys
+
+    return cleanup_copy_keys(limit=batch_size)

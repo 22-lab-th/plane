@@ -58,8 +58,8 @@ def upload_to_s3(zip_file: io.BytesIO, workspace_id: UUID, token_id: str, slug: 
         upload_s3 = boto3.client(
             "s3",
             endpoint_url=storage["endpoint_url"],
-            aws_access_key_id=storage["access_key_id"],
-            aws_secret_access_key=storage["secret_access_key"],
+            aws_access_key_id=storage["access_key_id"] or None,
+            aws_secret_access_key=storage["secret_access_key"] or None,
             region_name=storage["region_name"],
             config=client_config,
         )
@@ -79,8 +79,8 @@ def upload_to_s3(zip_file: io.BytesIO, workspace_id: UUID, token_id: str, slug: 
         presign_s3 = boto3.client(
             "s3",
             endpoint_url=public_endpoint_url,
-            aws_access_key_id=storage["access_key_id"],
-            aws_secret_access_key=storage["secret_access_key"],
+            aws_access_key_id=storage["access_key_id"] or None,
+            aws_secret_access_key=storage["secret_access_key"] or None,
             region_name=storage["region_name"],
             config=client_config,
         )
@@ -95,8 +95,8 @@ def upload_to_s3(zip_file: io.BytesIO, workspace_id: UUID, token_id: str, slug: 
             "s3",
             endpoint_url=storage["endpoint_url"],
             region_name=storage["region_name"],
-            aws_access_key_id=storage["access_key_id"],
-            aws_secret_access_key=storage["secret_access_key"],
+            aws_access_key_id=storage["access_key_id"] or None,
+            aws_secret_access_key=storage["secret_access_key"] or None,
             config=client_config,
         )
 

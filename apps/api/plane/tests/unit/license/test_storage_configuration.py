@@ -69,3 +69,22 @@ def test_existing_assets_allow_ttl_change(storage_admin):
         "SIGNED_URL_EXPIRATION": "600",
     }, format="json")
     assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_partial_credential_pair_is_rejected(storage_admin):
+    InstanceConfiguration.objects.create(key="AWS_ACCESS_KEY_ID", value="access", category="STORAGE")
+    InstanceConfiguration.objects.create(key="AWS_SECRET_ACCESS_KEY", value="secret", category="STORAGE")
+    response = storage_admin.patch("/api/instances/configurations/", {"AWS_SECRET_ACCESS_KEY": ""}, format="json")
+    assert response.status_code == 400
+    assert InstanceConfiguration.objects.get(key="AWS_SECRET_ACCESS_KEY").value == "secret"
+
+
+@pytest.mark.django_db
+def test_both_credentials_can_be_cleared_for_ambient_chain(storage_admin):
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        InstanceConfiguration.objects.create(key=key, value="old", category="STORAGE")
+    response = storage_admin.patch("/api/instances/configurations/", {
+        "AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "",
+    }, format="json")
+    assert response.status_code == 200

@@ -8,9 +8,10 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react";
 import { usePathname, useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 // plane imports
 import { EUserPermissions } from "@plane/constants";
+import { Button } from "@plane/propel/button";
 import type { IProjectFileListResponse, TProjectFileOrdering } from "@/services/project-file.service";
 import {
   PROJECT_FILE_DEFAULT_ORDERING,
@@ -66,6 +67,7 @@ type Props = {
  */
 export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props) {
   const { workspaceSlug, projectId } = props;
+  const { mutate: invalidateListCache } = useSWRConfig();
 
   // router
   const router = useAppRouter();
@@ -82,6 +84,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const ordering = isProjectFileOrdering(orderingParam) ? orderingParam : PROJECT_FILE_DEFAULT_ORDERING;
   const modeParam = searchParams.get("mode");
   const fileId = searchParams.get("file");
+  const cursor = searchParams.get("cursor") ?? undefined;
 
   // store hooks
   const { getProjectRoleByWorkspaceSlugAndProjectId } = useUserPermissions();
@@ -105,6 +108,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const updateParams = useCallback(
     (updates: Record<string, string | null>, options: { replace?: boolean } = {}) => {
       const next = new URLSearchParams(searchParams.toString());
+      if (["folder", "q", "view", "ordering"].some((key) => key in updates)) next.delete("cursor");
       Object.entries(updates).forEach(([key, value]) => {
         if (value === null) next.delete(key);
         else next.set(key, value);
@@ -143,8 +147,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
 
   // the list request: folder, search, quick view and ordering all come from the URL
   const listQuery = useMemo(
-    () => buildListQuery({ folderId, query: queryParam, quickView, ordering }),
-    [folderId, ordering, queryParam, quickView]
+    () => ({ ...buildListQuery({ folderId, query: queryParam, quickView, ordering }), cursor }),
+    [folderId, ordering, queryParam, quickView, cursor]
   );
 
   const listKey = useMemo(
@@ -319,11 +323,17 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const handleStored = useCallback(() => {
     void mutate();
   }, [mutate]);
-  const handleRestored = useCallback(() => {
-    void mutate();
-    // Trash no longer contains the restored row. Keep every unrelated browse filter.
+  const handleRestored = useCallback(async () => {
+    // Clear cached destinations before leaving Trash. Revalidating only the old
+    // trash key can leave an already-cached active listing missing this file.
+    await invalidateListCache(
+      (key) =>
+        Array.isArray(key) && key[0] === "PROJECT_FILES_LIST" && key[1] === workspaceSlug && key[2] === projectId,
+      undefined,
+      { revalidate: false }
+    );
     updateParams({ view: null, file: null }, { replace: true });
-  }, [mutate, updateParams]);
+  }, [invalidateListCache, workspaceSlug, projectId, updateParams]);
 
   const upload = useFilesUpload({
     workspaceSlug,
@@ -435,6 +445,26 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
               registerRow={registerRow}
               onRowKeyDown={handleRowKeyDown}
             />
+          )}
+          {visibleData && (visibleData.page.prev_page_results || visibleData.page.next_page_results) && (
+            <nav aria-label="File pages" className="flex justify-end gap-2 border-t border-subtle p-4">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!dataIsCurrent || isLoading || !visibleData.page.prev_page_results}
+                onClick={() => updateParams({ cursor: visibleData.page.prev_cursor, file: null })}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!dataIsCurrent || isLoading || !visibleData.page.next_page_results}
+                onClick={() => updateParams({ cursor: visibleData.page.next_cursor, file: null })}
+              >
+                Next
+              </Button>
+            </nav>
           )}
         </div>
       </div>

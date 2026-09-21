@@ -36,6 +36,7 @@ export function InstanceStorageConfigForm(props: IInstanceStorageForm) {
     watch,
     setValue,
     control,
+    setError,
     formState: { errors, isSubmitting, isDirty },
   } = useForm<StorageFormValues>({
     defaultValues: {
@@ -60,7 +61,8 @@ export function InstanceStorageConfigForm(props: IInstanceStorageForm) {
       label: "Access key ID",
       placeholder: "Access key ID",
       error: Boolean(errors.AWS_ACCESS_KEY_ID),
-      required: true,
+      description: provider === "s3" ? "Leave both keys blank to use the server credential provider chain." : undefined,
+      required: provider === "r2",
     },
     {
       key: "AWS_SECRET_ACCESS_KEY",
@@ -68,7 +70,7 @@ export function InstanceStorageConfigForm(props: IInstanceStorageForm) {
       label: "Secret access key",
       placeholder: "Secret access key",
       error: Boolean(errors.AWS_SECRET_ACCESS_KEY),
-      required: true,
+      required: provider === "r2",
     },
     {
       key: "AWS_S3_BUCKET_NAME",
@@ -126,6 +128,11 @@ export function InstanceStorageConfigForm(props: IInstanceStorageForm) {
   ];
 
   const onSubmit = async (formData: StorageFormValues) => {
+    if (Boolean(formData.AWS_ACCESS_KEY_ID.trim()) !== Boolean(formData.AWS_SECRET_ACCESS_KEY.trim())) {
+      setError("AWS_ACCESS_KEY_ID", { message: "Provide both keys or leave both blank." });
+      setError("AWS_SECRET_ACCESS_KEY", { message: "Provide both keys or leave both blank." });
+      return;
+    }
     const payload: Partial<StorageFormValues> = {
       ...formData,
       AWS_S3_REGION_NAME: formData.AWS_S3_REGION_NAME || (provider === "r2" ? "auto" : ""),

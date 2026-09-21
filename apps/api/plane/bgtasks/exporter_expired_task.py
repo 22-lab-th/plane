@@ -30,8 +30,8 @@ def delete_old_s3_link():
         "s3",
         endpoint_url=storage["endpoint_url"],
         region_name=storage["region_name"],
-        aws_access_key_id=storage["access_key_id"],
-        aws_secret_access_key=storage["secret_access_key"],
+        aws_access_key_id=storage["access_key_id"] or None,
+        aws_secret_access_key=storage["secret_access_key"] or None,
         config=Config(
             signature_version=storage["signature_version"],
             s3={"addressing_style": storage["addressing_style"]},

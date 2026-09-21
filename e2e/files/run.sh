@@ -11,22 +11,23 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+COMPOSE_PROJECT="${E2E_COMPOSE_PROJECT:-plane-files-e2e}"
 STATE_DIR="$ROOT_DIR/.e2e-files"
 COMPOSE_FILE="$ROOT_DIR/docker-compose-test.yml"
-IMAGE="localhost/plane_api-tests:latest"
-NETWORK="plane_test_env"
-API_CONTAINER="plane-files-e2e-api"
-MINIO_CONTAINER="plane-files-e2e-minio"
-MQ_CONTAINER="plane-files-e2e-mq"
+IMAGE="${E2E_API_IMAGE:-localhost/plane-review_api-tests:latest}"
+NETWORK="${COMPOSE_PROJECT}_test_env"
+API_CONTAINER="${COMPOSE_PROJECT}-api"
+MINIO_CONTAINER="${COMPOSE_PROJECT}-minio"
+MQ_CONTAINER="${COMPOSE_PROJECT}-mq"
 MQ_PORT=59110
 MINIO_PORT=59010
 MINIO_CONSOLE_PORT=59011
-API_PORT=8000
-WEB_PORT=3000
+API_PORT="${E2E_API_PORT:-58000}"
+WEB_PORT="${E2E_WEB_PORT:-53000}"
 WEB_URL="http://127.0.0.1:${WEB_PORT}"
 API_URL="http://127.0.0.1:${API_PORT}"
 PIDS=()
-compose() { podman compose -f "$COMPOSE_FILE" "$@"; }
+compose() { podman compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" "$@"; }
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
@@ -38,22 +39,19 @@ trap cleanup EXIT INT TERM
 cd "$ROOT_DIR"
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
-# Reclaim the harness ports from a previous run that was killed before its trap.
-for holder in $(podman ps -a --format '{{.Names}} {{.Ports}}' |
-  awk -v p=":${MINIO_PORT}->" -v m=":${MQ_PORT}->" 'index($0, p) || index($0, m) {print $1}'); do
-  podman rm -f "$holder" >/dev/null 2>&1 || true
-done
+# Clean only this harness's explicitly named containers.
 podman rm -f "$API_CONTAINER" "$MINIO_CONTAINER" "$MQ_CONTAINER" >/dev/null 2>&1 || true
 
 say() { echo "[files-e2e $(date +%H:%M:%S)] $*"; }
 
 compose down -v >/dev/null 2>&1 || true
 compose up -d test-db test-redis >"$STATE_DIR/compose.log" 2>&1
-say "compose up: $(podman network ls --format '{{.Name}}' | grep -c '^plane_test_env$') network(s)"
+say "compose up: $(podman network ls --format '{{.Name}}' | grep -c "^${NETWORK}$") network(s)"
 
 podman run --rm -d --name "$MINIO_CONTAINER" --network "$NETWORK" \
   -e MINIO_ROOT_USER=access-key -e MINIO_ROOT_PASSWORD=secret-key \
-  -p "${MINIO_PORT}:9000" -p "${MINIO_CONSOLE_PORT}:9090" \
+  -p "127.0.0.1:${MINIO_PORT}:9000" -p "127.0.0.1:${MINIO_CONSOLE_PORT}:9090" \
+  --tmpfs /data:rw,mode=1777 \
   minio/minio server /data --address ':9000' --console-address ':9090' >/dev/null 2>>"$STATE_DIR/minio.log"
 ready=""
 for _ in {1..60}; do
@@ -74,7 +72,7 @@ say "minio ready at http://127.0.0.1:${MINIO_PORT}"
 podman run --rm -d --name "$MQ_CONTAINER" --network "$NETWORK" \
   -e RABBITMQ_DEFAULT_USER=plane -e RABBITMQ_DEFAULT_PASS=plane -e RABBITMQ_DEFAULT_VHOST=plane \
   --tmpfs /var/lib/rabbitmq:rw,mode=1777 \
-  -p "${MQ_PORT}:5672" \
+  -p "127.0.0.1:${MQ_PORT}:5672" \
   rabbitmq:3.13.6-management-alpine >/dev/null 2>>"$STATE_DIR/mq.log"
 
 # Every dependency is checked before anything is started on top of it: a broker that is
@@ -111,8 +109,8 @@ wait_for_health() {
   tail -25 "$STATE_DIR/deps.log" >&2
   exit 1
 }
-wait_for_health plane_test-db_1
-wait_for_health plane_test-redis_1
+wait_for_health "${COMPOSE_PROJECT}_test-db_1"
+wait_for_health "${COMPOSE_PROJECT}_test-redis_1"
 say "broker and stores ready"
 
 # Django-side environment shared by every container command below.
@@ -124,9 +122,10 @@ DJANGO_ENV=(
   # whichever test they belong to fails on some unrelated assertion much later (DEFECT-007).
   # The product's own default is untouched; only this harness's stack is raised.
   -e AUTHENTICATION_RATE_LIMIT=300/minute
+  -e PROJECT_FILE_UPLOAD_RATE_LIMIT=1000/minute
   -e DATABASE_URL=postgresql://plane:plane@test-db:5432/plane
   -e REDIS_URL=redis://test-redis:6379/
-  -e RABBITMQ_HOST=plane-files-e2e-mq
+  -e RABBITMQ_HOST="$MQ_CONTAINER"
   -e RABBITMQ_PORT=5672
   -e RABBITMQ_USER=plane
   -e RABBITMQ_PASSWORD=plane
@@ -150,7 +149,8 @@ DJANGO_ENV=(
 
 fail() { say "FAILED: $1"; tail -25 "$2" >&2 || true; exit 1; }
 
-compose run --rm -T --entrypoint python api-tests manage.py migrate \
+podman run --rm --network "$NETWORK" "${DJANGO_ENV[@]}" -v "$ROOT_DIR/apps/api:/code" -w /code \
+  --entrypoint python "$IMAGE" manage.py migrate \
   --settings=plane.settings.local --noinput >"$STATE_DIR/migrate.log" 2>&1 || fail "migrate" "$STATE_DIR/migrate.log"
 say "migrated"
 podman run --rm -i --network "$NETWORK" "${DJANGO_ENV[@]}" -v "$ROOT_DIR/apps/api:/code" -w /code \
@@ -161,13 +161,13 @@ grep -E '^E2E_(WORKSPACE_SLUG|PROJECT_ID|ISSUE_UNLINK_ID|ISSUE_UPLOAD_ID)=' "$ST
 source "$STATE_DIR/ids.env"
 say "seeded workspace $E2E_WORKSPACE_SLUG project $E2E_PROJECT_ID"
 
-podman run --rm -d --name "$API_CONTAINER" --network "$NETWORK" -p "${API_PORT}:8000" \
+podman run --rm -d --name "$API_CONTAINER" --network "$NETWORK" -p "127.0.0.1:${API_PORT}:8000" \
   "${DJANGO_ENV[@]}" -v "$ROOT_DIR/apps/api:/code" -w /code \
-  --entrypoint python "$IMAGE" manage.py runserver "0.0.0.0:${API_PORT}" \
+  --entrypoint python "$IMAGE" manage.py runserver "0.0.0.0:8000" \
   --settings=plane.settings.local >"$STATE_DIR/api.log" 2>&1
 
 VITE_API_BASE_URL="$API_URL" VITE_WEB_BASE_URL="$WEB_URL" VITE_ADMIN_BASE_URL="http://127.0.0.1:3001" \
-  pnpm --filter=web dev >"$STATE_DIR/web.log" 2>&1 &
+  pnpm --filter=web exec react-router dev --port "$WEB_PORT" >"$STATE_DIR/web.log" 2>&1 &
 PIDS+=("$!")
 
 wait_for_url() {
@@ -219,4 +219,4 @@ if [[ "${E2E_FILES_KEEP_STACK:-}" == "1" ]]; then
   while true; do sleep 30; done
 fi
 
-pnpm exec playwright test --config=playwright.files.config.ts
+pnpm exec playwright test --config=playwright.files.config.ts "$@"
