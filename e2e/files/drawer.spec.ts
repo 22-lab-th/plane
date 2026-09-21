@@ -505,6 +505,10 @@ test.describe("File detail drawer (T-114)", () => {
     await expect(drawer).toBeVisible();
     await expect(drawer).toHaveAttribute("data-file-id", target.id);
     expect((await focusState(page)).name, "the panel takes focus when it opens").toBe(DRAWER);
+    await expect(
+      page.getByTestId("files-drawer-upload-version"),
+      "the owner drawer loaded its revision action"
+    ).toBeVisible();
 
     // Shift+Tab from the panel is the trap's wrap: it lands on the last control inside.
     const last = await lastFocusable(page);
@@ -519,7 +523,20 @@ test.describe("File detail drawer (T-114)", () => {
       await page.keyboard.press("Tab");
       const state = await focusState(page);
       expect(state.inside, `Tab press ${press + 1} must keep focus inside the drawer, not on ${state.name}`).toBe(true);
+      expect(state.name, `Tab press ${press + 1} must not stop on the hidden revision input`).not.toBe(
+        "files-drawer-version-input"
+      );
     }
+    // Start at the first drawer control to exercise the adjacent revision picker with
+    // actual keyboard navigation; the hidden input must be skipped between its button
+    // and the next visible action (DEFECT-006 F-4).
+    await page.getByTestId("files-drawer-close").focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    expect((await focusState(page)).name, "the hidden revision input is not a keyboard tab stop").not.toBe(
+      "files-drawer-version-input"
+    );
 
     await page.keyboard.press("Escape");
     await expect(drawer).toBeHidden();
@@ -1005,8 +1022,8 @@ test.describe("File detail drawer (T-114)", () => {
     ).toBe(thirdNo);
 
     // --- previewing another version changes nothing but the signed URL --------
-    // Last, because choosing a version pins the preview to it: the panel keeps showing the
-    // version the user picked, labelled as not active, until they pick again.
+    // Choosing a version pins the preview to it: the panel keeps showing the version the
+    // user picked, labelled as not active, until they pick again or activation succeeds.
     await page.getByTestId("files-drawer-preview-version").selectOption(String(activeNo));
     const other = await settledBody<TAccessUrl>(page, previews, 4, "the preview for the chosen version");
     expect(other.version_no, "the chosen version is the one signed").toBe(activeNo);
@@ -1018,6 +1035,21 @@ test.describe("File detail drawer (T-114)", () => {
         .map((entry) => entry.version_no),
       "previewing a version never moves the active pointer"
     ).toEqual([thirdNo]);
+    // Activating while another revision is explicitly previewed returns preview to the
+    // new active version rather than leaving the earlier choice pinned (DEFECT-006 F-2).
+    const previewsBeforePinnedActivation = previews.length;
+    await page.getByTestId(`files-drawer-version-activate-${newNo}`).click();
+    const afterPinnedActivation = await settledBody<TAccessUrl>(
+      page,
+      previews,
+      previewsBeforePinnedActivation,
+      "the preview after activating while another version was selected"
+    );
+    expect(afterPinnedActivation.version_no, "the post-activation preview follows the version that became active").toBe(
+      newNo
+    );
+    await expect(page.getByTestId("files-drawer-preview")).not.toContainText(`Previewing v${activeNo} (not active)`);
+    await expect(page.getByTestId(DRAWER)).toContainText(`Signed link for v${newNo}`);
   });
 
   test("rename_move_restore_and_purge_follow_the_api", async ({ page }) => {
@@ -1035,6 +1067,7 @@ test.describe("File detail drawer (T-114)", () => {
 
     const details = captureResponses(page, (url) => url.pathname === `${FILES_PATH}${created.fileId}/`);
     const patches = captureResponses(page, (url) => url.pathname === `${FILES_PATH}${created.fileId}/`, "PATCH");
+    const listings = captureResponses(page, (url) => url.pathname === FILES_PATH);
 
     await openDrawerByDeepLink(page, created.fileId);
     const opened = await settledBody<TDetail>(page, details, 0, "the drawer's own detail request");
@@ -1113,7 +1146,8 @@ test.describe("File detail drawer (T-114)", () => {
     );
 
     const trashedDetails = captureResponses(page, (url) => url.pathname === `${FILES_PATH}${created.fileId}/`);
-    await openDrawerByDeepLink(page, created.fileId, "&view=trash");
+    const preservedTrashQuery = `&view=trash&folder=${folderId}&q=${encodeURIComponent(marker)}&ordering=name&mode=grid`;
+    await openDrawerByDeepLink(page, created.fileId, preservedTrashQuery);
     const inTrash = await settledBody<TDetail>(
       page,
       trashedDetails,
@@ -1130,19 +1164,48 @@ test.describe("File detail drawer (T-114)", () => {
     await expect(page.getByTestId("files-drawer-rename"), "and editing is not offered while trashed").toHaveCount(0);
     await expect(page.getByTestId("files-drawer-purge"), "the purge is offered to this project's ADMIN").toBeVisible();
 
+    const listingsBeforeRestore = listings.length;
     await restoreButton.click();
-    await expect(page.getByTestId("files-drawer-notice")).toHaveText(`Restored ${renamed}.`);
+    await expect(
+      page.getByTestId(DRAWER),
+      "restoring closes the drawer that was reading stale trash data"
+    ).toBeHidden();
+
+    const restoredUrl = new URL(page.url());
+    expect(restoredUrl.searchParams.get("view"), "restoring leaves the trash view").toBeNull();
+    expect(restoredUrl.searchParams.get("file"), "and removes the closed drawer from the URL").toBeNull();
+    expect(restoredUrl.searchParams.get("folder"), "the folder filter remains in the non-trash view").toBe(folderId);
+    expect(restoredUrl.searchParams.get("q"), "the search filter remains in the non-trash view").toBe(marker);
+    expect(restoredUrl.searchParams.get("ordering"), "the ordering remains in the non-trash view").toBe("name");
+    expect(restoredUrl.searchParams.get("mode"), "the view mode remains in the non-trash view").toBe("grid");
+
+    const restoredListing = await settledBody<TSnapshot["live"]>(
+      page,
+      listings,
+      listingsBeforeRestore,
+      "the non-trash listing refreshed after restore"
+    );
+    const restoredListRequest = new URL(listings[listings.length - 1]?.url ?? APP_FILES_URL);
+    expect(
+      restoredListRequest.searchParams.get("trashed"),
+      "the refreshed listing is no longer a trash request"
+    ).toBeNull();
+    expect(restoredListRequest.searchParams.get("folder_id"), "the refreshed listing retains the folder filter").toBe(
+      folderId
+    );
+    expect(
+      restoredListing.results.map((entry) => entry.id),
+      "the refreshed listing carries the restored file"
+    ).toContain(created.fileId);
+    await expect
+      .poll(async () => (await readRows(page)).map((entry) => entry.fileId), {
+        message: "the rendered listing reflects the refreshed non-trash response",
+      })
+      .toEqual(restoredListing.results.map((entry) => entry.id));
+
     const restored = await getDetail(page, created.fileId);
     expect(restored.file.trashed, "the API's own row is live again").toBe(false);
     expect(restored.file.folder_id, "restored to the folder it was in").toBe(folderId);
-    await expect(page.getByTestId("files-drawer-rename"), "and the drawer offers its edits again").toBeVisible();
-
-    const restoredListing = await snapshotListing(page, "drawer-restored", `${APP_FILES_URL}?folder=${folderId}`);
-    await expectViewMatchesBody(page, restoredListing.live, "drawer-restored");
-    expect(
-      restoredListing.live.results.map((entry) => entry.id),
-      "the restored file is listed in its folder again"
-    ).toContain(created.fileId);
 
     // --- trash again, then purge, through its confirmation --------------------
     const trashedAgain = await apiWrite(page, "delete", `${listUrl()}${created.fileId}/`);

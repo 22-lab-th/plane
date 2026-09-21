@@ -31,7 +31,6 @@ import {
   crossProjectMovedCopy,
   crossProjectRefusedCopy,
   purgeConfirmCopy,
-  restoredToRootCopy,
   uploadTooLargeCopy,
   uploadTypeNotAllowedCopy,
   validateUploadCandidate,
@@ -74,6 +73,10 @@ type Props = {
   dialog: TDrawerDialog | null;
   onDialogChange: (dialog: TDrawerDialog | null) => void;
   onNotice: (notice: TDrawerNotice | null) => void;
+  /** Restore changes the browse state as well as the list behind the drawer. */
+  onRestored: () => void;
+  /** A successful activation returns preview to the newly active version. */
+  onActivated: () => void;
   /** A write changed the file: refetch the detail, the preview URL and the list behind. */
   onChanged: () => void;
   /** The file no longer exists (purged): there is nothing left to show. */
@@ -95,8 +98,19 @@ type Props = {
  * the active pointer (AC-43).
  */
 export function FileDetailActions(props: Props) {
-  const { workspaceSlug, projectId, detail, isProjectAdmin, dialog, onDialogChange, onNotice, onChanged, onPurged } =
-    props;
+  const {
+    workspaceSlug,
+    projectId,
+    detail,
+    isProjectAdmin,
+    dialog,
+    onDialogChange,
+    onNotice,
+    onRestored,
+    onChanged,
+    onActivated,
+    onPurged,
+  } = props;
 
   const file = detail.file;
   const permissions = detail.permissions;
@@ -171,18 +185,13 @@ export function FileDetailActions(props: Props) {
 
   const restore = useCallback(async () => {
     try {
-      const result = await fileService.restoreProjectFile(workspaceSlug, projectId, file.id);
-      onChanged();
-      onNotice(
-        result.restore.folder_fallback
-          ? { tone: "info", text: restoredToRootCopy }
-          : { tone: "info", text: `Restored ${result.file.name_display}.` }
-      );
+      await fileService.restoreProjectFile(workspaceSlug, projectId, file.id);
+      onRestored();
     } catch (error) {
       const failure = readUploadFailure(error);
       onNotice({ tone: "error", text: failure.message ?? "We could not restore this file." });
     }
-  }, [file.id, onChanged, onNotice, projectId, workspaceSlug]);
+  }, [file.id, onNotice, onRestored, projectId, workspaceSlug]);
 
   const busy = uploading !== null;
 
@@ -211,7 +220,7 @@ export function FileDetailActions(props: Props) {
               ref={versionInputRef}
               data-testid="files-drawer-version-input"
               type="file"
-              className="sr-only"
+              tabIndex={-1}
               aria-label="Upload a new version of this file"
               onChange={(event) => {
                 const picked = event.target.files?.[0];
@@ -306,6 +315,7 @@ export function FileDetailActions(props: Props) {
         projectId={projectId}
         onClose={() => onDialogChange(null)}
         onChanged={onChanged}
+        onActivated={onActivated}
         onNotice={onNotice}
       />
     </>
@@ -957,9 +967,10 @@ function ActivationDialog(props: {
   versionNo: number | null;
   onClose: () => void;
   onChanged: () => void;
+  onActivated: () => void;
   onNotice: (notice: TDrawerNotice | null) => void;
 }) {
-  const { workspaceSlug, projectId, detail, versionNo, onClose, onChanged, onNotice } = props;
+  const { workspaceSlug, projectId, detail, versionNo, onClose, onChanged, onActivated, onNotice } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -977,7 +988,7 @@ function ActivationDialog(props: {
     setError(null);
     try {
       await fileService.activateProjectFileVersion(workspaceSlug, projectId, detail.file.id, versionNo);
-      onChanged();
+      onActivated();
       onNotice({ tone: "info", text: versionActivatedCopy(versionNo) });
       onClose();
     } catch (failure) {

@@ -41,6 +41,8 @@ type Props = {
   /** Only a project ADMIN may purge; the API refuses the call for anyone else (AC-27). */
   isProjectAdmin: boolean;
   onClose: () => void;
+  /** A successful restore leaves Trash and closes this stale drawer. */
+  onRestored: () => void;
   /** A write landed: the listing behind the drawer is stale too. */
   onFileMutated: () => void;
 };
@@ -93,7 +95,7 @@ const versionStatusVariant = (version: IProjectFileVersion): EPillVariant => {
  * server signs SVG and HTML as downloads, and the drawer refuses them a second time.
  */
 export function FileDetailDrawer(props: Props) {
-  const { workspaceSlug, projectId, fileId, trashed, isProjectAdmin, onClose, onFileMutated } = props;
+  const { workspaceSlug, projectId, fileId, trashed, isProjectAdmin, onClose, onRestored, onFileMutated } = props;
 
   const panelRef = useRef<HTMLElement | null>(null);
   const [detail, setDetail] = useState<IProjectFileDetail | null>(null);
@@ -193,11 +195,18 @@ export function FileDetailDrawer(props: Props) {
    * history is that choice, and it is reversible from the same list, so it moves the
    * pointer and says so (the prototype activates the same way).
    */
+  const handleActivated = useCallback(() => {
+    // An explicit selection remains pinned until activation really succeeds. Once it
+    // has, the drawer follows the new active version and signs that version afresh.
+    setPreviewVersionNo(null);
+    handleMutated();
+  }, [handleMutated]);
+
   const activateVersion = useCallback(
     async (versionNo: number) => {
       try {
         await fileService.activateProjectFileVersion(workspaceSlug, projectId, fileId, versionNo);
-        handleMutated();
+        handleActivated();
         setNotice({ tone: "info", text: versionActivatedCopy(versionNo) });
       } catch (failure) {
         setNotice({
@@ -206,7 +215,7 @@ export function FileDetailDrawer(props: Props) {
         });
       }
     },
-    [fileId, handleMutated, projectId, workspaceSlug]
+    [fileId, handleActivated, projectId, workspaceSlug]
   );
 
   const handlePurged = useCallback(() => {
@@ -301,7 +310,9 @@ export function FileDetailDrawer(props: Props) {
             dialog={dialog}
             onDialogChange={setDialog}
             onNotice={setNotice}
+            onRestored={onRestored}
             onChanged={handleMutated}
+            onActivated={handleActivated}
             onPurged={handlePurged}
           />
         )}

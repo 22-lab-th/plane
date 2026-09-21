@@ -290,6 +290,11 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const handleStored = useCallback(() => {
     void mutate();
   }, [mutate]);
+  const handleRestored = useCallback(() => {
+    void mutate();
+    // Trash no longer contains the restored row. Keep every unrelated browse filter.
+    updateParams({ view: null, file: null }, { replace: true });
+  }, [mutate, updateParams]);
 
   const upload = useFilesUpload({
     workspaceSlug,
@@ -398,6 +403,7 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
           trashed={quickView === "trash"}
           isProjectAdmin={isProjectAdmin}
           onClose={handleCloseDrawer}
+          onRestored={handleRestored}
           onFileMutated={handleStored}
         />
       )}
