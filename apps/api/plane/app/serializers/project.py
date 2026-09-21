@@ -25,11 +25,36 @@ from plane.db.models import (
 from plane.utils.content_validator import (
     validate_html_content,
 )
+from plane.utils.file_storage.retention import MIN_RETENTION_DAYS
 
 
 class ProjectSerializer(BaseSerializer):
     workspace_detail = WorkspaceLiteSerializer(source="workspace", read_only=True)
     inbox_view = serializers.BooleanField(read_only=True, source="intake_view")
+
+    #: The per-project file retention period (R-LEG-1, AC-26). Declared rather than
+    #: taken from the model field so the API refuses a value the purge cannot honour:
+    #: ``null`` means "use the deployment default" (``PROJECT_FILE_TRASH_DAYS``, owner-set
+    #: 30) and a stored ``0`` would be read as "not set" by the purge, so a project that
+    #: asked for no retention would silently get thirty days. The value is the input to
+    #: the window ``purge_expired_files`` selects trashed files with, and the window the
+    #: restore path refuses past.
+    retention_days = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=MIN_RETENTION_DAYS,
+        help_text=(
+            "Per-project file retention window in days. Null uses the deployment "
+            "default (PROJECT_FILE_TRASH_DAYS)."
+        ),
+        error_messages={
+            "min_value": (
+                f"The retention period must be at least {MIN_RETENTION_DAYS} day; "
+                "send null to use the deployment default."
+            ),
+            "invalid": "The retention period must be a whole number of days.",
+        },
+    )
 
     class Meta:
         model = Project

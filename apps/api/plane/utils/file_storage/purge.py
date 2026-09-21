@@ -33,7 +33,6 @@ needs to become the endpoint's executor.
 from datetime import timedelta
 
 # Django imports
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -45,6 +44,7 @@ from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage import quota as quota_module
 from plane.utils.file_storage.quota import ACCOUNTED_VERSION_STATUSES
 from plane.utils.file_storage.audit import record_file_access
+from plane.utils.file_storage.retention import window_days
 
 #: File-row states a purge may act on. ``purge_failed`` is a trashed file whose
 #: earlier attempt could not delete an object and is being retried.
@@ -60,9 +60,10 @@ def purgeable_files(*, limit=PURGE_BATCH_SIZE):
 
     Two groups, exactly as ARCH-001 §2.3 describes them: rows in ``trashed`` past
     their project's retention window (``Project.retention_days``, or
-    ``PROJECT_FILE_TRASH_DAYS`` when the project does not set one) and **every**
-    row already in ``purge_failed``, whose retry does not wait for a window that
-    has already elapsed.
+    ``PROJECT_FILE_TRASH_DAYS`` when the project does not set one - both through
+    :func:`plane.utils.file_storage.retention.window_days`, which the restore
+    refusal reads too) and **every** row already in ``purge_failed``, whose retry
+    does not wait for a window that has already elapsed.
 
     The rows are read through ``all_objects`` because a trashed file *is*
     soft-deleted; the status filter is what makes the selection safe, and the
@@ -74,7 +75,7 @@ def purgeable_files(*, limit=PURGE_BATCH_SIZE):
 
     grouped = {}
     for project_id, retention_days in Project.objects.values_list("id", "retention_days"):
-        grouped.setdefault(retention_days or settings.PROJECT_FILE_TRASH_DAYS, []).append(project_id)
+        grouped.setdefault(window_days(retention_days), []).append(project_id)
 
     for days, project_ids in grouped.items():
         windows |= Q(project_id__in=project_ids, deleted_at__lte=now - timedelta(days=days))

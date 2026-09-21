@@ -74,6 +74,7 @@ from plane.utils.file_storage.audit import record_file_access
 from plane.utils.file_storage.errors import ProjectFileError
 from plane.utils.file_storage.verdicts import GOOD_VERSION_STATUSES
 from plane.utils.file_storage.purge import purge_file as run_purge
+from plane.utils.file_storage.retention import effective_retention_days, retention_has_expired
 from plane.utils.exception_logger import log_exception
 from plane.utils.file_storage.naming import extension_of, normalize_name
 from plane.utils.object_key import build_object_key
@@ -512,11 +513,28 @@ def restore_file(request, slug, project_id, file_id):
     instead of pointing at a hidden folder, and the audit row records which of the
     two happened. Links the trash unlinked are revived when their entity is still
     live; a link whose entity is gone stays unlinked.
+
+    The other half of the retention window is enforced here (R-DEL-2's edge case,
+    R-LIFE-1's "purge wins after the window"): a file whose window has elapsed is
+    already selected by the purge and cannot be brought back. A ``purge_failed`` row
+    inside its window is deliberately *not* refused - a partial purge is repairable,
+    which is what the delivery invariant is checked on (the activation refuses a
+    version whose bytes are gone), not what the status alone says.
     """
     project = project_or_404(slug, project_id)
     require_project_editor(request, project)
 
     file_object = _trashed_file_or_refuse(project, slug, file_id)
+
+    if retention_has_expired(file_object):
+        raise ProjectFileError(
+            "This file's retention window has elapsed, so it can no longer be restored.",
+            code="retention_expired",
+            status_code=status.HTTP_409_CONFLICT,
+            file_id=str(file_object.id),
+            retention_days=effective_retention_days(project),
+        )
+
     trash_audit = (
         FileAccessLog.objects.filter(file_id=file_object.id, action=FileAccessLog.Action.TRASHED)
         .order_by("-created_at")

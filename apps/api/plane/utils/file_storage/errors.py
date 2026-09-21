@@ -32,6 +32,9 @@ Files and the trash lifecycle
     ``file_name_conflict``, ``name_conflict`` (no unique name could be derived after
     the suffix attempts), ``file_trashed`` (the row is in the trash),
     ``file_not_trashed`` (restore or purge asked for a live file),
+    ``retention_expired`` (restore asked for a file whose retention window has
+    elapsed, so the purge owns it - R-DEL-2's edge case; the body carries
+    ``retention_days``),
     ``project_archived`` (an archived project is read-only),
     ``confirmation_required`` (an irreversible purge without ``confirm=true``),
     ``permission_denied`` (the caller is a member but lacks the role).
