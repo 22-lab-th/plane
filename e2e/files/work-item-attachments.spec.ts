@@ -138,7 +138,10 @@ test.describe("work item attachments are project files", () => {
 
     const section = page.getByRole("button", { name: /Attachments/ });
     await expect(section, "the Attachments widget is on the work item").toBeVisible();
-    await expect(section, "the badge counts the linked file").toContainText("1");
+    // The badge itself, not the section's whole text: the count is the number the store
+    // computes from the legacy assets plus the linked project files, so reading the
+    // element is what pins DEFECT-009's fix.
+    await expect(page.getByTestId("issue-attachments-count"), "the badge counts the linked file").toHaveText("1");
 
     // --- the project's Files view lists the same id, once ---------------------------
     const listing = await getListBody(page, { folder_id: "root" });
@@ -151,6 +154,13 @@ test.describe("work item attachments are project files", () => {
     await attachmentRow.getByRole("button", { name: `Actions for ${file.name_display}` }).click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
     await expect(page.getByText("Remove attachment"), "the unlink modal names the action").toBeVisible();
+    // The copy has to say what actually happens: the file stays in the repository. The
+    // legacy path's "permanently removed, cannot be undone" would be false here.
+    await expect(
+      page.getByText(/stays in the project's Files view/),
+      "the modal says the file survives the unlink"
+    ).toBeVisible();
+    await expect(page.getByText(/permanently removed/), "and never claims a deletion").toHaveCount(0);
     await page.getByRole("button", { name: "Remove" }).click();
 
     await expect(attachmentRow, "the work item stops rendering the attachment").toHaveCount(0);

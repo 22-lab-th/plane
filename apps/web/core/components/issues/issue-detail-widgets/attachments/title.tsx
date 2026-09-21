@@ -38,7 +38,7 @@ export const IssueAttachmentsCollapsibleTitle = observer(function IssueAttachmen
   // indicator element
   const indicatorElement = useMemo(
     () => (
-      <span className="flex items-center justify-center">
+      <span className="flex items-center justify-center" data-testid="issue-attachments-count">
         <p className="text-14 !leading-3 text-tertiary">{attachmentCount}</p>
       </span>
     ),

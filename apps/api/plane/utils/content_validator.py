@@ -156,7 +156,35 @@ ATTRIBUTES = {
     "input": {"type", "checked"},
 }
 
-SAFE_PROTOCOLS = {"http", "https", "mailto", "tel"}
+#: The URL scheme of a project-file reference (T-115): ``project-file:<file id>``. It
+#: names a row the API resolves to a presigned URL - the browser never fetches the
+#: reference itself - and an unknown scheme carries no script capability, so admitting
+#: it grants none. Where it may appear is bounded by :func:`_project_file_attribute_filter`.
+PROJECT_FILE_REF_SCHEME = "project-file"
+
+#: The marker an embed's stored reference carries, as the editor writes it.
+PROJECT_FILE_REF_PREFIX = f"{PROJECT_FILE_REF_SCHEME}:"
+
+#: The tags whose ``src`` is an embed the editor resolves through the API. The reference
+#: is honoured on these, and on no other attribute of no other tag.
+EMBED_SRC_TAGS = frozenset({"image-component", "img"})
+
+SAFE_PROTOCOLS = {"http", "https", "mailto", "tel", PROJECT_FILE_REF_SCHEME}
+
+
+def _project_file_attribute_filter(tag, attribute, value):
+    """Keep the project-file reference scheme off everything but an embed's ``src``.
+
+    ``nh3``'s ``url_schemes`` is account-wide rather than per tag and attribute, so the
+    scheme is admitted there (or the sanitiser would strip the embed's source on every
+    save, DEFECT-011) and narrowed here: a ``project-file:`` value on any other
+    attribute - a link's ``href`` above all - is dropped, which is exactly where the
+    sanitiser would have dropped it anyway. Every other value is returned untouched, so
+    no other attribute's fate changes.
+    """
+    if value.startswith(PROJECT_FILE_REF_PREFIX) and not (attribute == "src" and tag in EMBED_SRC_TAGS):
+        return None
+    return value
 
 
 def _compute_html_sanitization_diff(before_html: str, after_html: str):
@@ -225,6 +253,7 @@ def validate_html_content(html_content: str):
             html_content,
             tags=ALLOWED_TAGS,
             attributes=ATTRIBUTES,
+            attribute_filter=_project_file_attribute_filter,
             url_schemes=SAFE_PROTOCOLS,
         )
         # Report removals to logger (Sentry) if anything was stripped
