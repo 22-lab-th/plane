@@ -524,7 +524,7 @@ class FileCopyCleanup(models.Model):
 
     Created before external writes; removed atomically when FileVersion takes
     ownership. Failed attempts remain as tombstones to catch late provider writes.
-    No user names or credentials are stored here.
+    Only object identity and cleanup scheduling metadata are retained.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)

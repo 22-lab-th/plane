@@ -21,8 +21,8 @@ class Command(BaseCommand):
             s3_client = boto3.client(
                 "s3",
                 endpoint_url=storage["endpoint_url"],
-                aws_access_key_id=storage["access_key_id"],
-                aws_secret_access_key=storage["secret_access_key"],
+                aws_access_key_id=storage["access_key_id"] or None,
+                aws_secret_access_key=storage["secret_access_key"] or None,
                 region_name=storage["region_name"],
                 config=boto3.session.Config(
                     signature_version=storage["signature_version"],

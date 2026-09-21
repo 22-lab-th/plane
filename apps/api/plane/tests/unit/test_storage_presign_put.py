@@ -254,3 +254,25 @@ def test_blank_credentials_use_botocore_provider_chain(monkeypatch):
         result = storage.generate_presigned_put(OBJECT_KEY, CONTENT_TYPE)
     chain.assert_called_once()
     assert credential_scope(result["url"]).startswith("role-key/")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("command_name", ["create_bucket", "update_bucket"])
+def test_bucket_commands_use_ambient_credentials(monkeypatch, command_name):
+    import importlib
+    import boto3
+    from botocore.client import BaseClient
+    from botocore.credentials import Credentials
+
+    command = importlib.import_module(f"plane.db.management.commands.{command_name}").Command()
+    session = boto3.Session()
+    monkeypatch.setattr(boto3, "client", session.client)
+    env = {**CREDENTIAL_ENV, "AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": ""}
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        session._session, "get_credentials", return_value=Credentials("role-key", "role-secret")
+    ) as chain, patch.object(BaseClient, "_make_api_call", return_value={}):
+        if command_name == "create_bucket":
+            command.handle()
+        else:
+            command.get_s3_client()
+    chain.assert_called_once()

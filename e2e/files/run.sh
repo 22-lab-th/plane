@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_PROJECT="${E2E_COMPOSE_PROJECT:-plane-files-e2e}"
 STATE_DIR="$ROOT_DIR/.e2e-files"
 COMPOSE_FILE="$ROOT_DIR/docker-compose-test.yml"
-IMAGE="${E2E_API_IMAGE:-localhost/plane-review_api-tests:latest}"
+IMAGE="${E2E_API_IMAGE:-localhost/plane_api-tests:latest}"
 NETWORK="${COMPOSE_PROJECT}_test_env"
 API_CONTAINER="${COMPOSE_PROJECT}-api"
 MINIO_CONTAINER="${COMPOSE_PROJECT}-minio"
@@ -37,6 +37,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$ROOT_DIR"
+if ! podman image exists "$IMAGE"; then
+  echo "Missing $IMAGE. Build with: podman compose -p plane -f docker-compose-test.yml build api-tests" >&2
+  exit 1
+fi
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 # Clean only this harness's explicitly named containers.
