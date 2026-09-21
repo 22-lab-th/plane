@@ -257,7 +257,23 @@ class Adapter:
             if user.avatar_asset:
                 asset = FileAsset.objects.get(pk=user.avatar_asset_id)
                 storage = S3Storage(request=self.request)
-                storage.delete_files(object_names=[asset.asset.name])
+                if not storage.delete_files(object_names=[asset.asset.name]):
+                    # ``DeleteObjects`` answers HTTP 200 even when a key was not
+                    # deleted - the failure is in the response's ``Errors`` list -
+                    # so ``False`` here means the bytes are still stored. The row is
+                    # the only record that names that key, so removing it would
+                    # orphan the object with nothing left to retry from, which is
+                    # the class the purge path already refuses to take (T-122).
+                    # ``delete_files`` has logged the provider's answer; naming the
+                    # row it protected is what points an operator at the object that
+                    # outlived its record.
+                    log_exception(
+                        RuntimeError(
+                            f"refusing to delete FileAsset {asset.id}: the object at "
+                            f"{asset.asset.name} is still stored"
+                        )
+                    )
+                    return
 
                 # Delete the user avatar
                 asset.delete()
