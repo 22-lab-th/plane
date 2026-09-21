@@ -86,24 +86,12 @@ class ProjectInvitationsViewset(BaseViewSet):
 
         workspace = Workspace.objects.get(slug=slug)
 
-        project_invitations = []
+        # Validate and normalise every address first: a bad one refuses with the same
+        # 400 as before and leaves no rows behind.
+        invitations = []
         for email in emails:
             try:
                 validate_email(email.get("email"))
-                project_invitations.append(
-                    ProjectMemberInvite(
-                        email=email.get("email").strip().lower(),
-                        project_id=project_id,
-                        workspace_id=workspace.id,
-                        token=jwt.encode(
-                            {"email": email, "timestamp": datetime.now().timestamp()},
-                            settings.SECRET_KEY,
-                            algorithm="HS256",
-                        ),
-                        role=email.get("role", 5),
-                        created_by=request.user,
-                    )
-                )
             except ValidationError:
                 return Response(
                     {
@@ -111,21 +99,79 @@ class ProjectInvitationsViewset(BaseViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            address = email.get("email").strip().lower()
+            if any(entry[0] == address for entry in invitations):
+                continue
+            invitations.append((address, email))
 
-        # Create workspace member invite
-        project_invitations = ProjectMemberInvite.objects.bulk_create(
-            project_invitations, batch_size=10, ignore_conflicts=True
+        # A project invitation has no uniqueness constraint behind it, so an address
+        # that already has a pending invitation is not invited again: the retry a
+        # refused hand-off invites - the 500 the client sees above - used to write a
+        # *second* row for the same person, and two accepted rows would make two
+        # project members out of one invitation (DEFECT-014). The row already on file
+        # *is* the invitation, and the email for it goes out below with the token it
+        # stores. A row the invitee has answered does not count as pending, so
+        # deliberately re-inviting someone after they refused still writes a fresh one.
+        pending_invitations = {}
+        for pending in ProjectMemberInvite.objects.filter(
+            project_id=project_id,
+            responded_at__isnull=True,
+            email__in=[address for address, _ in invitations],
+        ).order_by("created_at"):
+            pending_invitations.setdefault(pending.email, pending)
+
+        # Create project member invite
+        ProjectMemberInvite.objects.bulk_create(
+            [
+                ProjectMemberInvite(
+                    email=address,
+                    project_id=project_id,
+                    workspace_id=workspace.id,
+                    token=jwt.encode(
+                        {"email": email, "timestamp": datetime.now().timestamp()},
+                        settings.SECRET_KEY,
+                        algorithm="HS256",
+                    ),
+                    role=email.get("role", 5),
+                    created_by=request.user,
+                )
+                for address, email in invitations
+                if address not in pending_invitations
+            ],
+            batch_size=10,
+            ignore_conflicts=True,
         )
         current_site = base_host(request=request, is_app=True)
 
         # Send invitations. The response promises the email, so this is not a
         # best-effort follow-up: a hand-off the broker refuses must surface here
         # (plane/utils/task_dispatch.py records why the follow-ups differ).
-        for invitation in project_invitations:
+        #
+        # Dispatch from the rows on file, not from the objects just built: an address
+        # whose invitation was already pending produced no new row above, so the only
+        # invitation its invitee can accept with - and the only one its email may
+        # name - is the pending row's own token.
+        stored_invitations = {}
+        for stored in ProjectMemberInvite.objects.filter(
+            project_id=project_id,
+            responded_at__isnull=True,
+            email__in=[address for address, _ in invitations],
+        ).order_by("created_at"):
+            stored_invitations.setdefault(stored.email, stored)
+
+        for address, _ in invitations:
+            stored = stored_invitations.get(address)
+            if stored is None:
+                # The row this request relies on is gone (a delete landed in between):
+                # there is no invitation to name in an email, and answering "sent"
+                # would be the same lie as mailing a token that matches nothing.
+                raise RuntimeError(
+                    f"no stored project invitation for {address} after the insert"
+                )
             project_invitation.delay(
-                invitation.email,
+                stored.email,
                 project_id,
-                invitation.token,
+                stored.token,
                 current_site,
                 request.user.email,
             )
