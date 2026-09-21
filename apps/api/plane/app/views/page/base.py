@@ -627,6 +627,14 @@ class PageViewSet(BaseViewSet):
         ):
             queryset = queryset.filter(owned_by=request.user)
 
+        # This endpoint's structural ordering (folders first, then the manual
+        # sort_order) is the primary sort, and the caller's `order_by` - already
+        # sanitized against PAGE_ORDER_BY_ALLOWLIST - is the next term, with the
+        # stable tiebreaks last. The field was hardcoded to "name" here, which
+        # made `get_base_queryset`'s sanitized ordering dead for this endpoint:
+        # `?order_by=-name` and `?order_by=name` produced the same SQL and the
+        # same ascending rows. Without an `order_by` param the endpoint keeps the
+        # name ordering it has always used, so no caller that omits it changes.
         queryset = queryset.order_by(
             Case(
                 When(node_type=Page.FOLDER_NODE, then=Value(0)),
@@ -634,7 +642,11 @@ class PageViewSet(BaseViewSet):
                 output_field=IntegerField(),
             ),
             "sort_order",
-            "name",
+            sanitize_order_by(
+                request.query_params.get("order_by"),
+                PAGE_ORDER_BY_ALLOWLIST,
+                default="name",
+            ),
             "-is_favorite",
             "-created_at",
             "id",
