@@ -13,6 +13,7 @@ function (never ``.delay()``: the queue is not part of this environment).
 
 # Python imports
 import requests
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest import mock
 
@@ -22,6 +23,7 @@ from django.utils import timezone
 # Third party imports
 import boto3
 import pytest
+from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError, EndpointConnectionError
 from django.conf import settings
@@ -122,6 +124,31 @@ def object_exists(store, key):
 def object_exists_through_adapter(key):
     """The app adapter's own view, for the one place a test wants to contrast it."""
     return S3Storage().get_object_metadata(key) is not None
+
+
+@contextmanager
+def per_key_delete_error():
+    """Answer every ``DeleteObjects`` with a 200 that names a key it did not delete.
+
+    S3 reports per-key failures *inside* a 200 response, so a caller that reads only the
+    status code reports a deletion that did not happen. The patch sits at the botocore
+    call - where that answer is actually produced - rather than at the adapter's own
+    helper, so the test exercises the real response handling (F-1).
+    """
+    real_api_call = BaseClient._make_api_call
+
+    def fake_api_call(self, operation_name, api_params):
+        if operation_name != "DeleteObjects":
+            return real_api_call(self, operation_name, api_params)
+
+        keys = [obj["Key"] for obj in api_params["Delete"]["Objects"]]
+        return {
+            "Deleted": [],
+            "Errors": [{"Key": key, "Code": "InternalError", "Message": "the key was not deleted"} for key in keys],
+        }
+
+    with mock.patch.object(BaseClient, "_make_api_call", fake_api_call):
+        yield
 
 
 @pytest.fixture
@@ -605,6 +632,43 @@ class TestPurge:
         assert FileAccessLog.objects.filter(
             file_id=file_object, action=FileAccessLog.Action.PURGED
         ).get().metadata["trigger"] == "retention"
+
+    def test_a_per_key_delete_error_is_a_failure_not_a_deleted_object(
+        self, session_client, project, stored_objects, independent_store
+    ):
+        """F-1: ``DeleteObjects`` answers 200 while naming the keys it did not delete.
+
+        Reading only the status code reports a deletion that did not happen: the row
+        would go, the quota would be released and a ``PURGED`` audit row would claim
+        bytes are gone while the object is still stored. The failure has to surface as
+        the ordinary retryable ``purge_failed`` state instead (R3-02, R-DEL-4).
+        """
+        file_object, object_key = upload_file(session_client, project, stored_objects=stored_objects)
+        assert trash(session_client, project, file_object).status_code == status.HTTP_204_NO_CONTENT
+
+        with per_key_delete_error():
+            response = session_client.delete(
+                purge_url(project.workspace.slug, project.id, file_object) + "?confirm=true"
+            )
+
+        assert response.status_code == status.HTTP_502_BAD_GATEWAY, response.data
+        assert response.data["code"] == "storage_unavailable"
+
+        failed = FileObject.all_objects.get(pk=file_object)
+        assert failed.status == FileObject.Status.PURGE_FAILED
+        assert failed.deleted_at is not None
+        assert FileVersion.objects.get(file_id=file_object).status == FileVersion.Status.PURGE_FAILED
+        # The object is still there (the provider refused it), so nothing may claim it
+        # was deleted: not the counters, not the audit trail.
+        assert object_exists(independent_store, object_key) is True
+        assert usage_bytes(project)[0] == len(PDF_BYTES)
+        assert FileAccessLog.objects.filter(file_id=file_object, action=FileAccessLog.Action.PURGED).count() == 0
+
+        # And the row is retryable: once the provider deletes again, the purge finishes.
+        assert purge_expired_files(batch_size=10) == {"purged": 1, "failed": 0, "scanned": 1}
+        assert FileObject.all_objects.filter(pk=file_object).exists() is False
+        assert object_exists(independent_store, object_key) is False
+        assert usage_bytes(project) == (0, 0)
 
     def test_a_raising_object_deletion_is_a_failure_too_not_a_500(
         self, session_client, project, stored_objects, independent_store

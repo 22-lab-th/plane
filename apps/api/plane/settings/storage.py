@@ -348,13 +348,38 @@ class S3Storage(S3Boto3Storage):
         return None
 
     def delete_files(self, object_names):
-        """Delete an S3 object"""
-        try:
-            self.s3_client.delete_objects(
-                Bucket=self.aws_storage_bucket_name,
-                Delete={"Objects": [{"Key": object_name} for object_name in object_names]},
-            )
+        """Delete S3 objects; ``True`` only when **every** key was actually deleted.
+
+        ``DeleteObjects`` answers ``200`` even when individual keys failed: the failures
+        arrive in the response's ``Errors`` list, one entry per key, and a caller that
+        reads only the status code reports a deletion that did not happen. Every caller
+        in this feature deletes bytes in order to make a durable claim about them - the
+        purge removes the row, gives the quota back and writes a ``PURGED`` audit row,
+        the sweep marks a version's object gone, the recheck proves a late PUT was
+        removed again - so the per-key answer is read here and any failed key makes this
+        return ``False``, exactly as an API-level failure does (R-NFR-9, R3-02,
+        R-DEL-4).
+
+        An empty list is a no-op that succeeds: nothing was asked for, so nothing is
+        unreported.
+        """
+        objects = [{"Key": object_name} for object_name in object_names]
+        if not objects:
             return True
+
+        try:
+            response = self.s3_client.delete_objects(
+                Bucket=self.aws_storage_bucket_name,
+                Delete={"Objects": objects},
+            )
         except ClientError as e:
             log_exception(e)
             return False
+
+        errors = response.get("Errors") or []
+        if errors:
+            undeleted = ", ".join(f"{error.get('Key')} ({error.get('Code')})" for error in errors)
+            log_exception(RuntimeError(f"delete_objects left {len(errors)} key(s) undeleted: {undeleted}"))
+            return False
+
+        return True

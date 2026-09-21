@@ -400,9 +400,17 @@ def copy_file_into_project(*, source, target_project, folder, name, request, aud
     except Exception:
         # Objects are copied outside the database transaction's protection, so a failed
         # copy must not leave bytes nobody can see or purge - the same guard covers a
-        # verification refusal, whose rows the transaction rolls back.
-        if copied_keys:
-            storage.delete_files(copied_keys)
+        # verification refusal, whose rows the transaction rolls back. The rollback is
+        # best-effort by necessity (the original failure is what the caller must see),
+        # but a provider that refuses the delete leaves orphan bytes with no row, so that
+        # verdict is said out loud instead of swallowed.
+        if copied_keys and not storage.delete_files(copied_keys):
+            log_exception(
+                RuntimeError(
+                    f"the rollback of a failed copy could not delete {len(copied_keys)} object(s); they are "
+                    "stored under the target project's prefix with no row naming them"
+                )
+            )
         raise
 
 

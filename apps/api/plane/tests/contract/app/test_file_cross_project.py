@@ -22,6 +22,7 @@ alone would catch:
 # Python imports
 import io
 import uuid
+from contextlib import contextmanager
 from unittest import mock
 
 # Django imports
@@ -29,6 +30,7 @@ from django.utils import timezone
 
 # Third party imports
 import pytest
+from botocore.client import BaseClient
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -209,6 +211,30 @@ def add_revision(file_object, *, content=REVISION_BYTES, stored_objects):
 
 def object_exists(key):
     return S3Storage().get_object_metadata(key) is not None
+
+
+@contextmanager
+def per_key_delete_error():
+    """Answer every ``DeleteObjects`` with a 200 that names a key it did not delete.
+
+    S3 reports per-key failures *inside* a 200 response, so a caller that reads only the
+    status code reports a deletion that did not happen. Patching the botocore call is
+    what exercises the real response handling rather than the adapter's helper (F-1).
+    """
+    real_api_call = BaseClient._make_api_call
+
+    def fake_api_call(self, operation_name, api_params):
+        if operation_name != "DeleteObjects":
+            return real_api_call(self, operation_name, api_params)
+
+        keys = [obj["Key"] for obj in api_params["Delete"]["Objects"]]
+        return {
+            "Deleted": [],
+            "Errors": [{"Key": key, "Code": "InternalError", "Message": "the key was not deleted"} for key in keys],
+        }
+
+    with mock.patch.object(BaseClient, "_make_api_call", fake_api_call):
+        yield
 
 
 def stored_keys(prefix):
@@ -752,6 +778,45 @@ class TestCrossProjectMove:
         assert source.status == FileObject.Status.PURGE_FAILED
         assert source.deleted_at is not None
         assert object_exists(source.object_key)
+        assert FileAccessLog.objects.filter(file_id=source.id, action=FileAccessLog.Action.TRASHED).count() == 1
+
+    def test_a_per_key_delete_error_on_the_source_purge_keeps_the_source_object(
+        self, session_client, project, create_user, stored_objects
+    ):
+        """F-1 through the move door: a 200 that names an undeleted key is not a purge.
+
+        The provider can answer ``DeleteObjects`` with ``200`` while reporting per-key
+        failures, so a move that trusted the status code would answer ``source_purged:
+        true``, delete the source row, release its quota and write a ``PURGED`` audit
+        row - all while the source object is still stored. It must report the failure
+        instead, exactly as the ordinary purge failure does.
+        """
+        target = make_target(project.workspace, create_user)
+        source = make_file(project, name="PerKey.pdf", stored_objects=stored_objects)
+        charge(project, used_bytes=len(PDF_BYTES))
+
+        with per_key_delete_error():
+            response = session_client.post(
+                move_to_project_url(project.workspace.slug, project.id, source.id),
+                {"target_project_id": str(target.id)},
+                format="json",
+            )
+
+        assert response.status_code == status.HTTP_502_BAD_GATEWAY, response.data
+        assert response.data["code"] == "storage_unavailable"
+        assert response.data["source_file_id"] == str(source.id)
+
+        # The verified copy is in the target, the source row is still here (in the
+        # trash, retryable) and its object was never deleted.
+        copy = FileObject.objects.get(project=target, name_normalized=normalize_name("PerKey.pdf"))
+        stored_objects += list(FileVersion.objects.filter(file=copy).values_list("object_key", flat=True))
+        source.refresh_from_db()
+        assert source.status == FileObject.Status.PURGE_FAILED
+        assert source.deleted_at is not None
+        assert object_exists(source.object_key) is True
+        assert (
+            FileAccessLog.objects.filter(file_id=source.id, action=FileAccessLog.Action.PURGED).count() == 0
+        )
         assert FileAccessLog.objects.filter(file_id=source.id, action=FileAccessLog.Action.TRASHED).count() == 1
 
     def test_move_refuses_a_target_the_caller_can_only_read(
