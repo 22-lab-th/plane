@@ -48,6 +48,10 @@ Design and operational detail is available in:
 - [Workspace Bookmarks design QA](./design-qa.md)
 - [OIDC operations runbook](./docs/bmad/sso-operations.md)
 - [OIDC delivery report](./docs/auto/delivery-report.md)
+- [Project-file retention and erasure runbook](./docs/runbooks/project-file-erasure.md)
+- [Project-file disaster-recovery runbook](./docs/runbooks/project-file-disaster-recovery.md)
+- [Personal-data breach notification runbook](./docs/runbooks/personal-data-breach-notification.md)
+- [Project-file lifecycle records and counters](./docs/observability/project-file-lifecycle.md)
 
 ## 🚀 Installation
 
