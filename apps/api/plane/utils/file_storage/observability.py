@@ -9,9 +9,9 @@ event in one vocabulary instead of inventing its own log line.
 
 **Records.** :func:`record` writes one log line to the ``plane.files`` logger
 whose *structured* payload is attached as ``extra={"file_record": {...}}``. That
-payload always carries the five contract keys R-NFR-5 asks for - ``event``,
-``outcome``, ``workspace_id``, ``project_id``, ``file_id``, ``version_no`` - plus
-whatever evidence the call site has. The contract keys are ordinary keyword
+payload always carries the six contract keys - ``event``, ``outcome``,
+``workspace_id``, ``project_id``, ``file_id``, ``version_no`` - plus whatever
+evidence the call site has. The contract keys are ordinary keyword
 parameters, so a call site cannot shadow them: a duplicate keyword is a
 ``TypeError`` at the call, not a silently rewritten record. The human-readable
 message is ``"<event> outcome=<outcome>"``; a collector reads the payload, a
@@ -40,14 +40,18 @@ context the increment was made with. The registry itself is per process and
 in-memory: this phase has no metrics backend wired for the file domain (the only
 OTLP plumbing in the repository is the instance-metrics task, which reports
 licence telemetry rather than per-request counters), so **the log stream is the
-transport**. Every increment is therefore visible to whatever collector the
+the transport**. Every increment is therefore visible to whatever collector the
 deployment configures, and :func:`snapshot` exists for the tests and for a process
-that wants to expose the numbers on its own health route. Two consequences are
+that wants to expose the numbers on its own health route. Three consequences are
 stated rather than hidden: the value is per worker (a four-worker deployment has
-four, and only the log stream adds them up), and it is not transactional - an
-increment is made once the row change it describes has committed, so a crash
-between the two loses the count while the audit row (the record of truth for a
-single event) is already written.
+four, and only the log stream adds them up); ``UPLOAD_FAILURES``,
+``VERIFICATION_MISMATCHES`` and ``SWEEP_DELETIONS`` are incremented once the row
+change they describe has committed, so a crash in between loses the increment while
+the audit row (the record of truth for a single event) is already written; and
+``QUOTA_REJECTIONS`` is the exception, because it is incremented where the ceiling
+refuses - inside the caller's transaction - so a refusal at the finalize or copy
+door is counted even though that request rolls back and leaves no audit row, and
+the counter is therefore not 1:1 with ``quota_rejected`` audit rows.
 
 The operator-facing companion to this module is
 ``docs/observability/project-file-lifecycle.md``: the events and outcomes, what each
