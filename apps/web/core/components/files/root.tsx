@@ -178,7 +178,13 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
   const { data, error, isLoading, mutate } = useSWR<{ query: string; response: IProjectFileListResponse }>(
     listKey,
     fetchList,
-    { keepPreviousData: true, revalidateOnFocus: false }
+    {
+      keepPreviousData: true,
+      revalidateOnFocus: false,
+      // Moving/trashing a file changes membership in other cached views. Revisit
+      // those views immediately even inside SWR's default two-second dedupe window.
+      dedupingInterval: 0,
+    }
   );
   const refreshFiles = useCallback(async () => {
     await mutate();
