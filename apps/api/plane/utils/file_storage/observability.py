@@ -48,6 +48,11 @@ four, and only the log stream adds them up), and it is not transactional - an
 increment is made once the row change it describes has committed, so a crash
 between the two loses the count while the audit row (the record of truth for a
 single event) is already written.
+
+The operator-facing companion to this module is
+``docs/observability/project-file-lifecycle.md``: the events and outcomes, what each
+counter counts, how to consume ``file_counter`` lines without sampling
+``value`` as a gauge, and the scope of the presign storage-call guard.
 """
 
 # Python imports
@@ -81,6 +86,10 @@ FINALIZE_REPLAYED = "replayed"
 
 #: ``file.delete`` outcomes: every object of the file is gone and the row was
 #: removed, or an object survived and the file stays purgeable for the next attempt.
+#: ``purged`` carries ``version_nos`` (the versions it removed) as well as
+#: ``version_no``, because the latter is the file's **active pointer** and a file
+#: whose only attempt was never finalised has none (``current_version_no == 0``), so
+#: that one field can be ``null`` for a purge that certainly did remove a version.
 DELETE_PURGED = "purged"
 DELETE_PURGE_FAILED = "purge_failed"
 

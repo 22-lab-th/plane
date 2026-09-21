@@ -195,9 +195,14 @@ def purge_file(file_object, *, request=None, trigger="manual"):
         workspace_id=workspace_id,
         project_id=project_id,
         file_id=file_id,
+        # The active pointer at the moment of the purge; ``None`` when the file has
+        # none (``current_version_no == 0``, e.g. an attempt that was never
+        # finalised). ``version_nos`` is what identifies the versions this event
+        # actually removed, so a reader is never left with a null and no numbers.
         version_no=file_object.current_version_no or None,
         trigger=trigger,
         versions=len(versions),
+        version_nos=[version.version_no for version in versions],
         bytes=purged_bytes,
     )
 

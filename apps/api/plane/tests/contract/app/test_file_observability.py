@@ -375,8 +375,39 @@ class TestDeleteRecord:
         assert record["version_no"] == 1
         assert record["trigger"] == "manual"
         assert record["versions"] == 1
+        assert record["version_nos"] == [1]
         assert record["bytes"] == len(PDF_BYTES)
         assert S3Storage().get_object_metadata(object_key) is None
+
+    def test_a_purge_of_an_attempt_that_was_never_finalised_still_names_the_version(
+        self, session_client, project, observe
+    ):
+        """OBS-1: the record names what it removed even when no version is active.
+
+        A file whose only attempt was never finalised has no active pointer, so
+        ``version_no`` is null. ``version_nos`` is where a reader finds the versions
+        the purge actually took, which is why the null is not the whole story.
+        """
+        initiated = _initiate(session_client, project)
+        file_id = initiated.data["file"]["id"]
+        assert (
+            session_client.delete(detail_url(project.workspace.slug, project.id, file_id)).status_code
+            == status.HTTP_204_NO_CONTENT
+        )
+
+        purged = session_client.delete(purge_url(project.workspace.slug, project.id, file_id) + "?confirm=true")
+
+        assert purged.status_code == status.HTTP_204_NO_CONTENT, purged.data
+        found = records(observe, observability.EVENT_DELETE)
+        assert len(found) == 1, found
+        record = found[0]
+        assert record["outcome"] == observability.DELETE_PURGED
+        assert record["file_id"] == file_id
+        assert record["version_no"] is None
+        assert record["version_nos"] == [1]
+        assert record["versions"] == 1
+        # An uploading version was never accounted, so the purge returns no bytes.
+        assert record["bytes"] == 0
 
     def test_a_purge_that_left_an_object_is_recorded_with_the_other_outcome(
         self, session_client, project, stored_objects, observe
