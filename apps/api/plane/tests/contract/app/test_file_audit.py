@@ -21,6 +21,7 @@ import uuid
 from datetime import timedelta
 
 # Django imports
+from django.db.models.query import QuerySet
 from django.utils import timezone
 
 # Third party imports
@@ -502,11 +503,22 @@ class TestImmutabilityAndSurvival:
 class TestAuditMasking:
     """AC-38 / R-NFR-13: the personal columns go, the skeleton stays."""
 
-    def test_masking_clears_pii_and_keeps_the_skeleton(self, caller_agent, project, stored_objects):
+    @staticmethod
+    def age(row, days):
+        """Back-date a row by ``days``; ``created_at`` is ``auto_now_add`` on insert."""
+        FileAccessLog.objects.filter(pk=row.pk).update(created_at=timezone.now() - timedelta(days=days))
+        return FileAccessLog.objects.get(pk=row.pk)
+
+    @staticmethod
+    def masking_events(project):
+        """The run's own ``pii_masked`` rows, oldest first."""
+        return FileAccessLog.objects.filter(
+            project=project, action=FileAccessLog.Action.PII_MASKED
+        ).order_by("created_at", "id")
+
+    def test_masking_clears_pii_and_keeps_the_skeleton(self, caller_agent, project, stored_objects, settings):
         file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
-        old_row = FileAccessLog.objects.filter(file_id=file_id).first()
-        backdated = timezone.now() - timedelta(days=400)
-        FileAccessLog.objects.filter(pk=old_row.pk).update(created_at=backdated)
+        old_row = self.age(FileAccessLog.objects.filter(file_id=file_id).first(), 400)
         fresh = FileAccessLog.objects.create(
             workspace_id=project.workspace_id,
             project=project,
@@ -523,7 +535,7 @@ class TestAuditMasking:
         summary = mask_audit_pii(batch_size=10)
 
         assert summary["masked_rows"] >= 1
-        assert summary["retention_days"] > 0
+        assert summary["retention_days"] == settings.AUDIT_PII_RETENTION_DAYS
         masked = FileAccessLog.objects.get(pk=old_row.pk)
         assert masked.ip_address is None
         assert masked.user_agent == ""
@@ -534,14 +546,30 @@ class TestAuditMasking:
         assert masked.action == old_row.action
         assert masked.file_id == old_row.file_id
         assert masked.project_id == project.id
-        assert masked.created_at == backdated
+        assert masked.created_at == old_row.created_at
         assert masked.metadata == old_row.metadata
 
-        # A fresh row is untouched, and a second run has nothing to do.
+        # The run recorded itself once, with the numbers and the window it applied.
+        event = self.masking_events(project).get()
+        assert event.file_id is None
+        assert event.metadata["masked_rows"] == 1
+        assert event.metadata["retention_days"] == summary["retention_days"]
+        assert event.metadata["cutoff"] == summary["cutoff"]
+        # No request wrote it, so it holds nothing personal: nothing for the next run
+        # to mask, and nothing for it to recurse into.
+        assert event.actor_id is None
+        assert event.actor_display == ""
+        assert event.ip_address is None
+        assert event.user_agent == ""
+        assert event.file_name_snapshot == ""
+
+        # A fresh row is untouched, and a second run changes nothing at all - not the
+        # rows, not the trail (no new event for a run that masked nothing).
         untouched = FileAccessLog.objects.get(pk=fresh.pk)
         assert untouched.user_agent == "fresh-agent"
         assert untouched.actor_display == "Fresh Person"
         assert mask_audit_pii(batch_size=10)["masked_rows"] == 0
+        assert self.masking_events(project).count() == 1
 
         # The read API still serves the masked skeleton.
         served = caller_agent.get(activity_url(project.workspace.slug, project.id), {"file_id": file_id})
@@ -551,3 +579,252 @@ class TestAuditMasking:
         assert masked_payload["actor"]["id"] == str(old_row.actor_id)
         assert masked_payload["ip_address"] is None
         assert masked_payload["actor_display"] == ""
+
+        # And the run's own row is a first-class audit row: the project trail serves
+        # it, and the action filter knows its value.
+        events = caller_agent.get(
+            activity_url(project.workspace.slug, project.id), {"action": FileAccessLog.Action.PII_MASKED}
+        )
+        assert events.status_code == status.HTTP_200_OK
+        assert events.data["page"]["total_results"] == 1
+        assert events.data["results"][0]["actor"]["id"] is None
+        assert events.data["results"][0]["metadata"]["masked_rows"] == 1
+
+    def test_the_window_is_the_configured_number_of_days(
+        self, caller_agent, project, stored_objects, settings
+    ):
+        """The cutoff moves with ``AUDIT_PII_RETENTION_DAYS``, in both directions."""
+        file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
+        rows = list(FileAccessLog.objects.filter(file_id=file_id).order_by("created_at", "id"))
+        assert len(rows) >= 2, "the upload flow writes at least the initiate and complete rows"
+        outside, inside = self.age(rows[0], 8), self.age(rows[1], 6)
+
+        settings.AUDIT_PII_RETENTION_DAYS = 7
+        assert mask_audit_pii(batch_size=10)["masked_rows"] == 1
+
+        assert FileAccessLog.objects.get(pk=outside.pk).ip_address is None
+        assert FileAccessLog.objects.get(pk=inside.pk).user_agent == USER_AGENT
+        assert FileAccessLog.objects.get(pk=inside.pk).actor_display
+        event = self.masking_events(project).get()
+        assert event.metadata["retention_days"] == 7
+        assert event.metadata["masked_rows"] == 1
+
+        # Widen the window past both rows: the six-day row is inside it now, nothing
+        # qualifies, and the run adds no event.
+        settings.AUDIT_PII_RETENTION_DAYS = 9
+        assert mask_audit_pii(batch_size=10)["masked_rows"] == 0
+        assert FileAccessLog.objects.get(pk=inside.pk).user_agent == USER_AGENT
+        assert self.masking_events(project).count() == 1
+
+        # Narrow it under the six-day row and the very same run masks it.
+        settings.AUDIT_PII_RETENTION_DAYS = 3
+        assert mask_audit_pii(batch_size=10)["masked_rows"] == 1
+        assert FileAccessLog.objects.get(pk=inside.pk).user_agent == ""
+        assert FileAccessLog.objects.get(pk=inside.pk).file_name_snapshot == ""
+        events = self.masking_events(project)
+        assert events.count() == 2
+        assert events.last().metadata["retention_days"] == 3
+        assert events.last().metadata["masked_rows"] == 1
+
+    def test_a_zero_day_window_masks_everything_the_run_sees(
+        self, caller_agent, project, stored_objects, settings
+    ):
+        """``0`` is a window, not a toggle: the trail keeps its skeleton either way."""
+        file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
+        fresh = FileAccessLog.objects.filter(file_id=file_id).first()
+
+        settings.AUDIT_PII_RETENTION_DAYS = 0
+        summary = mask_audit_pii(batch_size=10)
+
+        assert summary["retention_days"] == 0
+        masked = FileAccessLog.objects.get(pk=fresh.pk)
+        assert masked.ip_address is None
+        assert masked.user_agent == ""
+        assert masked.actor_display == ""
+        assert masked.file_name_snapshot == ""
+        # ... and the skeleton is still there, for the project's lifetime.
+        assert masked.action == fresh.action
+        assert masked.actor_id == fresh.actor_id
+        assert masked.created_at == fresh.created_at
+        assert masked.project_id == project.id
+
+        # The event holds nothing to mask, so the next run leaves it (and everything
+        # else) alone: the sharpest window still cannot recurse.
+        event = self.masking_events(project).get()
+        assert event.metadata["retention_days"] == 0
+        assert event.metadata["masked_rows"] == FileAccessLog.objects.filter(project_id=project.id).count() - 1
+        assert mask_audit_pii(batch_size=10)["masked_rows"] == 0
+        assert self.masking_events(project).count() == 1
+
+    def test_a_masked_row_with_no_project_is_still_masked(self, caller_agent, project, stored_objects):
+        """A hard-deleted project leaves rows that are masked without an event.
+
+        The row below has exactly the shape that FK leaves behind: the workspace and
+        every column intact, the project id null. Masking must not depend on a project
+        existing to attach an event to, and the run must not fail for lack of one - and
+        the count it could not attribute has to be reported rather than dropped.
+        """
+        orphan = FileAccessLog.objects.create(
+            workspace_id=project.workspace_id,
+            project=None,
+            file_name_snapshot="Orphaned.pdf",
+            action=FileAccessLog.Action.TRASHED,
+            actor_id=None,
+            actor_display="Orphan Person",
+            ip_address="10.2.2.2",
+            user_agent="orphan-agent",
+            metadata={},
+        )
+        orphan = self.age(orphan, 400)
+
+        summary = mask_audit_pii(batch_size=10)
+
+        assert summary["masked_rows"] >= 1
+        assert summary["unrecorded_rows"] == 1
+        masked = FileAccessLog.objects.get(pk=orphan.pk)
+        assert masked.ip_address is None
+        assert masked.user_agent == ""
+        assert masked.actor_display == ""
+        assert masked.file_name_snapshot == ""
+        # The skeleton is what remains, and it is still the skeleton.
+        assert masked.action == FileAccessLog.Action.TRASHED
+        assert masked.workspace_id == project.workspace_id
+        assert masked.created_at == orphan.created_at
+        # No project, so nowhere to attach the run's event: nothing else was maskable
+        # in this database, and the run still reports what it did.
+        assert FileAccessLog.objects.filter(action=FileAccessLog.Action.PII_MASKED).count() == 0
+
+    def test_a_soft_deleted_project_still_gets_its_event(self, caller_agent, project, stored_objects):
+        """Deleting a project is Plane's ordinary action; its masking must be recorded.
+
+        ``Project.objects`` is soft-deletion-aware, so looking the project up through it
+        would silently skip every project a user deleted - the most common path of all -
+        and mask its rows without a word. The lookup goes through ``all_objects``, so the
+        event survives the project's ``deleted_at``.
+        """
+        file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
+        self.age(FileAccessLog.objects.filter(file_id=file_id).first(), 400)
+
+        # The state the delete-project action leaves: the row stays, deleted_at is set.
+        # (Setting the column directly, not calling .delete(), keeps the view's Celery
+        # hand-off - soft_delete_related_objects.delay - out of a broker-less suite.)
+        Project.objects.filter(pk=project.pk).update(deleted_at=timezone.now())
+        assert Project.objects.filter(pk=project.pk).exists() is False
+        assert Project.all_objects.filter(pk=project.pk).exists() is True
+
+        assert mask_audit_pii(batch_size=10)["masked_rows"] >= 1
+
+        event = FileAccessLog.objects.get(project_id=project.pk, action=FileAccessLog.Action.PII_MASKED)
+        assert event.metadata["masked_rows"] >= 1
+        assert event.workspace_id == project.workspace_id
+        assert event.file_id is None
+
+    def test_a_window_longer_than_the_calendar_masks_nothing(
+        self, caller_agent, project, stored_objects, settings
+    ):
+        """A nonsense window degrades into "nothing qualifies", never a crashed task."""
+        file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
+        old_row = self.age(FileAccessLog.objects.filter(file_id=file_id).first(), 400)
+
+        settings.AUDIT_PII_RETENTION_DAYS = 3_000_000
+        summary = mask_audit_pii(batch_size=10)
+
+        assert summary["masked_rows"] == 0
+        assert summary["unrecorded_rows"] == 0
+        assert summary["retention_days"] == 3_000_000
+        assert self.masking_events(project).count() == 0
+        # The row is a 400-day-old row, and a three-million-day window is longer than
+        # the calendar, so it keeps its personal data.
+        assert FileAccessLog.objects.get(pk=old_row.pk).ip_address == "127.0.0.1"
+
+    def test_an_overlapping_run_cannot_inflate_the_event(
+        self, caller_agent, project, stored_objects, settings, mocker
+    ):
+        """The event counts rows this run cleared, not rows it selected (T-119 F-1).
+
+        The interleave is forced rather than raced: the first ``UPDATE`` the task issues
+        is wrapped, and a second run with a wider window clears part of the batch in
+        between the selection and the update. Counting the selection would then report
+        rows the other run had already cleared.
+        """
+        rows = [
+            self.age(
+                FileAccessLog.objects.create(
+                    workspace_id=project.workspace_id,
+                    project=project,
+                    file_name_snapshot=f"Overlap {index}.pdf",
+                    action=FileAccessLog.Action.TRASHED,
+                    actor_id=None,
+                    actor_display=f"Overlap {index}",
+                    ip_address="10.3.3.3",
+                    user_agent="overlap-agent",
+                    metadata={},
+                ),
+                age_days,
+            )
+            for index, age_days in enumerate((400, 390, 380, 375, 370))
+        ]
+        cleared_by_the_other_run = rows[:2]
+
+        real_update = QuerySet.update
+        state = {"fired": False}
+
+        def update(query, **kwargs):
+            if not state["fired"] and query.model is FileAccessLog:
+                state["fired"] = True
+                settings.AUDIT_PII_RETENTION_DAYS = 385
+                mask_audit_pii(batch_size=10)
+            return real_update(query, **kwargs)
+
+        mocker.patch.object(QuerySet, "update", update)
+
+        settings.AUDIT_PII_RETENTION_DAYS = 90
+        summary = mask_audit_pii(batch_size=10)
+
+        # Five rows lost their personal data: two to the other run, three to this one.
+        assert state["fired"] is True
+        assert summary["masked_rows"] == 3
+        assert summary["unrecorded_rows"] == 0
+        assert all(
+            FileAccessLog.objects.get(pk=row.pk).ip_address is None for row in rows
+        ), "every row in the batch ends up masked, whichever run got there first"
+
+        events = self.masking_events(project)
+        assert [event.metadata["masked_rows"] for event in events] == [2, 3], (
+            "each run reports its own rows: the selection of the outer run was five, "
+            "and claiming five would have counted the other run's two as its own"
+        )
+        assert sum(event.metadata["masked_rows"] for event in events) == 5
+
+    def test_the_masking_event_is_not_exempt_from_the_window(
+        self, caller_agent, project, stored_objects
+    ):
+        """The run's row is an ordinary row: no action is excluded from the sweep."""
+        file_id = upload_file(caller_agent, project, stored_objects=stored_objects)
+        self.age(FileAccessLog.objects.filter(file_id=file_id).first(), 400)
+        assert mask_audit_pii(batch_size=10)["masked_rows"] >= 1
+        event = self.masking_events(project).get()
+
+        # Suppose a masking event carried personal data anyway. Nothing about the
+        # action exempts it: past the window it is masked and reported like any row.
+        FileAccessLog.objects.filter(pk=event.pk).update(
+            created_at=timezone.now() - timedelta(days=400),
+            ip_address="10.1.1.1",
+            user_agent="event-agent",
+            actor_display="Event Person",
+        )
+        assert mask_audit_pii(batch_size=10)["masked_rows"] == 1
+
+        masked_event = FileAccessLog.objects.get(pk=event.pk)
+        assert masked_event.action == FileAccessLog.Action.PII_MASKED
+        assert masked_event.ip_address is None
+        assert masked_event.user_agent == ""
+        assert masked_event.actor_display == ""
+        assert masked_event.actor_id is None
+        # Masking its own row does not cost the trail its counts.
+        assert masked_event.metadata == event.metadata
+        # That run recorded itself once more - one event per run that changed rows,
+        # never a chain.
+        events = self.masking_events(project)
+        assert events.count() == 2
+        assert events.last().metadata["masked_rows"] == 1

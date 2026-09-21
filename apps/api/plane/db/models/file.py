@@ -354,6 +354,8 @@ class FileAccessLog(BaseModel):
         TRASHED = "trashed", "Trashed"
         RESTORED = "restored", "Restored"
         PURGED = "purged", "Purged"
+        #: Written by the scheduled masking run itself (R-NFR-13), never by a request.
+        PII_MASKED = "pii_masked", "Personal data masked"
         PERMISSION_DENIED = "permission_denied", "Permission denied"
         QUOTA_REJECTED = "quota_rejected", "Quota rejected"
         FOLDER_CREATED = "folder_created", "Folder created"
