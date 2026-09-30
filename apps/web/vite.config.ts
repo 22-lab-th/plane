@@ -21,7 +21,10 @@ export default defineConfig(() => ({
   build: {
     assetsInlineLimit: 0,
   },
-  plugins: [reactRouter(), tsconfigPaths({ projects: [path.resolve(__dirname, "tsconfig.json")] })],
+  plugins: [
+    ...(process.env.VITEST ? [] : [reactRouter()]),
+    tsconfigPaths({ projects: [path.resolve(__dirname, "tsconfig.json")] }),
+  ],
   resolve: {
     alias: {
       // Next.js compatibility shims used within web

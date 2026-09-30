@@ -34,6 +34,14 @@ def clean(html):
 
 
 class TestProjectFileEmbedReference:
+    def test_video_keeps_its_durable_reference_and_drops_script_sources(self):
+        sanitised = clean(f'<video-component src="{REF}" width="640"></video-component>')
+        assert f'src="{REF}"' in sanitised
+        assert "video-component" in sanitised
+        hostile = clean('<video-component src="javascript:alert(1)" onerror="alert(2)"></video-component>')
+        assert "javascript:" not in hostile
+        assert "onerror" not in hostile
+
     def test_an_embed_keeps_its_project_file_source(self):
         sanitised = clean(f'<image-component src="{REF}" status="uploaded" width="320"></image-component>')
 
@@ -83,5 +91,4 @@ class TestProjectFileEmbedReference:
 
         assert "<script" not in sanitised
         assert f'src="{REF}"' in sanitised
-
 

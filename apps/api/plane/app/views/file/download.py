@@ -68,6 +68,9 @@ INLINE_MIME_TYPES = frozenset(
         "text/plain",
         "text/csv",
         "text/markdown",
+        "video/mp4",
+        "video/webm",
+        "video/ogg",
     ]
 )
 

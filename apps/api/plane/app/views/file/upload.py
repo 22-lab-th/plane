@@ -234,7 +234,7 @@ class FileUploadInitiateEndpoint(BaseAPIView):
         return initiate_upload(request, slug, project_id, serializer.validated_data)
 
 
-def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
+def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None, presign=True):
     """Create the pending version, reserve quota and presign the upload (ARCH-001 §4.1).
 
     Shared by ``initiate-upload/`` - which may carry ``file_id`` in the body for a
@@ -374,6 +374,11 @@ def initiate_upload(request, slug, project_id, payload, *, pinned_file_id=None):
             },
         )
         return Response(exc.as_response(), status=exc.status_code)
+
+    if not presign:
+        # Trusted background importers upload through S3Storage directly. They still
+        # use the same reservation and finalize/verification lifecycle.
+        return Response({"file": _file_payload(file_object), "version_no": version_no}, status=status.HTTP_200_OK)
 
     # The reservation is committed, so the URL may now be signed.
     upload = S3Storage(request=request).generate_presigned_put(

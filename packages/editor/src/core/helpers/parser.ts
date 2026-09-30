@@ -27,7 +27,7 @@ const extractAssetsFromHTMLContent = (htmlContent: string): string[] => {
   // collect all unique asset sources
   const assetSources = new Set<string>();
   // extract sources from image components
-  const imageComponents = doc.querySelectorAll("image-component");
+  const imageComponents = doc.querySelectorAll("image-component, video-component");
   imageComponents.forEach((component) => {
     const src = component.getAttribute("src");
     if (src) assetSources.add(src);
@@ -48,7 +48,7 @@ const replaceAssetsInHTMLContent = (props: { htmlContent: string; assetMap: Reco
   // parse the HTML string into a DOM document
   const doc = parser.parseFromString(htmlContent, "text/html");
   // replace sources in image components
-  const imageComponents = doc.querySelectorAll("image-component");
+  const imageComponents = doc.querySelectorAll("image-component, video-component");
   imageComponents.forEach((component) => {
     const oldSrc = component.getAttribute("src");
     if (oldSrc && assetMap[oldSrc]) {
