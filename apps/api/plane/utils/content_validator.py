@@ -75,6 +75,7 @@ CUSTOM_TAGS = {
     "label",
     "input",
     "image-component",
+    "video-component",
 }
 ALLOWED_TAGS = nh3.ALLOWED_TAGS | CUSTOM_TAGS
 
@@ -123,6 +124,7 @@ ATTRIBUTES = {
         "alignment",
         "status",
     },
+    "video-component": {"src", "width", "height", "status", "alignment"},
     "img": {
         "width",
         "height",
@@ -167,7 +169,7 @@ PROJECT_FILE_REF_PREFIX = f"{PROJECT_FILE_REF_SCHEME}:"
 
 #: The tags whose ``src`` is an embed the editor resolves through the API. The reference
 #: is honoured on these, and on no other attribute of no other tag.
-EMBED_SRC_TAGS = frozenset({"image-component", "img"})
+EMBED_SRC_TAGS = frozenset({"image-component", "img", "video-component"})
 
 SAFE_PROTOCOLS = {"http", "https", "mailto", "tel", PROJECT_FILE_REF_SCHEME}
 

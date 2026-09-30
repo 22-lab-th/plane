@@ -29,7 +29,6 @@ from rest_framework.test import APIClient
 # Module imports
 from plane.db.models import (
     FileAccessLog,
-    FileFolder,
     FileObject,
     FileVersion,
     Project,
@@ -196,7 +195,11 @@ class TestDownloadDisposition:
     ):
         content = SVG_BYTES if mime == "image/svg+xml" else HTML_BYTES
         file_object, _ = make_file_with_object(
-            project, name=f"active-{uuid.uuid4().hex[:6]}.bin", mime=mime, content=content, stored_objects=stored_objects
+            project,
+            name=f"active-{uuid.uuid4().hex[:6]}.bin",
+            mime=mime,
+            content=content,
+            stored_objects=stored_objects,
         )
 
         response = session_client.get(preview_url(project.workspace.slug, project.id, file_object.id))
@@ -210,7 +213,12 @@ class TestDownloadDisposition:
         # The served type is the verified one, never a type the client chose.
         assert fetched.headers["Content-Type"].startswith(mime.split("/")[0])
 
-    @pytest.mark.parametrize("name,mime,content", [("shot.png", "image/png", PNG_BYTES), ("spec.pdf", "application/pdf", PDF_BYTES)])
+    @pytest.mark.parametrize("name,mime,content", [
+        ("shot.png", "image/png", PNG_BYTES), ("spec.pdf", "application/pdf", PDF_BYTES),
+        ("clip.mp4", "video/mp4", b"\x00\x00\x00\x10ftypisom"),
+        ("clip.webm", "video/webm", b"\x1a\x45\xdf\xa3webm"),
+        ("clip.ogv", "video/ogg", b"OggS"),
+    ])
     def test_preview_is_inline_only_for_inert_types(
         self, session_client, project, stored_objects, name, mime, content
     ):
@@ -299,7 +307,7 @@ class TestDownloadTtl:
 
         response = session_client.get(download_url(project.workspace.slug, project.id, file_object.id))
 
-        assert f"X-Amz-Expires=120" in response.data["url"]
+        assert "X-Amz-Expires=120" in response.data["url"]
         expires_at = datetime.fromisoformat(response.data["expires_at"])
         assert timedelta(seconds=100) < expires_at - timezone.now() <= timedelta(seconds=125)
 

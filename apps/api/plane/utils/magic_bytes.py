@@ -35,6 +35,7 @@ _PREFIX_SIGNATURES: dict[str, tuple[bytes, ...]] = {
     "audio/mpeg": (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xf1"),
     "audio/ogg": (b"OggS",),
     "video/ogg": (b"OggS",),
+    "video/webm": (b"\x1a\x45\xdf\xa3",),
     "audio/flac": (b"fLaC",),
     "audio/midi": (b"MThd",),
     "audio/x-midi": (b"MThd",),

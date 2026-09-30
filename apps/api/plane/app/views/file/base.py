@@ -311,7 +311,7 @@ def split_extension(name):
     return stem, f".{extension}"
 
 
-def available_display_name(project, folder, file_name):
+def available_display_name(project, folder, file_name, *, exclude_file_id=None):
     """Suffix the display name until it is free in this folder (R-FOLD-5).
 
     ``file_objects`` is unique per project and folder on the normalised live name,
@@ -332,6 +332,7 @@ def available_display_name(project, folder, file_name):
                 name_normalized=normalize_name(candidate),
             )
             .exclude(status=FileObject.Status.TRASHED)
+            .exclude(pk=exclude_file_id)
             .exists()
         )
         if not taken:

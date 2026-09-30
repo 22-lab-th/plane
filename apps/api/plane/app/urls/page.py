@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 from django.urls import path
+from plane.app.views.confluence import ConfluenceSpacesEndpoint, ConfluenceRunsEndpoint, ConfluenceRunDetailEndpoint
 
 
 from plane.app.views import (
@@ -14,6 +15,9 @@ from plane.app.views import (
 )
 
 urlpatterns = [
+    path("workspaces/<str:slug>/projects/<uuid:project_id>/confluence/spaces/", ConfluenceSpacesEndpoint.as_view()),
+    path("workspaces/<str:slug>/projects/<uuid:project_id>/confluence/runs/", ConfluenceRunsEndpoint.as_view()),
+    path("workspaces/<str:slug>/projects/<uuid:project_id>/confluence/runs/<uuid:run_id>/", ConfluenceRunDetailEndpoint.as_view()),
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/pages-summary/",
         PageViewSet.as_view({"get": "summary"}),

@@ -93,6 +93,8 @@ class InstanceConfigurationEndpoint(BaseAPIView):
     @invalidate_cache(path="/api/instances/configurations/", user=False)
     @invalidate_cache(path="/api/instances/", user=False)
     def patch(self, request):
+        if any(str(key).startswith("CONFLUENCE_") for key in request.data):
+            raise ValidationError({"error": "Use the dedicated Confluence configuration endpoint."})
         validate_storage_settings(request.data)
         denied = False
         with transaction.atomic():

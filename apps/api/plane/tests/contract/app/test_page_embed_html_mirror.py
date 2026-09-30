@@ -52,7 +52,8 @@ class TestPageSaveKeepsTheEmbed:
                 HTTP_IF_MATCH=session_client.get(url)["X-Plane-Document-Version"],
             )
 
-    def test_saving_a_page_keeps_a_project_file_embed_in_its_html(self, session_client, create_user, workspace):
+    @pytest.mark.parametrize("tag", ["image-component", "video-component"])
+    def test_saving_a_page_keeps_a_project_file_embed_in_its_html(self, session_client, create_user, workspace, tag):
         from plane.db.models import Page, Project, ProjectMember, ProjectPage
 
         project = Project.objects.create(name="Mirror", identifier="MIRROR", workspace=workspace)
@@ -62,7 +63,7 @@ class TestPageSaveKeepsTheEmbed:
         )
         ProjectPage.objects.create(workspace=workspace, project=project, page=page)
 
-        html = f'<p>before</p><image-component src="{REF}" status="uploaded"></image-component>'
+        html = f'<p>before</p><{tag} src="{REF}" status="uploaded"></{tag}>'
 
         response = self._save_page(session_client, workspace, project, page, html, b"yjs-binary-placeholder\x00\x01")
         assert response.status_code == 200, response.data
@@ -127,11 +128,12 @@ class TestPageMetadataRouteSanitisesTheDescription:
         assert "javascript:" not in stored
         assert "<script" not in stored
 
-    def test_the_metadata_route_still_keeps_a_project_file_embed(self, session_client, create_user, workspace):
+    @pytest.mark.parametrize("tag", ["image-component", "video-component"])
+    def test_the_metadata_route_still_keeps_a_project_file_embed(self, session_client, create_user, workspace, tag):
         """The door is closed without losing what DEFECT-011 opened it for."""
         project, page = self._page(workspace, create_user, "Metadata embed", "METAEMBED")
 
-        html = f'<image-component src="{REF}" status="uploaded"></image-component>'
+        html = f'<{tag} src="{REF}" status="uploaded"></{tag}>'
         with (
             mock.patch("plane.app.views.page.base.page_transaction.delay"),
             mock.patch("plane.app.views.page.base.track_page_version.delay"),

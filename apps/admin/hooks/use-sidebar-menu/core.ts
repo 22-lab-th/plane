@@ -4,13 +4,21 @@
  * See the LICENSE file for details.
  */
 
-import { Database, Image, BrainCog, Cog, Mail } from "lucide-react";
+import { Database, Image, BrainCog, Cog, Mail, BookOpen } from "lucide-react";
 // plane imports
 import { LockOutline, WorkspaceOutline } from "@makeplane/propel/icons";
 // types
 import type { TSidebarMenuItem } from "./types";
 
-export type TCoreSidebarMenuKey = "general" | "email" | "workspace" | "authentication" | "ai" | "image" | "storage";
+export type TCoreSidebarMenuKey =
+  | "general"
+  | "email"
+  | "workspace"
+  | "authentication"
+  | "ai"
+  | "image"
+  | "storage"
+  | "confluence";
 export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem> = {
   general: {
     Icon: Cog,
@@ -53,5 +61,11 @@ export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem>
     name: "Object storage",
     description: "Configure S3-compatible file storage.",
     href: `/storage/`,
+  },
+  confluence: {
+    Icon: BookOpen,
+    name: "Confluence",
+    description: "Connect Atlassian for space imports.",
+    href: "/confluence/",
   },
 };

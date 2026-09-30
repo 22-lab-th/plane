@@ -22,6 +22,7 @@ import { getPageName } from "@plane/utils";
 import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
 import { FolderNameModal } from "@/components/pages/modals/folder-name-modal";
 import { MarkdownImportReportModal } from "@/components/pages/modals/markdown-import-report-modal";
+import { ConfluenceImportModal } from "@/components/pages/modals/confluence-import-modal";
 import { importMarkdownPages, type TMarkdownPageImportReport } from "@/helpers/markdown-page-import";
 // hooks
 import { useProject } from "@/hooks/store/use-project";
@@ -35,6 +36,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isImportingMarkdown, setIsImportingMarkdown] = useState(false);
   const [folderModalOpen, setFolderModalOpen] = useState(false);
+  const [confluenceModalOpen, setConfluenceModalOpen] = useState(false);
   const [importReport, setImportReport] = useState<TMarkdownPageImportReport | null>(null);
   const markdownInputRef = useRef<HTMLInputElement>(null);
   const markdownFolderInputRef = useRef<HTMLInputElement>(null);
@@ -46,7 +48,7 @@ export const PagesListHeader = observer(function PagesListHeader() {
   const folderId = searchParams.get("folder");
   // store hooks
   const { currentProjectDetails, loader } = useProject();
-  const { canCurrentUserCreatePage, createPage, createFolder, getFolderBreadcrumbs } = usePageStore(
+  const { canCurrentUserCreatePage, createPage, createFolder, getFolderBreadcrumbs, fetchPagesList } = usePageStore(
     EPageStoreType.PROJECT
   );
   const folderCrumbs = getFolderBreadcrumbs(folderId);
@@ -155,6 +157,17 @@ export const PagesListHeader = observer(function PagesListHeader() {
 
   return (
     <Header>
+      <ConfluenceImportModal
+        isOpen={confluenceModalOpen}
+        onClose={() => setConfluenceModalOpen(false)}
+        workspaceSlug={workspaceSlug.toString()}
+        projectId={projectId.toString()}
+        parentId={folderId}
+        access={pageType === "private" ? EPageAccess.PRIVATE : EPageAccess.PUBLIC}
+        createPage={createPage}
+        createFolder={createFolder}
+        onImported={() => fetchPagesList(workspaceSlug.toString(), projectId.toString(), undefined, folderId)}
+      />
       <FolderNameModal
         isOpen={folderModalOpen}
         onClose={() => setFolderModalOpen(false)}
@@ -228,6 +241,16 @@ export const PagesListHeader = observer(function PagesListHeader() {
           >
             <FolderPlus className="h-4 w-4" />
             {isCreatingFolder ? "Adding" : "Add folder"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => setConfluenceModalOpen(true)}
+            disabled={isCreatingPage || isCreatingFolder || isImportingMarkdown}
+            className="flex items-center gap-1"
+          >
+            <FileUp className="h-4 w-4" />
+            Import Confluence
           </Button>
           <Button
             variant="secondary"

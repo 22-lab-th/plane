@@ -3,6 +3,7 @@
 # See the LICENSE file for details.
 
 from django.urls import path
+from plane.license.api.views.confluence import ConfluenceConfigurationEndpoint, ConfluenceConnectionTestEndpoint
 
 from plane.license.api.views import (
     EmailCredentialCheckEndpoint,
@@ -27,6 +28,8 @@ from plane.license.api.views import (
 )
 
 urlpatterns = [
+    path("confluence/", ConfluenceConfigurationEndpoint.as_view(), name="confluence-configuration"),
+    path("confluence/test/", ConfluenceConnectionTestEndpoint.as_view(), name="confluence-test"),
     path("", InstanceEndpoint.as_view(), name="instance"),
     path("admins/", InstanceAdminEndpoint.as_view(), name="instance-admins"),
     path("admins/me/", InstanceAdminUserMeEndpoint.as_view(), name="instance-admins"),

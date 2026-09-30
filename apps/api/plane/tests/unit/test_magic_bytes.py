@@ -37,6 +37,7 @@ class TestCheckMagicBytes:
             ("audio/wav", b"RIFF\x24\x00\x00\x00WAVEfmt "),
             ("application/x-tar", b"\x00" * 257 + b"ustar\x0000"),
             ("video/mp4", b"\x00\x00\x00\x18ftypmp42"),
+            ("video/webm", b"\x1a\x45\xdf\xa3webm"),
             ("application/x-7z-compressed", b"7z\xbc\xaf\x27\x1c\x00\x04"),
         ],
     )
@@ -46,6 +47,7 @@ class TestCheckMagicBytes:
     def test_a_container_header_of_the_wrong_kind_is_rejected(self):
         # "RIFF" alone is not enough for webp: the second part must match too.
         assert check_magic_bytes("image/webp", b"RIFF\x24\x00\x00\x00WAVEfmt ") is False
+        assert check_magic_bytes("video/webm", b"<html>not a video</html>") is False
 
     @pytest.mark.parametrize("mime_type", ["text/plain", "text/csv", "text/markdown", "application/json"])
     def test_text_types_accept_utf8_without_nul(self, mime_type):
