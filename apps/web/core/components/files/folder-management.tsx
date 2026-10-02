@@ -5,12 +5,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FolderInput, FolderPen, FolderPlus, FolderTree, MoreHorizontal, Trash2 } from "lucide-react";
+import { FolderInput, FolderPen, FolderPlus, FolderTree, Link2, MoreHorizontal, Trash2 } from "lucide-react";
 // plane imports
 import { Button } from "@plane/propel/button";
 import { CustomMenu, EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
+import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 import type { IProjectFolder } from "@/services/project-file.service";
 // helpers
+import { copyFilesDeepLink } from "./sharing";
 import { readUploadFailure } from "./upload-queue";
 
 export type TFolderDialog =
@@ -20,15 +22,35 @@ export type TFolderDialog =
   | { kind: "delete"; folder: IProjectFolder };
 
 type FolderActionsProps = {
+  workspaceSlug: string;
+  projectId: string;
   folder: IProjectFolder;
+  canManageFolders: boolean;
   onRename: (folder: IProjectFolder) => void;
   onMove: (folder: IProjectFolder) => void;
   onDelete: (folder: IProjectFolder) => void;
 };
 
-/** The mutating menu is intentionally available on every folder row, not just the current folder. */
+/** Sharing is available to every viewer; folder mutations remain permission-gated. */
 export function FolderActions(props: FolderActionsProps) {
-  const { folder, onRename, onMove, onDelete } = props;
+  const { workspaceSlug, projectId, folder, canManageFolders, onRename, onMove, onDelete } = props;
+
+  const copyLink = async () => {
+    try {
+      await copyFilesDeepLink({ workspaceSlug, projectId, folderId: folder.id });
+      setToast({
+        type: TOAST_TYPE.SUCCESS,
+        title: "Folder link copied",
+        message: "The link opens in Files and still requires project access.",
+      });
+    } catch {
+      setToast({
+        type: TOAST_TYPE.ERROR,
+        title: "Could not copy folder link",
+        message: "Your browser could not copy this link.",
+      });
+    }
+  };
 
   return (
     <div
@@ -44,24 +66,34 @@ export function FolderActions(props: FolderActionsProps) {
         ariaLabel={`Actions for ${folder.name}`}
         customButton={<MoreHorizontal className="size-4 text-tertiary" aria-hidden="true" />}
       >
-        <CustomMenu.MenuItem onClick={() => onRename(folder)}>
+        <CustomMenu.MenuItem aria-label={`Copy link to folder ${folder.name}`} onClick={() => void copyLink()}>
           <div className="flex items-center gap-2">
-            <FolderPen className="size-3.5" aria-hidden="true" />
-            <span>Rename folder</span>
+            <Link2 className="size-3.5" aria-hidden="true" />
+            <span>Copy link</span>
           </div>
         </CustomMenu.MenuItem>
-        <CustomMenu.MenuItem onClick={() => onMove(folder)}>
-          <div className="flex items-center gap-2">
-            <FolderInput className="size-3.5" aria-hidden="true" />
-            <span>Move folder</span>
-          </div>
-        </CustomMenu.MenuItem>
-        <CustomMenu.MenuItem onClick={() => onDelete(folder)}>
-          <div className="flex items-center gap-2 text-danger-primary">
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            <span>Delete folder</span>
-          </div>
-        </CustomMenu.MenuItem>
+        {canManageFolders && (
+          <>
+            <CustomMenu.MenuItem onClick={() => onRename(folder)}>
+              <div className="flex items-center gap-2">
+                <FolderPen className="size-3.5" aria-hidden="true" />
+                <span>Rename folder</span>
+              </div>
+            </CustomMenu.MenuItem>
+            <CustomMenu.MenuItem onClick={() => onMove(folder)}>
+              <div className="flex items-center gap-2">
+                <FolderInput className="size-3.5" aria-hidden="true" />
+                <span>Move folder</span>
+              </div>
+            </CustomMenu.MenuItem>
+            <CustomMenu.MenuItem onClick={() => onDelete(folder)}>
+              <div className="flex items-center gap-2 text-danger-primary">
+                <Trash2 className="size-3.5" aria-hidden="true" />
+                <span>Delete folder</span>
+              </div>
+            </CustomMenu.MenuItem>
+          </>
+        )}
       </CustomMenu>
     </div>
   );

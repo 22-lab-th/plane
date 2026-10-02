@@ -11,6 +11,7 @@ import { orderBy } from "lodash-es";
 import { Dialog } from "@headlessui/react";
 // plane imports
 import { EUserPermissions } from "@plane/constants";
+import type { TButtonSize, TButtonVariant } from "@plane/propel/button";
 import { Button } from "@plane/propel/button";
 import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
@@ -39,6 +40,7 @@ import {
   versionDeclinedCopy,
   versionSavedCopy,
 } from "./helpers";
+import { copyFilesDeepLink } from "./sharing";
 import { readUploadFailure, uploadFailedCopy } from "./upload-queue";
 
 const fileService = new ProjectFileService();
@@ -194,85 +196,134 @@ export function FileDetailActions(props: Props) {
   }, [file.id, onNotice, onRestored, projectId, workspaceSlug]);
 
   const busy = uploading !== null;
+  const copyFileLink = async () => {
+    try {
+      await copyFilesDeepLink({ workspaceSlug, projectId, folderId: file.folder_id, fileId: file.id });
+      setToast({
+        type: TOAST_TYPE.SUCCESS,
+        title: "File link copied",
+        message: "The link opens in Files and still requires project access.",
+      });
+    } catch {
+      setToast({
+        type: TOAST_TYPE.ERROR,
+        title: "Could not copy file link",
+        message: "Your browser could not copy this link.",
+      });
+    }
+  };
+
+  const hasManageActions =
+    permissions.can_edit || (isTrashed && permissions.can_delete) || (isTrashed && isProjectAdmin);
 
   return (
     <>
-      <div
-        data-testid="files-drawer-actions"
-        className="flex flex-wrap items-center gap-2 border-b border-subtle px-4 py-2"
-      >
-        {permissions.can_download && (
-          <DownloadButton workspaceSlug={workspaceSlug} projectId={projectId} fileId={file.id} versionNo={null} />
-        )}
-        {permissions.can_edit && (
-          <>
-            <Button
-              data-testid="files-drawer-upload-version"
-              variant="secondary"
-              size="base"
-              className={FILES_FOCUS_RING}
-              disabled={busy}
-              onClick={() => versionInputRef.current?.click()}
-            >
-              Upload new version
-            </Button>
-            <input
-              ref={versionInputRef}
-              data-testid="files-drawer-version-input"
-              type="file"
-              tabIndex={-1}
-              aria-label="Upload a new version of this file"
-              onChange={(event) => {
-                const picked = event.target.files?.[0];
-                // The same file picked twice in a row still fires `change`.
-                event.target.value = "";
-                if (picked) void uploadVersion(picked);
-              }}
-            />
-            <Button
-              data-testid="files-drawer-move"
-              variant="secondary"
-              size="base"
-              className={FILES_FOCUS_RING}
-              disabled={busy}
-              onClick={() => onDialogChange({ kind: "move" })}
-            >
-              Move…
-            </Button>
-            <Button
-              data-testid="files-drawer-rename"
-              variant="secondary"
-              size="base"
-              className={FILES_FOCUS_RING}
-              disabled={busy}
-              onClick={() => onDialogChange({ kind: "rename" })}
-            >
-              Rename
-            </Button>
-          </>
-        )}
-        {isTrashed && permissions.can_delete && (
+      <div data-testid="files-drawer-actions" className="flex flex-col gap-2 border-b border-subtle px-4 py-3">
+        <div role="group" aria-label="Primary file actions" className="flex flex-wrap items-center gap-2">
           <Button
-            data-testid="files-drawer-restore"
+            data-testid="files-drawer-copy-link"
             variant="secondary"
             size="base"
             className={FILES_FOCUS_RING}
-            onClick={() => void restore()}
+            aria-label={`Copy link to ${file.name_display}`}
+            onClick={() => void copyFileLink()}
           >
-            Restore
+            Copy link
           </Button>
-        )}
-        {isTrashed && isProjectAdmin && (
-          <Button
-            data-testid="files-drawer-purge"
-            variant="error-outline"
-            size="base"
-            className={FILES_FOCUS_RING}
-            onClick={() => onDialogChange({ kind: "purge" })}
+          {permissions.can_download && (
+            <DownloadButton
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
+              fileId={file.id}
+              versionNo={null}
+              variant="primary"
+            />
+          )}
+        </div>
+
+        {hasManageActions && (
+          <div
+            role="group"
+            aria-labelledby="files-drawer-manage-label"
+            className="flex flex-col gap-1.5 sm:flex-row sm:items-center"
           >
-            Delete permanently
-          </Button>
+            <span id="files-drawer-manage-label" className="shrink-0 text-caption-md-medium text-tertiary">
+              Manage
+            </span>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {permissions.can_edit && (
+                <>
+                  <Button
+                    data-testid="files-drawer-upload-version"
+                    variant="secondary"
+                    size="base"
+                    className={FILES_FOCUS_RING}
+                    disabled={busy}
+                    onClick={() => versionInputRef.current?.click()}
+                  >
+                    Upload new version
+                  </Button>
+                  <input
+                    ref={versionInputRef}
+                    data-testid="files-drawer-version-input"
+                    type="file"
+                    tabIndex={-1}
+                    aria-label="Upload a new version of this file"
+                    onChange={(event) => {
+                      const picked = event.target.files?.[0];
+                      // The same file picked twice in a row still fires `change`.
+                      event.target.value = "";
+                      if (picked) void uploadVersion(picked);
+                    }}
+                  />
+                  <Button
+                    data-testid="files-drawer-move"
+                    variant="secondary"
+                    size="base"
+                    className={FILES_FOCUS_RING}
+                    disabled={busy}
+                    onClick={() => onDialogChange({ kind: "move" })}
+                  >
+                    Move…
+                  </Button>
+                  <Button
+                    data-testid="files-drawer-rename"
+                    variant="secondary"
+                    size="base"
+                    className={FILES_FOCUS_RING}
+                    disabled={busy}
+                    onClick={() => onDialogChange({ kind: "rename" })}
+                  >
+                    Rename
+                  </Button>
+                </>
+              )}
+              {isTrashed && permissions.can_delete && (
+                <Button
+                  data-testid="files-drawer-restore"
+                  variant="secondary"
+                  size="base"
+                  className={FILES_FOCUS_RING}
+                  onClick={() => void restore()}
+                >
+                  Restore
+                </Button>
+              )}
+              {isTrashed && isProjectAdmin && (
+                <Button
+                  data-testid="files-drawer-purge"
+                  variant="error-outline"
+                  size="base"
+                  className={FILES_FOCUS_RING}
+                  onClick={() => onDialogChange({ kind: "purge" })}
+                >
+                  Delete permanently
+                </Button>
+              )}
+            </div>
+          </div>
         )}
+
         {uploading && (
           <span data-testid="files-drawer-upload-progress" role="status" className={DIALOG_NOTE_CLASS_NAME}>
             {uploading.versionNo === null
@@ -328,8 +379,25 @@ export function DownloadButton(props: {
   projectId: string;
   fileId: string;
   versionNo: number | null;
+  variant?: TButtonVariant;
+  size?: TButtonSize;
+  label?: string;
+  ariaLabel?: string;
+  className?: string;
+  testId?: string;
 }) {
-  const { workspaceSlug, projectId, fileId, versionNo } = props;
+  const {
+    workspaceSlug,
+    projectId,
+    fileId,
+    versionNo,
+    variant = "secondary",
+    size = "base",
+    label = "Download",
+    ariaLabel,
+    className,
+    testId,
+  } = props;
 
   const download = async () => {
     const signed = await fileService.getProjectFileDownloadUrl(workspaceSlug, projectId, fileId, { versionNo });
@@ -344,13 +412,16 @@ export function DownloadButton(props: {
 
   return (
     <Button
-      data-testid={versionNo === null ? "files-drawer-download" : `files-drawer-version-download-${versionNo}`}
-      variant="secondary"
-      size="base"
-      className={FILES_FOCUS_RING}
+      data-testid={
+        testId ?? (versionNo === null ? "files-drawer-download" : `files-drawer-version-download-${versionNo}`)
+      }
+      variant={variant}
+      size={size}
+      aria-label={ariaLabel}
+      className={cn(FILES_FOCUS_RING, className)}
       onClick={() => void download()}
     >
-      Download
+      {label}
     </Button>
   );
 }

@@ -25,6 +25,8 @@ import { FolderActions } from "./folder-management";
 
 type Props = {
   rows: TFilesRow[];
+  workspaceSlug: string;
+  projectId: string;
   ordering: TProjectFileOrdering;
   onOrderingChange: (ordering: TProjectFileOrdering) => void;
   onOpenFolder: (folderId: string) => void;
@@ -55,6 +57,8 @@ export function FilesTable(props: Props) {
   const {
     rows,
     ordering,
+    workspaceSlug,
+    projectId,
     onOrderingChange,
     onOpenFolder,
     onOpenFile,
@@ -126,14 +130,15 @@ export function FilesTable(props: Props) {
                 <TableCell className="hidden text-caption-md-regular text-tertiary md:table-cell">Folder</TableCell>
                 <TableCell className="text-caption-md-regular text-tertiary">—</TableCell>
                 <TableCell className="w-10">
-                  {canManageFolders && (
-                    <FolderActions
-                      folder={row.folder}
-                      onRename={onRenameFolder}
-                      onMove={onMoveFolder}
-                      onDelete={onDeleteFolder}
-                    />
-                  )}
+                  <FolderActions
+                    workspaceSlug={workspaceSlug}
+                    projectId={projectId}
+                    folder={row.folder}
+                    canManageFolders={canManageFolders}
+                    onRename={onRenameFolder}
+                    onMove={onMoveFolder}
+                    onDelete={onDeleteFolder}
+                  />
                 </TableCell>
               </TableRow>
             ) : (
