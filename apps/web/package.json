@@ -12,7 +12,7 @@
     "clean": "rm -rf .turbo && rm -rf .next && rm -rf .react-router && rm -rf node_modules && rm -rf dist && rm -rf build",
     "check:lint": "oxlint --max-warnings=11957 .",
     "check:types": "react-router typegen && tsc --noEmit",
-    "check:test": "vitest run helpers/page-fallback.test.ts helpers/markdown-import.test.ts helpers/confluence-import.test.ts core/components/pages/modals/confluence-api-import.test.tsx core/components/files/folder-management.test.ts core/components/files/sharing.test.ts core/services/project-file.service.test.ts",
+    "check:test": "vitest run helpers/page-fallback.test.ts helpers/markdown-import.test.ts helpers/confluence-import.test.ts core/components/pages/modals/confluence-api-import.test.tsx core/components/imports/jira-import.test.tsx core/components/files/folder-management.test.ts core/components/files/sharing.test.ts core/services/project-file.service.test.ts",
     "check:format": "oxfmt --check .",
     "fix:lint": "oxlint --fix .",
     "fix:format": "oxfmt ."

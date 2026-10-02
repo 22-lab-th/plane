@@ -100,6 +100,13 @@ export const PROJECT_SETTINGS: Record<TProjectSettingsTabs, TProjectSettingsItem
     access: [EUserProjectRoles.ADMIN],
     highlight: (pathname: string, baseUrl: string) => pathname === `${baseUrl}/estimates/`,
   },
+  jira: {
+    key: "jira",
+    i18n_label: "project_settings.jira_import.label",
+    href: "/jira",
+    access: [EUserProjectRoles.ADMIN, EUserProjectRoles.MEMBER],
+    highlight: (pathname: string, baseUrl: string) => pathname === `${baseUrl}/jira/`,
+  },
   automations: {
     key: "automations",
     i18n_label: "project_settings.automations.label",
@@ -112,7 +119,11 @@ export const PROJECT_SETTINGS: Record<TProjectSettingsTabs, TProjectSettingsItem
 export const PROJECT_SETTINGS_FLAT_MAP: TProjectSettingsItem[] = Object.values(PROJECT_SETTINGS);
 
 export const GROUPED_PROJECT_SETTINGS: Record<PROJECT_SETTINGS_CATEGORY, TProjectSettingsItem[]> = {
-  [PROJECT_SETTINGS_CATEGORY.GENERAL]: [PROJECT_SETTINGS["general"], PROJECT_SETTINGS["members"]],
+  [PROJECT_SETTINGS_CATEGORY.GENERAL]: [
+    PROJECT_SETTINGS["general"],
+    PROJECT_SETTINGS["members"],
+    PROJECT_SETTINGS["jira"],
+  ],
   [PROJECT_SETTINGS_CATEGORY.FEATURES]: [
     PROJECT_SETTINGS["features_cycles"],
     PROJECT_SETTINGS["features_modules"],

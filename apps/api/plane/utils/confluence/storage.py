@@ -27,7 +27,7 @@ def response_or_error(response):
     return response.data
 
 
-def store_attachment(run, item, stream, size):
+def store_attachment(run, item, stream, size, *, link=None):
     source = run.source
     existing = item.file
     if existing and (existing.deleted_at or existing.status == "trashed"):
@@ -40,9 +40,12 @@ def store_attachment(run, item, stream, size):
         "size_bytes": size,
         "file_id": existing.id if existing else None,
     }
-    parent = source.items.filter(kind="page", remote_id=str(item.remote.get("pageId"))).first()
-    if parent and parent.page_id:
-        payload["link"] = {"entity_type": "page", "entity_id": str(parent.page_id)}
+    if link:
+        payload["link"] = link
+    else:
+        parent = source.items.filter(kind="page", remote_id=str(item.remote.get("pageId"))).first()
+        if parent and parent.page_id:
+            payload["link"] = {"entity_type": "page", "entity_id": str(parent.page_id)}
     serializer = FileUploadInitiateSerializer(data=payload)
     if not serializer.is_valid():
         raise ConfluenceError("upload_validation", str(serializer.errors))

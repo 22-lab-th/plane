@@ -309,6 +309,10 @@ export const coreRoutes: RouteConfigEntry[] = [
               ":workspaceSlug/settings/projects/:projectId",
               "./(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/page.tsx"
             ),
+            route(
+              ":workspaceSlug/settings/projects/:projectId/jira",
+              "./(all)/[workspaceSlug]/(settings)/settings/projects/[projectId]/jira/page.tsx"
+            ),
             // Project Members
             route(
               ":workspaceSlug/settings/projects/:projectId/members",

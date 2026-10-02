@@ -1,3 +1,4 @@
+from plane.license.api.views.jira import JiraConfigurationEndpoint, JiraConnectionTestEndpoint
 # Copyright (c) 2023-present Plane Software, Inc. and contributors
 # SPDX-License-Identifier: AGPL-3.0-only
 # See the LICENSE file for details.
@@ -28,6 +29,8 @@ from plane.license.api.views import (
 )
 
 urlpatterns = [
+    path("jira/", JiraConfigurationEndpoint.as_view(), name="jira-configuration"),
+    path("jira/test/", JiraConnectionTestEndpoint.as_view(), name="jira-test"),
     path("confluence/", ConfluenceConfigurationEndpoint.as_view(), name="confluence-configuration"),
     path("confluence/test/", ConfluenceConnectionTestEndpoint.as_view(), name="confluence-test"),
     path("", InstanceEndpoint.as_view(), name="instance"),

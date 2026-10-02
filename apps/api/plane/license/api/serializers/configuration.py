@@ -14,7 +14,7 @@ class InstanceConfigurationSerializer(BaseSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        if instance.key == "CONFLUENCE_API_TOKEN":
+        if instance.key in ("CONFLUENCE_API_TOKEN", "JIRA_API_TOKEN"):
             data["value"] = ""
             return data
         # Decrypt secrets value

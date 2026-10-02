@@ -149,9 +149,15 @@ class APITokenLogMiddleware:
                 "query_params": request.META.get("QUERY_STRING", ""),
                 "headers": self._redacted_headers(request),
                 "body": (
-                    "[Confluence configuration redacted]"
-                    if request.path.rstrip("/") == "/api/instances/confluence"
-                    else self._safe_decode_body(request_body) if request_body else None
+                    (
+                        "[Confluence configuration redacted]"
+                        if "confluence" in request.path
+                        else "[Jira configuration redacted]"
+                    )
+                    if request.path.rstrip("/") in ("/api/instances/confluence", "/api/instances/jira")
+                    else self._safe_decode_body(request_body)
+                    if request_body
+                    else None
                 ),
                 "response_body": self._safe_decode_body(response.content) if response.content else None,
                 "response_code": response.status_code,

@@ -13,7 +13,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction, connection
 from django.utils import timezone
 from django.db.models import Q
-from django import apps
+from django.apps import apps
 
 # Module imports
 from plane.utils.html_processor import strip_tags
@@ -740,7 +740,7 @@ class IssueVersion(ProjectBaseModel):
             Log the issue version
             """
 
-            Module = apps.get_model("db.Module")
+            ModuleIssue = apps.get_model("db.ModuleIssue")
             CycleIssue = apps.get_model("db.CycleIssue")
             IssueAssignee = apps.get_model("db.IssueAssignee")
             IssueLabel = apps.get_model("db.IssueLabel")
@@ -748,6 +748,7 @@ class IssueVersion(ProjectBaseModel):
             cycle_issue = CycleIssue.objects.filter(issue=issue).first()
 
             cls.objects.create(
+                project=issue.project,
                 issue=issue,
                 parent=issue.parent_id,
                 state=issue.state_id,
@@ -767,7 +768,7 @@ class IssueVersion(ProjectBaseModel):
                 external_id=issue.external_id,
                 type=issue.type_id,
                 cycle=cycle_issue.cycle_id if cycle_issue else None,
-                modules=list(Module.objects.filter(issue=issue).values_list("id", flat=True)),
+                modules=list(ModuleIssue.objects.filter(issue=issue).values_list("module_id", flat=True)),
                 properties={},
                 meta={},
                 last_saved_at=timezone.now(),

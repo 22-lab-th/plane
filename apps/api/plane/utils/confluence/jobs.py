@@ -11,7 +11,12 @@ ACTIVE = ("queued", "discovering", "running")
 
 
 def require_active_run(run):
-    if not type(run).objects.filter(pk=run.pk, status__in=ACTIVE).exists():
+    from django.db import connection
+
+    queryset = type(run).objects.filter(pk=run.pk, status__in=ACTIVE)
+    if connection.in_atomic_block:
+        queryset = queryset.select_for_update()
+    if not queryset.exists():
         raise ConfluenceError(
             "run_interrupted", "This run was interrupted. Its late results will not replace destination data."
         )
@@ -36,7 +41,7 @@ def require_import_permission(user, project, source=None):
         raise PermissionDenied("Project member or administrator access is required.")
     if not Project.objects.filter(pk=project.pk, archived_at__isnull=True, workspace__deleted_at__isnull=True).exists():
         raise PermissionDenied("The project or workspace was archived or removed.")
-    if source and source.access == Page.PRIVATE_ACCESS and source.owner_id != user.id:
+    if source and getattr(source, "access", 0) == Page.PRIVATE_ACCESS and source.owner_id != user.id:
         raise PermissionDenied("Only the owner may access this private import.")
 
 
@@ -58,7 +63,7 @@ def recover_stale_runs(queryset):
             )
 
 
-def serialize_run(run):
+def serialize_run(run, *, source_summary=None):
     counters = {key: 0 for key in ("total", "completed", "failed", "skipped", "pending", "running")}
     types = {}
     for row in run.results.values("item__category", "status").annotate(count=Count("id")):
@@ -71,8 +76,14 @@ def serialize_run(run):
     return {
         "id": str(run.id),
         "source_id": str(run.source_id),
-        "space_id": run.source.space_id,
-        "space_name": run.source.space_name,
+        **(
+            source_summary
+            if source_summary is not None
+            else {
+                "space_id": run.source.space_id,
+                "space_name": run.source.space_name,
+            }
+        ),
         "mode": run.mode,
         "status": run.status,
         "phase": run.phase,

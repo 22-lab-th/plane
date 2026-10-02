@@ -23,6 +23,7 @@ export default [
     route("ai", "./(all)/(dashboard)/ai/page.tsx"),
     route("image", "./(all)/(dashboard)/image/page.tsx"),
     route("storage", "./(all)/(dashboard)/storage/page.tsx"),
+    route("jira", "./(all)/(dashboard)/jira/page.tsx"),
     route("confluence", "./(all)/(dashboard)/confluence/page.tsx"),
   ]),
   // Catch-all route for 404 handling - must be last

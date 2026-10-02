@@ -18,7 +18,8 @@ export type TCoreSidebarMenuKey =
   | "ai"
   | "image"
   | "storage"
-  | "confluence";
+  | "confluence"
+  | "jira";
 export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem> = {
   general: {
     Icon: Cog,
@@ -61,6 +62,12 @@ export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem>
     name: "Object storage",
     description: "Configure S3-compatible file storage.",
     href: `/storage/`,
+  },
+  jira: {
+    Icon: BookOpen,
+    name: "Jira",
+    description: "Connect Atlassian for work item and sprint imports.",
+    href: "/jira/",
   },
   confluence: {
     Icon: BookOpen,

@@ -521,6 +521,9 @@
           }
         }
       }
+    },
+    "jira_import": {
+      "label": "Jira Import"
     }
   }
 }

@@ -62,14 +62,14 @@ def should_import(mode, *, imported_version, remote_version, failed=False, selec
 
 
 class ConfluenceClient:
-    def __init__(self, config):
+    def __init__(self, config, *, product="confluence"):
         self.site = validate_site_url(config["site_url"])
         self.email = config["email"]
         self.token = config["api_token"]
         cloud_id = config.get("cloud_id", "")
         if cloud_id and not re.fullmatch(r"[a-fA-F0-9-]{36}", cloud_id):
             raise ConfluenceError("invalid_cloud_id", "Enter the Atlassian Cloud ID UUID.")
-        self.api = f"https://api.atlassian.com/ex/confluence/{cloud_id}" if cloud_id else self.site
+        self.api = f"https://api.atlassian.com/ex/{product}/{cloud_id}" if cloud_id else self.site
         self.authorization = "Basic " + base64.b64encode(f"{self.email}:{self.token}".encode()).decode()
 
     def api_url(self, path):
@@ -131,7 +131,7 @@ class ConfluenceClient:
                 reasons = {
                     401: "Atlassian rejected the API token or email; check token validity and expiry in God Mode.",
                     403: "The Atlassian account/token does not have permission or the required API scope.",
-                    404: "The Confluence item was removed or is not visible to this account.",
+                    404: "The Atlassian item was removed or is not visible to this account.",
                     429: "Atlassian rate limit reached after three attempts; retry later.",
                 }
                 raise ConfluenceError(f"atlassian_http_{code}", reasons.get(code, f"Atlassian returned HTTP {code}."))
@@ -175,14 +175,17 @@ class ConfluenceClient:
                 return
         raise ConfluenceError("pagination_limit", "The space exceeds the supported pagination limit.")
 
-    def download(self, attachment, max_bytes):
+    def download_url(self, attachment):
         link = attachment.get("downloadLink") or attachment.get("_links", {}).get("download")
         if not link:
             raise ConfluenceError("missing_download", "Atlassian returned no attachment download link.")
         url = urljoin(self.site + "/wiki/", link)
         if self.api != self.site and url.startswith(self.site + "/wiki/"):
             url = self.api + url[len(self.site) :]
-        response = self.request(url, download=True)
+        return url
+
+    def download(self, attachment, max_bytes):
+        response = self.request(self.download_url(attachment), download=True)
         output = SpooledTemporaryFile(max_size=5 * 1024 * 1024)
         started = time.monotonic()
         size = 0

@@ -104,3 +104,5 @@ from .sticky import Sticky
 
 from .description import Description, DescriptionVersion
 from .confluence import ConfluenceSource, ConfluenceItem, ConfluenceRun, ConfluenceRunItem
+
+from .jira import JiraSource, JiraItem, JiraRun, JiraRunItem
