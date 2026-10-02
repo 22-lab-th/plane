@@ -54,6 +54,7 @@ Design and operational detail is available in:
 - [OIDC delivery report](./docs/auto/delivery-report.md)
 - [Confluence space import runbook](./docs/runbooks/confluence-space-import.md)
 - [Jira project import runbook](./docs/runbooks/jira-project-import.md)
+- [MCP integration and public token API](./docs/runbooks/plane-mcp-integration.md)
 - [Project-file storage configuration](./docs/runbooks/project-file-storage-configuration.md)
 - [Project-file retention and erasure runbook](./docs/runbooks/project-file-erasure.md)
 - [Project-file disaster-recovery runbook](./docs/runbooks/project-file-disaster-recovery.md)

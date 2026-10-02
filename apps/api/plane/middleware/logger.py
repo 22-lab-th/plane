@@ -154,7 +154,13 @@ class APITokenLogMiddleware:
                         if "confluence" in request.path
                         else "[Jira configuration redacted]"
                     )
-                    if request.path.rstrip("/") in ("/api/instances/confluence", "/api/instances/jira")
+                    if request.path.rstrip("/")
+                    in (
+                        "/api/instances/confluence",
+                        "/api/instances/jira",
+                        "/api/v1/instance/confluence",
+                        "/api/v1/instance/jira",
+                    )
                     else self._safe_decode_body(request_body)
                     if request_body
                     else None
