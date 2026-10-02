@@ -17,5 +17,7 @@ export function useSidebarMenu(): TSidebarMenuItem[] {
     coreSidebarMenuLinks.ai,
     coreSidebarMenuLinks.image,
     coreSidebarMenuLinks.storage,
+    coreSidebarMenuLinks.jira,
+    coreSidebarMenuLinks.confluence,
   ];
 }
