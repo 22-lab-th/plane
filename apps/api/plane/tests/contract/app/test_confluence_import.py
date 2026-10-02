@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 from django.utils import timezone
+from django.core.cache.backends.locmem import LocMemCache
 from plane.bgtasks.confluence_import_task import confluence_import_task
 from plane.db.models import (
     ConfluenceRun,
@@ -20,7 +21,7 @@ from plane.db.models import (
     ProjectMember,
 )
 from plane.license.models import Instance, InstanceAdmin, InstanceConfiguration
-from plane.utils.confluence.client import ConfluenceError
+from plane.utils.confluence.client import ConfluenceClient, ConfluenceError
 from plane.utils.confluence.config import CONFIG_FIELDS, save_confluence_config
 from plane.utils.confluence.jobs import recover_stale_runs, serialize_run
 
@@ -408,3 +409,52 @@ def test_sync_adds_new_page_under_an_existing_parent(import_context):
         assert synced.source.items.get(remote_id=remote_id).page_id == page_id
     child = synced.source.items.get(remote_id="5")
     assert child.page.parent_id == synced.source.items.get(remote_id="2").folder_id
+
+
+def test_spaces_endpoint_searches_beyond_first_page_and_enforces_project_access(
+    import_context, session_client, monkeypatch
+):
+    client = ConfluenceClient(
+        {"site_url": "https://team.atlassian.net", "email": "test@example.com", "api_token": "token"}
+    )
+    client.json = Mock(
+        side_effect=[
+            {
+                "results": [{"id": "1", "name": "Unrelated", "key": "FIRST"}],
+                "_links": {"next": "/wiki/api/v2/spaces?cursor=later"},
+            },
+            {"results": [{"id": "200", "name": "Later Engineering", "key": "ENG"}]},
+        ]
+    )
+    local = LocMemCache("confluence-space-api-tests", {})
+    local.clear()
+    monkeypatch.setattr("plane.utils.confluence.spaces.cache", local)
+    monkeypatch.setattr("plane.app.views.confluence.ConfluenceClient", lambda values: client)
+    project = import_context.project
+    url = f"/api/workspaces/{project.workspace.slug}/projects/{project.id}/confluence/spaces/"
+    result = session_client.get(url, {"search": "  engineering  "})
+    assert result.status_code == 200 and result.data["results"] == [
+        {"id": "200", "name": "Later Engineering", "key": "ENG"}
+    ]
+    assert result.data["count"] == 1 and client.json.call_count == 2
+    assert session_client.get(url, {"search": "eng"}).data["results"][0]["id"] == "200"
+    assert client.json.call_count == 2
+    ProjectMember.objects.filter(project=project).update(is_active=False)
+    assert session_client.get(url, {"search": "eng"}).status_code == 403
+
+
+def test_spaces_endpoint_validates_search_and_keeps_browse_pagination(import_context, session_client, monkeypatch):
+    client = Mock()
+    client.json.return_value = {
+        "results": [{"id": "200", "name": "Later Engineering", "key": "ENG"}],
+        "_links": {"next": "/wiki/api/v2/spaces?cursor=next"},
+    }
+    monkeypatch.setattr("plane.app.views.confluence.ConfluenceClient", lambda values: client)
+    project = import_context.project
+    url = f"/api/workspaces/{project.workspace.slug}/projects/{project.id}/confluence/spaces/"
+    assert session_client.get(url, {"search": "x" * 201}).status_code == 400
+    assert session_client.get(url, {"search": "eng", "cursor": "bad"}).status_code == 400
+    client.json.assert_not_called()
+    response = session_client.get(url, {"cursor": "previous"})
+    assert response.status_code == 200 and response.data["next_cursor"] == "next"
+    client.json.assert_called_once_with("/wiki/api/v2/spaces", {"limit": 100, "cursor": "previous"})

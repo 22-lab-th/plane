@@ -56,11 +56,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function render(status: ConfluenceRun["status"] = "partial", overrides: Partial<ConfluenceRunDetail> = {}) {
+async function render(
+  status: ConfluenceRun["status"] = "partial",
+  overrides: Partial<ConfluenceRunDetail> = {},
+  nextCursor: string | null = null
+) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(ConfluenceService.prototype, "spaces").mockResolvedValue({
     results: [{ id: "100", key: "ENG", name: "Engineering" }],
-    next_cursor: null,
+    next_cursor: nextCursor,
     site_url: "https://team.atlassian.net",
   });
   vi.spyOn(ConfluenceService.prototype, "runs").mockResolvedValue([{ ...run, status }]);
@@ -92,9 +96,35 @@ async function render(status: ConfluenceRun["status"] = "partial", overrides: Pa
 }
 
 function button(label: string) {
-  const result = [...container.querySelectorAll("button")].find((element) => element.textContent?.trim() === label);
+  const result = [...container.querySelectorAll("button")].find(
+    (element) => element.textContent?.trim() === label || element.getAttribute("aria-label") === label
+  );
   expect(result, `Button ${label}`).toBeDefined();
   return result!;
+}
+
+async function chooseSpace(name: string) {
+  await act(async () => button("Show Confluence spaces").click());
+  const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
+    element.textContent?.includes(name)
+  );
+  expect(option).toBeDefined();
+  await act(async () => option!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+}
+
+async function typeSearch(query: string) {
+  const input = container.querySelector<HTMLInputElement>("#confluence-space")!;
+  await act(async () => {
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, query);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function finishDebounce() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
 }
 
 describe("Confluence job progress and retry controls", () => {
@@ -120,11 +150,7 @@ describe("Confluence job progress and retry controls", () => {
     const start = await render("running");
     expect(container.textContent).toContain("Import is running in the background");
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Retry diagram.png"]')?.disabled).toBe(true);
-    const space = container.querySelector<HTMLSelectElement>("#confluence-space")!;
-    await act(async () => {
-      space.value = "100";
-      space.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await chooseSpace("Engineering");
     expect(button("Import space").disabled).toBe(true);
     expect(
       [...container.querySelectorAll("button")].some((element) => element.textContent?.includes("Re-import all"))
@@ -136,11 +162,7 @@ describe("Confluence job progress and retry controls", () => {
   it("imports the chosen space with the current destination and access", async () => {
     const start = await render();
     expect(button("Import space").disabled).toBe(true);
-    const space = container.querySelector<HTMLSelectElement>("#confluence-space")!;
-    await act(async () => {
-      space.value = "100";
-      space.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await chooseSpace("Engineering");
     await act(async () => button("Import space").click());
     expect(start).toHaveBeenCalledWith("team", "project-1", {
       space_id: "100",
@@ -217,5 +239,125 @@ describe("Confluence job progress and retry controls", () => {
     await render("discovering", { run: { ...run, status: "discovering", inventory_complete: false } });
     expect(container.textContent).toContain("counts reflect items discovered so far");
     expect(container.querySelector('[role="progressbar"]')).toBeNull();
+  });
+
+  it("debounces server search and imports a space missing from the initial page", async () => {
+    const start = await render();
+    vi.mocked(ConfluenceService.prototype.spaces).mockResolvedValue({
+      results: [{ id: "200", name: "Later Space", key: "LATER" }],
+      next_cursor: null,
+      site_url: "https://team.atlassian.net",
+    });
+    await typeSearch("La");
+    await typeSearch("LATER");
+    expect(container.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(button("Import space").disabled).toBe(true);
+    await finishDebounce();
+    expect(ConfluenceService.prototype.spaces).toHaveBeenCalledWith("team", "project-1", undefined, "LATER");
+    expect(vi.mocked(ConfluenceService.prototype.spaces).mock.calls.some((call) => call[3] === "La")).toBe(false);
+    const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
+      element.textContent?.includes("Later Space")
+    );
+    await act(async () => option!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
+    await act(async () => button("Import space").click());
+    expect(start).toHaveBeenCalledWith("team", "project-1", {
+      space_id: "200",
+      parent_id: null,
+      access: 0,
+      mode: "changed",
+    });
+  });
+
+  it("clears the chosen destination when searching again and shows no matching spaces", async () => {
+    const start = await render();
+    await chooseSpace("Engineering");
+    expect(button("Import space").disabled).toBe(false);
+    vi.mocked(ConfluenceService.prototype.spaces).mockResolvedValue({
+      results: [],
+      next_cursor: null,
+      site_url: "https://team.atlassian.net",
+    });
+    await typeSearch("missing");
+    expect(button("Import space").disabled).toBe(true);
+    await finishDebounce();
+    expect(container.querySelector<HTMLInputElement>("#confluence-space")?.value).toBe("missing");
+    expect(container.textContent).toContain("No matching spaces. Try another name or key.");
+    button("Import space").click();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late response from an earlier search", async () => {
+    await render();
+    let finishOld!: (value: Awaited<ReturnType<ConfluenceService["spaces"]>>) => void;
+    const old = new Promise<Awaited<ReturnType<ConfluenceService["spaces"]>>>((resolve) => {
+      finishOld = resolve;
+    });
+    vi.mocked(ConfluenceService.prototype.spaces).mockImplementation(async (_workspace, _project, _cursor, query) =>
+      query === "old"
+        ? old
+        : {
+            results: [{ id: "300", name: "New result", key: "NEW" }],
+            next_cursor: null,
+            site_url: "https://team.atlassian.net",
+          }
+    );
+    await typeSearch("old");
+    await finishDebounce();
+    await typeSearch("new");
+    await finishDebounce();
+    expect(container.textContent).toContain("New result");
+    await act(async () =>
+      finishOld({
+        results: [{ id: "200", name: "Old result", key: "OLD" }],
+        next_cursor: null,
+        site_url: "https://team.atlassian.net",
+      })
+    );
+    expect(container.textContent).toContain("New result");
+    expect(container.textContent).not.toContain("Old result");
+  });
+
+  it("automatically loads the next page when the options are scrolled", async () => {
+    await render("partial", {}, "later");
+    vi.mocked(ConfluenceService.prototype.spaces).mockResolvedValue({
+      results: [{ id: "200", name: "Later Space", key: "LATER" }],
+      next_cursor: null,
+      site_url: "https://team.atlassian.net",
+    });
+    await act(async () => button("Show Confluence spaces").click());
+    const list = container.querySelector('[role="listbox"]')!;
+    Object.defineProperties(list, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 200 },
+      scrollTop: { value: 790 },
+    });
+    await act(async () => list.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(ConfluenceService.prototype.spaces).toHaveBeenCalledWith("team", "project-1", "later", undefined);
+    expect(container.textContent).toContain("Engineering");
+    expect(container.textContent).toContain("Later Space");
+    expect(container.textContent).not.toContain("Load more spaces");
+  });
+
+  it("can retry a failed automatic page load without losing the current options", async () => {
+    await render("partial", {}, "later");
+    vi.mocked(ConfluenceService.prototype.spaces).mockRejectedValueOnce(new Error("network"));
+    await act(async () => button("Show Confluence spaces").click());
+    const list = container.querySelector('[role="listbox"]')!;
+    Object.defineProperties(list, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 200 },
+      scrollTop: { value: 790 },
+    });
+    await act(async () => list.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(container.textContent).toContain("Engineering");
+    vi.mocked(ConfluenceService.prototype.spaces).mockResolvedValue({
+      results: [{ id: "200", name: "Later Space", key: "LATER" }],
+      next_cursor: null,
+      site_url: "https://team.atlassian.net",
+    });
+    await act(async () => button("Try loading more again").click());
+    expect(container.textContent).toContain("Later Space");
+    expect(container.textContent).toContain("Engineering");
+    expect(container.textContent).not.toContain("Try loading more again");
   });
 });

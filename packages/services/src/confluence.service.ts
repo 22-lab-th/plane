@@ -87,9 +87,10 @@ export class ConfluenceService extends APIService {
   async spaces(
     workspace: string,
     project: string,
-    cursor?: string
-  ): Promise<{ results: ConfluenceSpace[]; next_cursor: string | null; site_url: string }> {
-    return (await this.get(`${this.path(workspace, project)}/spaces/`, { params: { cursor } })).data;
+    cursor?: string,
+    search?: string
+  ): Promise<{ results: ConfluenceSpace[]; next_cursor: string | null; site_url: string; count?: number }> {
+    return (await this.get(`${this.path(workspace, project)}/spaces/`, { params: { cursor, search } })).data;
   }
   async runs(workspace: string, project: string): Promise<ConfluenceRun[]> {
     return (await this.get(`${this.path(workspace, project)}/runs/`)).data;

@@ -11,6 +11,7 @@ from plane.db.models import ConfluenceRun, ConfluenceSource, Page, Project
 from plane.utils.confluence.client import ConfluenceClient, ConfluenceError
 from plane.utils.confluence.config import get_confluence_config
 from plane.utils.confluence.jobs import ACTIVE, recover_stale_runs, require_import_permission, serialize_run
+from plane.utils.confluence.spaces import search_spaces
 
 
 class StartImportSerializer(serializers.Serializer):
@@ -51,10 +52,16 @@ class ConfluenceSpacesEndpoint(BaseAPIView):
             cursor = request.query_params.get("cursor", "")
             if len(cursor) > 2048:
                 return Response({"error": "Invalid cursor."}, status=400)
+            query = request.query_params.get("search", "").strip()
+            if len(query) > 200:
+                return Response({"error": "Search must be 200 characters or fewer."}, status=400)
+            client = ConfluenceClient(config)
+            if query:
+                return Response({"site_url": config["site_url"], **search_spaces(client, query, cursor)})
             params = {"limit": 100}
             if cursor:
                 params["cursor"] = cursor
-            data = ConfluenceClient(config).json("/wiki/api/v2/spaces", params)
+            data = client.json("/wiki/api/v2/spaces", params)
             from urllib.parse import parse_qs, urlsplit
 
             next_cursor = (parse_qs(urlsplit(data.get("_links", {}).get("next", "")).query).get("cursor") or [None])[0]

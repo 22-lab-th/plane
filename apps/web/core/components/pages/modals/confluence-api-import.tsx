@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, FileText, Image, Paperclip, RefreshCw, Video } from "lucide-react";
+import { Combobox } from "@headlessui/react";
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  FileText,
+  Image,
+  Paperclip,
+  RefreshCw,
+  Search,
+  Video,
+} from "lucide-react";
 import useSWR from "swr";
 import { ConfluenceService, confluenceErrorMessage, isConfluenceRunActive } from "@plane/services";
 import type { ConfluenceRun, ConfluenceSpace, ImportMode } from "@plane/services";
 import { Button } from "@plane/propel/button";
+import useDebounce from "@/hooks/use-debounce";
 
 const service = new ConfluenceService();
 const actionClass = "min-h-9 px-3 focus-visible:ring-2 focus-visible:ring-accent-strong focus-visible:ring-offset-2";
@@ -28,6 +41,15 @@ type Props = {
 
 export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access, onImported }: Props) {
   const [spaceId, setSpaceId] = useState("");
+  const [chosenSpace, setChosenSpace] = useState<ConfluenceSpace | null>(null);
+  const chosenSpaceRef = useRef<ConfluenceSpace | null>(null);
+  const [spaceQuery, setSpaceQuery] = useState("");
+  const search = useDebounce(spaceQuery.trim(), 300);
+  const currentSearch = useRef(search);
+  currentSearch.current = spaceQuery.trim();
+  const loadingMoreSpaces = useRef(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [spacesPageError, setSpacesPageError] = useState("");
   const [spaces, setSpaces] = useState<ConfluenceSpace[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [runId, setRunId] = useState("");
@@ -54,8 +76,12 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
   const {
     data: initialSpaces,
     error: spacesError,
+    isLoading: spacesLoading,
     mutate: refreshSpaces,
-  } = useSWR(["CONFLUENCE_SPACES", workspaceSlug, projectId], () => service.spaces(workspaceSlug, projectId));
+  } = useSWR(["CONFLUENCE_SPACES", workspaceSlug, projectId, search], () =>
+    service.spaces(workspaceSlug, projectId, undefined, search || undefined)
+  );
+  const searching = spaceQuery.trim() !== search || spacesLoading;
   const {
     data: runs,
     error: runsError,
@@ -67,6 +93,7 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
     if (initialSpaces) {
       setSpaces(initialSpaces.results);
       setCursor(initialSpaces.next_cursor);
+      setSpacesPageError("");
     }
   }, [initialSpaces]);
   useEffect(() => {
@@ -119,18 +146,22 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
       setBusy(false);
     }
   };
-  const moreSpaces = async () => {
-    if (!cursor) return;
-    setBusy(true);
-    setError("");
+  const moreSpaces = async (retry = false) => {
+    if (!cursor || busy || searching || loadingMoreSpaces.current || (!retry && spacesPageError)) return;
+    const requestSearch = search;
+    loadingMoreSpaces.current = true;
+    setLoadingMore(true);
+    setSpacesPageError("");
     try {
-      const page = await service.spaces(workspaceSlug, projectId, cursor);
+      const page = await service.spaces(workspaceSlug, projectId, cursor, search || undefined);
+      if (currentSearch.current !== requestSearch) return;
       setSpaces((current) => [...new Map([...current, ...page.results].map((space) => [space.id, space])).values()]);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError(confluenceErrorMessage(err));
+      if (currentSearch.current === requestSearch) setSpacesPageError(confluenceErrorMessage(err));
     } finally {
-      setBusy(false);
+      loadingMoreSpaces.current = false;
+      setLoadingMore(false);
     }
   };
   const processed = run ? run.counts.completed + run.counts.failed + run.counts.skipped : 0;
@@ -142,27 +173,107 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
           <label id="confluence-space-label" htmlFor="confluence-space" className="text-14 font-medium text-primary">
             Choose a Confluence space
           </label>
-          {cursor && (
-            <Button variant="link" size="xl" className={actionClass} onClick={() => void moreSpaces()} disabled={busy}>
-              Load more spaces
-            </Button>
-          )}
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-          <select
-            id="confluence-space"
-            value={spaceId}
-            onChange={(event) => setSpaceId(event.target.value)}
-            className={inputClass}
-            disabled={busy || (!initialSpaces && !spacesError)}
+          <Combobox
+            value={chosenSpace}
+            by="id"
+            onClose={() => {
+              setSpaceQuery("");
+              setSpaceId(chosenSpaceRef.current?.id ?? "");
+            }}
+            onChange={(space: ConfluenceSpace | null) => {
+              chosenSpaceRef.current = space;
+              setChosenSpace(space);
+              setSpaceId(space?.id ?? "");
+            }}
+            disabled={busy}
+            as="div"
+            className="relative min-w-0 flex-1"
           >
-            <option value="">{!initialSpaces && !spacesError ? "Loading spaces…" : "Select a space"}</option>
-            {spaces.map((space) => (
-              <option key={space.id} value={space.id}>
-                {space.name} ({space.key})
-              </option>
-            ))}
-          </select>
+            <div className="relative">
+              <Search aria-hidden="true" className="pointer-events-none absolute top-3 left-3 size-4 text-tertiary" />
+              <Combobox.Input
+                id="confluence-space"
+                className={`${inputClass} pr-10 pl-9`}
+                displayValue={(space: ConfluenceSpace | null) => (space ? `${space.name} (${space.key})` : "")}
+                placeholder="Search by space name or key"
+                autoComplete="off"
+                maxLength={200}
+                onChange={(event) => {
+                  setSpaceQuery(event.target.value);
+                  setSpaceId("");
+                  setSpacesPageError("");
+                }}
+              />
+              <Combobox.Button
+                className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-tertiary focus-visible:ring-2 focus-visible:ring-accent-strong"
+                aria-label="Show Confluence spaces"
+              >
+                <ChevronDown aria-hidden="true" className="size-4" />
+              </Combobox.Button>
+            </div>
+            <Combobox.Options
+              className="vertical-scrollbar absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-subtle bg-surface-1 p-1 shadow-raised-200 focus:outline-none"
+              onScroll={(event) => {
+                const list = event.currentTarget;
+                if (list.scrollHeight - list.scrollTop - list.clientHeight < 48) void moreSpaces();
+              }}
+            >
+              {searching ? (
+                <div role="status" className="p-3 text-13 text-tertiary">
+                  {spaceQuery.trim() ? "Searching all accessible spaces…" : "Loading spaces…"}
+                </div>
+              ) : spacesError ? (
+                <div role="status" className="p-3 text-13 text-danger-primary">
+                  Unable to load spaces. Use Try again below.
+                </div>
+              ) : !spaces.length ? (
+                <div role="status" className="p-3 text-13 text-tertiary">
+                  {search ? "No matching spaces. Try another name or key." : "No accessible spaces found."}
+                </div>
+              ) : (
+                spaces.map((space) => (
+                  <Combobox.Option
+                    key={space.id}
+                    value={space}
+                    className={({ active: optionActive }) =>
+                      `flex cursor-pointer items-start gap-2 rounded-md px-3 py-2.5 text-13 ${optionActive ? "bg-accent-subtle text-accent-primary" : "text-secondary"}`
+                    }
+                  >
+                    {({ selected: isSelected }) => (
+                      <>
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                          {space.name}
+                          <span className="mt-0.5 block text-12 text-tertiary">{space.key}</span>
+                        </span>
+                        {isSelected && <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0" />}
+                      </>
+                    )}
+                  </Combobox.Option>
+                ))
+              )}
+              {loadingMore && (
+                <div role="status" className="p-3 text-12 text-tertiary">
+                  Loading more spaces…
+                </div>
+              )}
+              {spacesPageError && (
+                <div role="alert" className="space-y-2 p-3 text-12 text-danger-primary">
+                  <p>{spacesPageError}</p>
+                  <Button
+                    variant="secondary"
+                    size="xl"
+                    className={actionClass}
+                    disabled={loadingMore}
+                    onClick={() => void moreSpaces(true)}
+                  >
+                    Try loading more again
+                  </Button>
+                </div>
+              )}
+            </Combobox.Options>
+          </Combobox>
           <Button
             variant="primary"
             size="xl"
@@ -174,6 +285,9 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
             {busy ? "Please wait…" : "Import space"}
           </Button>
         </div>
+        <p className="text-12 text-tertiary">
+          Search all accessible spaces by name or key. More results load as you scroll.
+        </p>
         {selectedSpaceActive && (
           <p role="status" className="text-12 text-tertiary">
             This space is already being imported. Follow its progress below.
@@ -187,7 +301,7 @@ export function ConfluenceAPIImport({ workspaceSlug, projectId, parentId, access
               Try again
             </Button>
           </div>
-        ) : initialSpaces && !spaces.length ? (
+        ) : initialSpaces && !spaces.length && !search ? (
           <p role="status" className="text-13 text-tertiary">
             No accessible spaces found. Check the connected account’s Confluence permissions.
           </p>
