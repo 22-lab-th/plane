@@ -641,6 +641,10 @@ test.describe("File detail drawer (T-114)", () => {
       page.getByTestId("files-drawer-preview-tile"),
       "and says why this type is never inlined"
     ).toContainText(SVG_TILE_COPY);
+    await expect(
+      page.getByTestId("files-drawer-preview-tile").getByRole("button", { name: "Download file" }),
+      "the unsupported SVG panel offers an explicit download"
+    ).toBeVisible();
 
     const fetchedSvg = await page.request.get(signedSvg.url, { failOnStatusCode: false });
     expect(fetchedSvg.status(), "the URL the drawer was handed is live").toBe(200);
@@ -659,6 +663,10 @@ test.describe("File detail drawer (T-114)", () => {
     ).toBe("inline");
     await expect(page.getByTestId("files-drawer-preview-image")).toHaveCount(0);
     await expect(page.getByTestId("files-drawer-preview-tile")).toContainText(NO_PREVIEW_COPY);
+    await expect(
+      page.getByTestId("files-drawer-preview-tile").getByRole("button", { name: "Download file" }),
+      "the general no-preview panel offers an explicit download"
+    ).toBeVisible();
   });
 
   test("the_metadata_links_and_version_history_match_the_detail_payload", async ({ page }) => {
@@ -682,6 +690,8 @@ test.describe("File detail drawer (T-114)", () => {
     const details = captureResponses(page, (url) => url.pathname === `${FILES_PATH}${created.fileId}/`);
     await openDrawerByDeepLink(page, created.fileId);
     const beforeLink = await settledBody<TDetail>(page, details, 0, "the drawer's own detail request");
+    await expect(page.getByTestId("files-drawer-preview-metadata")).toBeVisible();
+    await expect(page.getByTestId("files-drawer-object-key-section")).toBeVisible();
 
     // The metadata block names the version the preview is following, so its numbers come
     // from the payload: the bytes, the version number and the uploader, all live values.
@@ -976,7 +986,9 @@ test.describe("File detail drawer (T-114)", () => {
     ).toBe("superseded");
     const signedAfter = await settledBody<TAccessUrl>(page, previews, 1, "the preview signed after activation");
     expect(signedAfter.version_no, "the preview follows the newly active version").toBe(newNo);
-    await expect(page.getByTestId(DRAWER)).toContainText(`Signed link for v${newNo}`);
+    const signedMetadata = page.getByTestId("files-drawer-preview-metadata");
+    await expect(signedMetadata).toContainText("Signed version");
+    await expect(signedMetadata).toContainText(`v${newNo}`);
     expect(
       (await renderedVersions(page)).map((entry) => entry.status),
       "the history's statuses follow the payload the drawer just consumed"
@@ -1049,7 +1061,9 @@ test.describe("File detail drawer (T-114)", () => {
       newNo
     );
     await expect(page.getByTestId("files-drawer-preview")).not.toContainText(`Previewing v${activeNo} (not active)`);
-    await expect(page.getByTestId(DRAWER)).toContainText(`Signed link for v${newNo}`);
+    const finalSignedMetadata = page.getByTestId("files-drawer-preview-metadata");
+    await expect(finalSignedMetadata).toContainText("Signed version");
+    await expect(finalSignedMetadata).toContainText(`v${newNo}`);
   });
 
   test("rename_move_restore_and_purge_follow_the_api", async ({ page }) => {

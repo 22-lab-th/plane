@@ -14,6 +14,8 @@ import { FolderActions } from "./folder-management";
 
 type Props = {
   rows: TFilesRow[];
+  workspaceSlug: string;
+  projectId: string;
   onOpenFolder: (folderId: string) => void;
   onOpenFile: (fileId: string) => void;
   registerRow: (rowKey: string, element: HTMLElement | null) => void;
@@ -32,6 +34,8 @@ export function FilesGrid(props: Props) {
   const {
     rows,
     onOpenFolder,
+    workspaceSlug,
+    projectId,
     onOpenFile,
     registerRow,
     onRowKeyDown,
@@ -62,16 +66,17 @@ export function FilesGrid(props: Props) {
               </div>
               <span className="text-caption-md-regular text-tertiary">Folder</span>
             </button>
-            {canManageFolders && (
-              <div className="absolute top-2 right-2">
-                <FolderActions
-                  folder={row.folder}
-                  onRename={onRenameFolder}
-                  onMove={onMoveFolder}
-                  onDelete={onDeleteFolder}
-                />
-              </div>
-            )}
+            <div className="absolute top-2 right-2">
+              <FolderActions
+                workspaceSlug={workspaceSlug}
+                projectId={projectId}
+                folder={row.folder}
+                canManageFolders={canManageFolders}
+                onRename={onRenameFolder}
+                onMove={onMoveFolder}
+                onDelete={onDeleteFolder}
+              />
+            </div>
           </div>
         ) : (
           <button

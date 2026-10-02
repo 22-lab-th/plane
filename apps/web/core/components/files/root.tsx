@@ -394,6 +394,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
                 (viewMode === "grid" ? (
                   <FilesGrid
                     rows={rows}
+                    workspaceSlug={workspaceSlug}
+                    projectId={projectId}
                     onOpenFolder={handleOpenFolder}
                     onOpenFile={handleOpenFile}
                     registerRow={registerRow}
@@ -406,6 +408,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
                 ) : (
                   <FilesTable
                     rows={rows}
+                    workspaceSlug={workspaceSlug}
+                    projectId={projectId}
                     ordering={ordering}
                     onOrderingChange={handleOrderingChange}
                     onOpenFolder={handleOpenFolder}
@@ -428,6 +432,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
           ) : viewMode === "grid" ? (
             <FilesGrid
               rows={rows}
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
               onRenameFolder={handleRenameFolder}
               onMoveFolder={handleMoveFolder}
               canManageFolders={!isReadOnly}
@@ -440,6 +446,8 @@ export const ProjectFilesRoot = observer(function ProjectFilesRoot(props: Props)
           ) : (
             <FilesTable
               rows={rows}
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
               ordering={ordering}
               onOrderingChange={handleOrderingChange}
               onOpenFolder={handleOpenFolder}

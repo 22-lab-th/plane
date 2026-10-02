@@ -49,7 +49,11 @@ type Props = {
 
 const META_LABEL_CLASS_NAME = "text-caption-md-regular text-tertiary";
 const META_VALUE_CLASS_NAME = "text-body-xs-regular text-primary";
-const PANEL_CLASS_NAME = "rounded-md border border-subtle bg-layer-1 px-2 py-1";
+const SECTION_CLASS_NAME = "flex flex-col gap-2";
+const SECTION_TITLE_CLASS_NAME = "text-body-xs-medium text-primary";
+const METADATA_GRID_CLASS_NAME = "grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2";
+const PANEL_CLASS_NAME = "rounded-md border border-subtle bg-layer-1 p-3";
+const STATUS_PANEL_CLASS_NAME = "rounded-md border border-subtle bg-layer-1 p-3";
 
 /** Used only when the refusal carries no message of its own. */
 const FALLBACK_PREVIEW_FAILURE = "We could not prepare a preview for this file.";
@@ -269,172 +273,218 @@ export function FileDetailDrawer(props: Props) {
         }}
         className="relative flex h-full w-full flex-col overflow-y-auto border-l border-subtle bg-surface-1 outline-none md:w-[420px] xl:w-[480px]"
       >
-        <header className="flex items-start justify-between gap-2 border-b border-subtle px-4 py-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <h2 className="truncate text-body-sm-medium text-primary">{file?.name_display ?? "Loading file"}</h2>
-            {file && (
-              <div className="flex items-center gap-2">
-                <span className="rounded-sm bg-layer-3 px-1.5 py-0.5 text-caption-md-medium text-secondary uppercase">
-                  {file.extension}
-                </span>
-                <span className={META_LABEL_CLASS_NAME}>{fileKind(file)}</span>
-                {file.is_pinned && (
-                  <Pill variant={EPillVariant.INFO} size={EPillSize.XS}>
-                    Pinned
-                  </Pill>
-                )}
-                {file.trashed && (
-                  <Pill variant={EPillVariant.WARNING} size={EPillSize.XS}>
-                    In trash
-                  </Pill>
-                )}
-              </div>
-            )}
-          </div>
-          <IconButton
-            variant="ghost"
-            size="base"
-            icon={CloseIcon}
-            aria-label="Close file details"
-            data-testid="files-drawer-close"
-            className={cn(FILES_FOCUS_RING, "rounded-md")}
-            onClick={onClose}
-          />
-        </header>
-        {detail && (
-          <FileDetailActions
-            workspaceSlug={workspaceSlug}
-            projectId={projectId}
-            detail={detail}
-            isProjectAdmin={isProjectAdmin}
-            dialog={dialog}
-            onDialogChange={setDialog}
-            onNotice={setNotice}
-            onRestored={onRestored}
-            onChanged={handleMutated}
-            onActivated={handleActivated}
-            onPurged={handlePurged}
-          />
-        )}
-        <div className="flex flex-col gap-4 px-4 py-3">
+        <div className="sticky top-0 z-10 bg-surface-1">
+          <header className="flex items-start justify-between gap-3 border-b border-subtle px-4 py-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <h2 className="text-body-sm-medium [overflow-wrap:anywhere] break-words text-primary">
+                {file?.name_display ?? "Loading file"}
+              </h2>
+              {file && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-sm bg-layer-3 px-1.5 py-0.5 text-caption-md-medium text-secondary uppercase">
+                    {file.extension}
+                  </span>
+                  <span className={META_LABEL_CLASS_NAME}>{fileKind(file)}</span>
+                  {file.is_pinned && (
+                    <Pill variant={EPillVariant.INFO} size={EPillSize.XS}>
+                      Pinned
+                    </Pill>
+                  )}
+                  {file.trashed && (
+                    <Pill variant={EPillVariant.WARNING} size={EPillSize.XS}>
+                      In trash
+                    </Pill>
+                  )}
+                </div>
+              )}
+            </div>
+            <IconButton
+              variant="ghost"
+              size="base"
+              icon={CloseIcon}
+              aria-label="Close file details"
+              data-testid="files-drawer-close"
+              className={cn(FILES_FOCUS_RING, "shrink-0 rounded-md")}
+              onClick={onClose}
+            />
+          </header>
+          {detail && (
+            <FileDetailActions
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
+              detail={detail}
+              isProjectAdmin={isProjectAdmin}
+              dialog={dialog}
+              onDialogChange={setDialog}
+              onNotice={setNotice}
+              onRestored={onRestored}
+              onChanged={handleMutated}
+              onActivated={handleActivated}
+              onPurged={handlePurged}
+            />
+          )}
+        </div>
+        <div className="flex flex-col gap-5 px-4 py-3">
           {notice && (
             <p
               data-testid="files-drawer-notice"
               role={notice.tone === "error" ? "alert" : "status"}
               className={cn(
-                "rounded-md px-2 py-1 text-caption-md-regular",
-                notice.tone === "error" ? "text-danger-primary" : "text-secondary"
+                STATUS_PANEL_CLASS_NAME,
+                "text-caption-md-regular",
+                notice.tone === "error" ? "border-danger-strong bg-danger-subtle text-danger-primary" : "text-secondary"
               )}
             >
               {notice.text}
             </p>
           )}
-          {isLoading && !detail && <p className="text-caption-md-regular text-tertiary">Loading file details…</p>}
+          {isLoading && !detail && (
+            <p className={cn(STATUS_PANEL_CLASS_NAME, "text-caption-md-regular text-tertiary")}>
+              Loading file details…
+            </p>
+          )}
           {hasError && !detail && (
-            <div className="flex flex-col items-start gap-2" role="alert">
+            <div
+              className={cn(
+                STATUS_PANEL_CLASS_NAME,
+                "flex flex-col items-start gap-2 border-danger-strong bg-danger-subtle"
+              )}
+              role="alert"
+            >
               <p className="text-caption-md-regular text-danger-primary">We could not load this file.</p>
-              <button
-                type="button"
-                className={cn("rounded text-caption-md-medium text-link-primary", FILES_FOCUS_RING)}
+              <Button
+                variant="error-outline"
+                size="base"
+                className={FILES_FOCUS_RING}
                 onClick={() => setReloadToken((token) => token + 1)}
               >
                 Retry
-              </button>
+              </Button>
             </div>
           )}
           {permissions && !permissions.can_download && (
-            <p className="text-caption-md-regular text-tertiary">This file is not available for download.</p>
+            <p className={cn(STATUS_PANEL_CLASS_NAME, "text-caption-md-regular text-tertiary")}>
+              This file is not available for download.
+            </p>
           )}
           {file && permissions && detail && (
             <>
-              <section data-testid="files-drawer-preview" className="flex flex-col gap-2">
-                <h3 className={META_LABEL_CLASS_NAME}>Preview</h3>
+              <section data-testid="files-drawer-preview" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Preview</h3>
                 <PreviewSurface
+                  workspaceSlug={workspaceSlug}
+                  projectId={projectId}
+                  fileId={file.id}
                   name={file.name_display}
                   extension={file.extension}
                   mimeType={metadataVersion?.mime_type ?? file.mime_type}
                   signed={preview}
                   failure={previewFailure}
+                  canDownload={permissions.can_download}
+                  downloadVersionNo={preview?.version_no ?? previewVersionNo}
                   onRetry={() => setPreviewToken((token) => token + 1)}
                 />
-                <div className="flex items-end justify-between gap-2">
-                  <div className="flex flex-col gap-1">
-                    {preview && preview.version_no !== (activeVersion?.version_no ?? null) && (
-                      <Pill variant={EPillVariant.WARNING} size={EPillSize.XS} className="w-fit">
-                        Previewing v{preview.version_no} (not active)
-                      </Pill>
-                    )}
+                {(preview || versions.length > 0) && (
+                  <div
+                    data-testid="files-drawer-preview-metadata"
+                    className={cn(PANEL_CLASS_NAME, "flex flex-col gap-3")}
+                  >
                     {preview && (
-                      <span className={META_LABEL_CLASS_NAME}>
-                        Signed link for v{preview.version_no} · expires {formatVersionTimestamp(preview.expires_at)} ·{" "}
-                        {preview.disposition}
-                      </span>
+                      <dl className={METADATA_GRID_CLASS_NAME}>
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <dt className={META_LABEL_CLASS_NAME}>Signed version</dt>
+                          <dd className={META_VALUE_CLASS_NAME}>v{preview.version_no}</dd>
+                        </div>
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <dt className={META_LABEL_CLASS_NAME}>Expiry</dt>
+                          <dd className={META_VALUE_CLASS_NAME}>{formatVersionTimestamp(preview.expires_at)}</dd>
+                        </div>
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <dt className={META_LABEL_CLASS_NAME}>Delivery</dt>
+                          <dd className={META_VALUE_CLASS_NAME}>
+                            {preview.disposition === "inline" &&
+                            isInlineRenderableMime(metadataVersion?.mime_type ?? file.mime_type)
+                              ? "Inline preview"
+                              : "Download"}
+                          </dd>
+                        </div>
+                      </dl>
                     )}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                      {preview && preview.version_no !== (activeVersion?.version_no ?? null) && (
+                        <Pill variant={EPillVariant.WARNING} size={EPillSize.XS} className="w-fit">
+                          Previewing v{preview.version_no} (not active)
+                        </Pill>
+                      )}
+                      {versions.length > 0 && (
+                        <label
+                          className="flex min-w-0 flex-col gap-1 sm:ml-auto sm:flex-row sm:items-center"
+                          htmlFor="files-drawer-preview-version-select"
+                        >
+                          <span className={META_LABEL_CLASS_NAME}>Version</span>
+                          <select
+                            id="files-drawer-preview-version-select"
+                            data-testid="files-drawer-preview-version"
+                            className={cn(
+                              "min-w-0 rounded-md border border-strong bg-layer-2 px-2 py-1 text-caption-md-regular text-primary",
+                              FILES_FOCUS_RING
+                            )}
+                            value={String(previewVersionNo ?? activeVersion?.version_no ?? "")}
+                            onChange={(event) =>
+                              setPreviewVersionNo(event.target.value ? Number(event.target.value) : null)
+                            }
+                          >
+                            {versions.map((version) => (
+                              <option key={version.id} value={String(version.version_no)}>
+                                v{version.version_no}
+                                {version.is_active ? " (active)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </div>
                   </div>
-                  {versions.length > 0 && (
-                    <label className="flex items-center gap-2" htmlFor="files-drawer-preview-version-select">
-                      <span className={META_LABEL_CLASS_NAME}>Version</span>
-                      <select
-                        id="files-drawer-preview-version-select"
-                        data-testid="files-drawer-preview-version"
-                        className={cn(
-                          "rounded-md border border-strong bg-layer-2 px-2 py-1 text-caption-md-regular text-primary",
-                          FILES_FOCUS_RING
-                        )}
-                        value={String(previewVersionNo ?? activeVersion?.version_no ?? "")}
-                        onChange={(event) =>
-                          setPreviewVersionNo(event.target.value ? Number(event.target.value) : null)
-                        }
-                      >
-                        {versions.map((version) => (
-                          <option key={version.id} value={String(version.version_no)}>
-                            v{version.version_no}
-                            {version.is_active ? " (active)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                </div>
+                )}
               </section>
 
-              <section className="flex flex-col gap-2">
-                <h3 className={META_LABEL_CLASS_NAME}>Details</h3>
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  <div className="flex flex-col">
+              <section data-testid="files-drawer-details" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Details</h3>
+                <dl className={cn(METADATA_GRID_CLASS_NAME, PANEL_CLASS_NAME)}>
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Size</dt>
                     <dd className={META_VALUE_CLASS_NAME}>
                       {formatFileSize(metadataVersion?.size_bytes ?? file.size_bytes)}
                       {metadataVersion ? ` (v${metadataVersion.version_no})` : ""}
                     </dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Type</dt>
-                    <dd className={META_VALUE_CLASS_NAME}>{file.mime_type}</dd>
+                    <dd className={cn(META_VALUE_CLASS_NAME, "break-words")}>{file.mime_type}</dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Category</dt>
                     <dd className={META_VALUE_CLASS_NAME}>{file.category}</dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Uploader</dt>
-                    <dd className={META_VALUE_CLASS_NAME}>
+                    <dd className={cn(META_VALUE_CLASS_NAME, "break-words")}>
                       {metadataVersion?.uploaded_by?.display_name ?? file.uploader?.display_name ?? "—"}
                     </dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Links</dt>
                     <dd className={META_VALUE_CLASS_NAME}>{String(file.link_count)}</dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Created</dt>
                     <dd className={META_VALUE_CLASS_NAME}>{renderFormattedDate(file.created_at)}</dd>
                   </div>
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5">
                     <dt className={META_LABEL_CLASS_NAME}>Updated</dt>
                     <dd className={META_VALUE_CLASS_NAME}>{renderFormattedDate(file.updated_at)}</dd>
                   </div>
-                  <div className="col-span-2 flex flex-col">
+                  <div className="flex min-w-0 flex-col gap-0.5 sm:col-span-2">
                     <dt className={META_LABEL_CLASS_NAME}>Checksum (SHA-256)</dt>
                     <dd
                       data-testid="files-drawer-checksum"
@@ -443,8 +493,17 @@ export function FileDetailDrawer(props: Props) {
                       {metadataVersion?.client_checksum_sha256 || file.checksum_sha256 || "—"}
                     </dd>
                   </div>
-                  <div className="col-span-2 flex flex-col">
-                    <dt className={META_LABEL_CLASS_NAME}>Object key</dt>
+                </dl>
+              </section>
+
+              <section data-testid="files-drawer-object-key-section" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Object key</h3>
+                <p className={META_LABEL_CLASS_NAME}>
+                  This immutable storage key does not change when the file is renamed or moved.
+                </p>
+                <dl className={PANEL_CLASS_NAME}>
+                  <div className="min-w-0">
+                    <dt className="sr-only">Object key</dt>
                     <dd
                       data-testid="files-drawer-object-key"
                       className={cn(META_VALUE_CLASS_NAME, "font-mono break-all")}
@@ -453,29 +512,26 @@ export function FileDetailDrawer(props: Props) {
                     </dd>
                   </div>
                 </dl>
-                <p className={META_LABEL_CLASS_NAME}>
-                  The object key is write-once: renaming or moving a file changes metadata only, never the key.
-                </p>
               </section>
 
-              <section data-testid="files-drawer-links" className="flex flex-col gap-2">
-                <h3 className={META_LABEL_CLASS_NAME}>Links ({detail.link_count})</h3>
+              <section data-testid="files-drawer-links" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Links ({detail.link_count})</h3>
                 {detail.links.length === 0 ? (
-                  <p className={META_LABEL_CLASS_NAME}>
+                  <p className={cn(PANEL_CLASS_NAME, META_LABEL_CLASS_NAME)}>
                     No live links — this file appears under Orphan until it is attached to an issue or page.
                   </p>
                 ) : (
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-2">
                     {detail.links.map((link) => (
                       <li
                         key={link.id}
                         data-testid={`files-drawer-link-${link.id}`}
-                        className={cn("flex items-center gap-2", PANEL_CLASS_NAME)}
+                        className={cn("flex min-w-0 flex-wrap items-center gap-2", PANEL_CLASS_NAME)}
                       >
                         <Pill variant={EPillVariant.DEFAULT} size={EPillSize.XS}>
                           {link.entity_type}
                         </Pill>
-                        <span className={cn(META_VALUE_CLASS_NAME, "truncate")}>
+                        <span className={cn(META_VALUE_CLASS_NAME, "min-w-0 break-all")}>
                           {link.entity_identifier || link.entity_id}
                         </span>
                       </li>
@@ -484,8 +540,8 @@ export function FileDetailDrawer(props: Props) {
                 )}
               </section>
 
-              <section data-testid="files-drawer-versions" className="flex flex-col gap-2">
-                <h3 className={META_LABEL_CLASS_NAME}>Version history ({versions.length})</h3>
+              <section data-testid="files-drawer-versions" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Version history ({versions.length})</h3>
                 <ul className="flex flex-col gap-2">
                   {versions.map((version) => (
                     <li
@@ -493,32 +549,33 @@ export function FileDetailDrawer(props: Props) {
                       data-testid={`files-drawer-version-${version.version_no}`}
                       data-version={version.version_no}
                       data-status={version.status}
-                      className={cn("flex flex-col gap-1", PANEL_CLASS_NAME)}
+                      className={cn("flex min-w-0 flex-col gap-3", PANEL_CLASS_NAME)}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={META_VALUE_CLASS_NAME}>v{version.version_no}</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-body-xs-medium text-primary">v{version.version_no}</span>
                         <Pill variant={versionStatusVariant(version)} size={EPillSize.XS}>
                           {VERSION_STATUS_LABELS[version.status] ?? version.status}
                         </Pill>
                       </div>
-                      <div className={META_LABEL_CLASS_NAME}>
+                      <p className={cn(META_LABEL_CLASS_NAME, "break-words")}>
                         {version.uploaded_by?.display_name ?? "Unknown uploader"} · {formatFileSize(version.size_bytes)}{" "}
                         · {formatVersionTimestamp(version.created_at)}
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
+                      </p>
+                      <div className="flex min-w-0 flex-col gap-2 border-t border-subtle pt-2 sm:flex-row sm:items-end sm:justify-between">
                         <span
                           data-testid={`files-drawer-version-etag-${version.version_no}`}
-                          className={cn("font-mono truncate", META_LABEL_CLASS_NAME)}
+                          className={cn("font-mono min-w-0 break-all", META_LABEL_CLASS_NAME)}
                         >
                           ETag {version.etag || "—"}
                         </span>
-                        <span className="flex items-center gap-2">
+                        <span className="flex shrink-0 flex-wrap items-center gap-2">
                           {permissions.can_download && (
                             <DownloadButton
                               workspaceSlug={workspaceSlug}
                               projectId={projectId}
                               fileId={file.id}
                               versionNo={version.version_no}
+                              variant="secondary"
                             />
                           )}
                           {/* `can_activate` reports what the *rows* allow, not what the caller
@@ -527,7 +584,7 @@ export function FileDetailDrawer(props: Props) {
                           {permissions.can_edit && version.can_activate && !version.is_active && (
                             <Button
                               data-testid={`files-drawer-version-activate-${version.version_no}`}
-                              variant="primary"
+                              variant="secondary"
                               size="base"
                               className={FILES_FOCUS_RING}
                               onClick={() => void activateVersion(version.version_no)}
@@ -546,24 +603,29 @@ export function FileDetailDrawer(props: Props) {
                 </p>
               </section>
 
-              <section data-testid="files-drawer-activity" className="flex flex-col gap-2">
-                <h3 className={META_LABEL_CLASS_NAME}>Activity</h3>
+              <section data-testid="files-drawer-activity" className={SECTION_CLASS_NAME}>
+                <h3 className={SECTION_TITLE_CLASS_NAME}>Activity</h3>
                 {detail.activity.length === 0 ? (
-                  <p className="text-caption-md-regular text-tertiary">No recorded activity.</p>
+                  <p className={cn(PANEL_CLASS_NAME, META_LABEL_CLASS_NAME)}>No recorded activity.</p>
                 ) : (
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-2">
                     {detail.activity.map((entry) => {
                       const { actor, action } = fileActivityCopy(entry);
                       return (
                         <li
                           key={entry.id}
                           data-testid={`files-drawer-activity-${entry.id}`}
-                          className="flex items-center justify-between gap-2"
+                          className={cn(
+                            "flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between",
+                            PANEL_CLASS_NAME
+                          )}
                         >
-                          <span className={META_VALUE_CLASS_NAME}>
+                          <span className={cn(META_VALUE_CLASS_NAME, "min-w-0 [overflow-wrap:anywhere] break-words")}>
                             {actor} {action}
                           </span>
-                          <span className={META_LABEL_CLASS_NAME}>{calculateTimeAgo(entry.created_at)}</span>
+                          <span className={cn(META_LABEL_CLASS_NAME, "shrink-0")}>
+                            {calculateTimeAgo(entry.created_at)}
+                          </span>
                         </li>
                       );
                     })}
@@ -588,32 +650,65 @@ export function FileDetailDrawer(props: Props) {
  * and a Download action instead (DESIGN §8, AC-08).
  */
 function PreviewSurface(props: {
+  workspaceSlug: string;
+  projectId: string;
+  fileId: string;
   name: string;
   extension: string;
   mimeType: string;
   signed: IProjectFileAccessUrl | null;
   failure: string | null;
+  canDownload: boolean;
+  downloadVersionNo: number | null;
   onRetry: () => void;
 }) {
-  const { name, extension, mimeType, signed, failure, onRetry } = props;
+  const {
+    workspaceSlug,
+    projectId,
+    fileId,
+    name,
+    extension,
+    mimeType,
+    signed,
+    failure,
+    canDownload,
+    downloadVersionNo,
+    onRetry,
+  } = props;
 
   if (failure) {
     return (
-      <div data-testid="files-drawer-preview-failed" className="flex flex-col items-center gap-2" role="alert">
+      <div
+        data-testid="files-drawer-preview-failed"
+        className={cn(STATUS_PANEL_CLASS_NAME, "flex flex-col items-start gap-2 border-danger-strong bg-danger-subtle")}
+        role="alert"
+      >
+        <p className="text-body-xs-medium text-danger-primary">Preview unavailable</p>
         <p className="text-caption-md-regular text-danger-primary">{failure}</p>
-        <button
-          type="button"
-          className={cn("rounded text-caption-md-medium text-link-primary", FILES_FOCUS_RING)}
-          onClick={onRetry}
-        >
-          Retry
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="error-outline" size="base" className={FILES_FOCUS_RING} onClick={onRetry}>
+            Retry
+          </Button>
+          {canDownload && (
+            <DownloadButton
+              workspaceSlug={workspaceSlug}
+              projectId={projectId}
+              fileId={fileId}
+              versionNo={downloadVersionNo}
+              variant="secondary"
+              label="Download file"
+              testId="files-drawer-preview-download"
+            />
+          )}
+        </div>
       </div>
     );
   }
 
   if (!signed) {
-    return <p className="text-caption-md-regular text-tertiary">Preparing the preview…</p>;
+    return (
+      <p className={cn(STATUS_PANEL_CLASS_NAME, "text-caption-md-regular text-tertiary")}>Preparing the preview…</p>
+    );
   }
 
   // The server signs `inline` only for types it verified as inert, and the drawer renders
@@ -633,18 +728,38 @@ function PreviewSurface(props: {
   }
 
   return (
-    <div data-testid="files-drawer-preview-tile" className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+    <div
+      data-testid="files-drawer-preview-tile"
+      className={cn(STATUS_PANEL_CLASS_NAME, "flex flex-col items-center gap-3 px-4 py-6 text-center")}
+    >
       <span
         aria-hidden="true"
         className="flex h-16 w-14 items-center justify-center rounded-md border border-strong bg-layer-3 text-body-sm-medium tracking-wide text-tertiary uppercase"
       >
         {extension}
       </span>
-      <p className="max-w-64 text-caption-md-regular text-tertiary">
-        {isAlwaysDownloadMime(mimeType)
-          ? "SVG and HTML are always downloads — this type is never rendered inline."
-          : "Preview is not available for this type. Download to open it."}
-      </p>
+      <div className="flex max-w-72 flex-col gap-1">
+        <p className="text-body-xs-medium text-primary">Preview unavailable</p>
+        <p className="text-caption-md-regular text-tertiary">
+          {isAlwaysDownloadMime(mimeType)
+            ? "SVG and HTML are always downloads — this type is never rendered inline."
+            : "Preview is not available for this type. Download to open it."}
+        </p>
+        <p className="text-caption-md-regular text-tertiary">
+          Download the file and open it in a compatible application.
+        </p>
+      </div>
+      {canDownload && (
+        <DownloadButton
+          workspaceSlug={workspaceSlug}
+          projectId={projectId}
+          fileId={fileId}
+          versionNo={signed.version_no}
+          variant="secondary"
+          label="Download file"
+          testId="files-drawer-preview-download"
+        />
+      )}
     </div>
   );
 }
