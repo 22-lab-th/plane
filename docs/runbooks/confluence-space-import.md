@@ -15,8 +15,12 @@ the configured site directly. The account must be able to read the selected spac
 its pages and attachments. Grant scoped tokens `read:space:confluence`,
 `read:page:confluence` and `read:attachment:confluence`.
 
-In a project's **Pages → Import Confluence → Atlassian API**, select a space and
-choose **Import / sync space**. The initial public/private tab and destination folder
+In a project's **Pages → Import Confluence → Connect to Confluence**, search by space
+name or key, select a result and choose **Import space**. Search includes all spaces
+accessible to the connected account, including later API pages. Results load
+automatically as you scroll; there is no need to repeatedly load each page of spaces.
+The complete directory is cached for 60 seconds per connection/token.
+The initial public/private tab and destination folder
 determine the import destination. A space already connected to this project keeps
 its established destination and owner. Attachments use Project Files access and are
 visible to project members, including attachments referenced by private pages.
@@ -34,18 +38,18 @@ attachment listing fails. The item table includes failure codes and readable rea
 it is paginated and can be filtered to failures. Close and reopen the modal to resume
 monitoring the job. The history menu exposes the last 20 project runs.
 
-- **Sync new / updated items:** import new, version-changed, missing destinations
+- **Sync updates:** import new, version-changed, missing destinations
   and previously failed items. Unchanged items are skipped.
-- **Retry all failed items:** retry failed and never-successfully-imported items.
+- **Retry failed:** retry failed and never-successfully-imported items.
 - **Retry selected:** retry up to 500 selected item IDs from the connected source.
-- **Re-import all / overwrite:** replace all current imported pages and files,
+- **More import options → Re-import all… → Confirm overwrite:** replace all current imported pages and files,
   including local edits, retaining their Plane IDs. Previous file versions and page
   snapshots use the existing retention policies.
 
 Attachment retries also rebuild their owner pages to repair embedded references.
 If embedded media is missing, the page fails with `media_dependency_failed`; its
 previous content is retained. Retry the failed attachment and its dependent page, or
-use Retry all failed. A source page that changes during import fails with
+use Retry failed. A source page that changes during import fails with
 `source_changed` so the next sync uses a consistent version. Removed source items are
 not deleted from Plane. Locked, archived, moved or trashed destinations must be
 restored/unlocked before retrying; the importer does not silently undo these actions.
@@ -141,6 +145,7 @@ sync selection, queue failures, stale recovery, permissions and encrypted creden
 ```sh
 docker compose -f docker-compose-test.yml run --rm api-tests pytest \
   plane/tests/unit/utils/test_confluence.py \
+  plane/tests/unit/utils/test_confluence_spaces.py \
   plane/tests/contract/app/test_confluence_import.py
 ```
 

@@ -29,7 +29,7 @@ Meet [Plane](https://plane.so/), an open-source project management tool to track
 > Plane is evolving every day. Your suggestions, ideas, and reported bugs help us immensely. Do not hesitate to join in the conversation on [Forum](https://forum.plane.so) or raise a GitHub issue. We read everything and respond to most.
 
 > [!IMPORTANT]
-> This repository is the **22lab-maintained Plane distribution**. It is based on upstream Plane and adds document organization, shared bookmarks, and optional OIDC SSO. The `preview` branch is the integration and delivery branch for these additions.
+> This repository is the **22lab-maintained Plane distribution**. It is based on upstream Plane and adds document organization, Project Files, Confluence and Jira imports, shared bookmarks, and optional OIDC SSO. The `main` branch contains the integrated 22lab features and is the delivery branch for this distribution.
 
 ## 22lab additions
 
@@ -37,6 +37,10 @@ The following behavior is different from the upstream Plane `preview` branch:
 
 - **Nested Page folders** — create, rename, reorder, archive, restore, and move Pages through a folder hierarchy. Drag-and-drop and dialog-based move actions are both available.
 - **Page migration tools** — import individual Markdown files or Markdown bundles with images and move documents between projects without rewriting their content.
+- **Confluence imports** — connect directly to Confluence Cloud through the Atlassian API or upload an HTML space export ZIP. Search all accessible spaces by name or key, preserve page hierarchy, and store attachments in Project Files with images and supported videos embedded at their original positions.
+- **Jira imports** — import Jira Cloud work items, statuses, priorities, labels, matched assignees, parent/subtask relationships, issue links, comments, and attachments. Jira sprints become Plane Cycles.
+- **Import progress and recovery** — follow background API jobs with totals, counts by content type, completed/failed/remaining items, failure reasons, and import history. Retry failed or selected items, sync new or updated content, or re-import everything while retaining destination IDs.
+- **Project Files** — store imported attachments and project uploads through the existing quota, file-size, MIME verification, and version-retention lifecycle.
 - **Workspace Bookmarks** — shared, grouped bookmarks with URL metadata autofill, group filtering, search, and a focused split-view inspector.
 - **Optional OpenID Connect SSO** — configure one instance-wide OIDC provider in God Mode, test discovery/readiness, link or provision identities according to policy, and roll out in Disabled, Optional, or Enforced mode.
 - **SSO recovery and audit controls** — break-glass instance-admin access, readiness checks, lifecycle safeguards, correlation IDs, and audit events that exclude tokens, raw claims, and client secrets.
@@ -48,6 +52,9 @@ Design and operational detail is available in:
 - [Workspace Bookmarks design QA](./design-qa.md)
 - [OIDC operations runbook](./docs/bmad/sso-operations.md)
 - [OIDC delivery report](./docs/auto/delivery-report.md)
+- [Confluence space import runbook](./docs/runbooks/confluence-space-import.md)
+- [Jira project import runbook](./docs/runbooks/jira-project-import.md)
+- [Project-file storage configuration](./docs/runbooks/project-file-storage-configuration.md)
 - [Project-file retention and erasure runbook](./docs/runbooks/project-file-erasure.md)
 - [Project-file disaster-recovery runbook](./docs/runbooks/project-file-disaster-recovery.md)
 - [Personal-data breach notification runbook](./docs/runbooks/personal-data-breach-notification.md)
@@ -75,15 +82,15 @@ Choose the path that matches the intended environment:
 
 ## Customer deployment
 
-Use Plane's supported [Docker](https://developers.plane.so/self-hosting/methods/docker-compose) or [Kubernetes](https://developers.plane.so/self-hosting/methods/kubernetes) deployment guidance as the infrastructure baseline, but build images from this repository's `preview` branch so the Admin, Web, API, workers, and migrations remain on the same revision.
+Use Plane's supported [Docker](https://developers.plane.so/self-hosting/methods/docker-compose) or [Kubernetes](https://developers.plane.so/self-hosting/methods/kubernetes) deployment guidance as the infrastructure baseline, but build images from this repository's `main` branch so the Admin, Web, API, workers, Live, and migrations remain on the same revision.
 
 Start from a versioned checkout and record the deployed commit:
 
 ```bash
 git clone https://github.com/22-lab-th/plane.git
 cd plane
-git checkout preview
-git pull --ff-only origin preview
+git checkout main
+git pull --ff-only origin main
 git rev-parse HEAD
 ```
 
@@ -94,7 +101,7 @@ Before deploying:
 3. Set `APP_BASE_URL`, `ADMIN_BASE_URL`, `SPACE_BASE_URL`, `LIVE_BASE_URL`, `WEB_URL`, and `CORS_ALLOWED_ORIGINS` to the final HTTPS origins. Configure trusted reverse proxies and TLS before exposing the instance.
 4. Configure database, Valkey/Redis, RabbitMQ, email, and object storage for the target environment.
 5. If S3/MinIO has different container and browser addresses, set `AWS_S3_ENDPOINT_URL` to the API-accessible address and `MINIO_PUBLIC_ENDPOINT_URL` to the browser-accessible HTTPS address.
-6. Apply all migrations before enabling the new frontend. The folder, bookmark, and OIDC migrations are additive, but a database backup is still required for rollback.
+6. Apply all migrations before enabling the new frontend, including the Project Files, Confluence, and Jira migrations. Keep a database backup for rollback.
 7. Create and verify at least one instance administrator in God Mode, then complete the [smoke-test checklist](#smoke-test-checklist).
 
 Do not use `docker-compose-local.yml`, development servers, sample credentials, or plain HTTP for a production deployment.
@@ -140,7 +147,13 @@ Never store a customer OIDC secret in this repository, documentation, screenshot
   Customize your workflow by creating filters to display only the most relevant issues. Save and share these views with ease.
 
 - **Pages**
-  Capture and organize ideas using Plane Pages, including nested folders, Markdown import, image bundles, document moves, AI capabilities, and a rich text editor.
+  Capture and organize ideas using Plane Pages, including nested folders, Markdown and Confluence import, image bundles, document moves, AI capabilities, and a rich text editor.
+
+- **Project Files**
+  Keep uploads and imported images, videos, and documents in the project, with stable references from Pages and work items.
+
+- **Atlassian imports**
+  Bring Confluence spaces and Jira projects into Plane through configurable Cloud API connections, including Sprint-to-Cycle mapping, background progress, failure reasons, retry, sync, and overwrite modes.
 
 - **Workspace Bookmarks**
   Maintain shared references in searchable groups with automatic URL metadata and a focused detail view.
@@ -150,6 +163,52 @@ Never store a customer OIDC secret in this repository, documentation, screenshot
 
 - **Analytics**
   Access real-time insights across all your Plane data. Visualize trends, remove blockers, and keep your projects moving forward.
+
+## Import from Confluence and Jira
+
+### Configure connections in God Mode
+
+1. Sign in as an instance administrator and open **God Mode → Confluence** or **God Mode → Jira**. Each connector has its own settings.
+2. Enter the Cloud site URL (for example, `https://your-site.atlassian.net`), Atlassian account email, and API token. For a scoped token, also enter the **Cloud ID**.
+3. Enable direct imports, save the configuration, and run **Test connection**. The account and token must have read access to the content being imported; a successful connection test does not guarantee access to every attachment or sprint.
+
+Tokens are encrypted in instance configuration. Leave the token field blank on later saves to retain the saved token. See the connector runbooks for required access and scopes.
+
+### Import a Confluence space
+
+1. Open the destination project's **Pages**. Choose the public/private tab and optional destination folder before importing.
+2. Select **Import Confluence → Connect to Confluence**.
+3. Type a space name or key in **Choose a Confluence space**, select a result, and click **Import space**. Search includes accessible spaces beyond the first loaded batch; additional results load automatically as you scroll.
+4. Follow the job's progress or close the modal and return later through **Import history**.
+
+Pages are organized under a space folder with their source hierarchy. Images, supported videos, and other attachments are saved in **Project Files**; embedded media keeps its position relative to page text. Project Files are visible to project members, including files referenced by private Pages.
+
+For an offline export, choose **Upload an HTML export** and select a Confluence HTML space export ZIP with attachments. Keep the window open until it finishes. ZIP imports create a new copy on each import and do not offer API sync. See the [Confluence runbook](./docs/runbooks/confluence-space-import.md) for archive limits and supported content.
+
+### Import a Jira project
+
+1. Open an existing destination project and go to **Project settings → Jira Import**.
+2. Select the source Jira project. Add explicit **User mapping** entries when Jira hides users' email addresses and automatic matching cannot assign them to existing Plane project members.
+3. Choose **Import / sync project**, then follow the background job's progress and results.
+
+The importer brings in work items, status, priority, due date, labels, matched assignees, parent/subtask relationships, issue links, comments, and attachments. Sprints become Cycles with names, goals, and dates. Each work item is assigned to its active sprint, otherwise a future sprint, otherwise its latest closed sprint. Imported attachments are stored in Project Files.
+
+Jira visibility restrictions are not recreated in Plane; destination project permissions apply. Custom fields, workflows, worklogs, and full historical sprint membership are not migrated. See the [Jira runbook](./docs/runbooks/jira-project-import.md) for mapping and recovery details.
+
+### Track progress and recover failed API imports
+
+Confluence and Jira API jobs show their current phase, total discovered items, counts by page/work-item/file type, completed, failed, skipped, and remaining items. Totals are marked incomplete while discovery is running or after a listing failure. Results include readable failure reasons and details, with filtering and selection for retry.
+
+| Action                    | Behavior                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Sync updates              | Discover and import new, changed, or previously failed content; skip unchanged items.                |
+| Retry failed              | Retry failed and never-successfully-imported items.                                                  |
+| Retry selected            | Retry selected source items after reviewing their failure reasons.                                   |
+| Re-import all / overwrite | Replace all imported content, including edits made in Plane, while retaining mapped destination IDs. |
+
+In Confluence, **Retry failed** and **Sync updates** are beside the progress summary. **Re-import all…** is under **More import options** and asks for confirmation; **Retry selected** appears when results are selected. Retrying attachments also rebuilds their dependent pages or work items. Removed source items are not automatically deleted from Plane.
+
+API imports require the worker, broker, object storage, and Plane Live document conversion service. Deploy API, workers, Web, Admin, and Live from the same revision and apply migrations. The worker and Live must share `LIVE_SERVER_SECRET_KEY`; `PLANE_YJS_REPLACE_URL` must point to Live's reachable internal conversion endpoint. See the connector runbooks for migration names and deployment validation.
 
 ## 🛠️ Local development with Podman or Docker
 
@@ -168,7 +227,7 @@ Never store a customer OIDC secret in this repository, documentation, screenshot
    ```bash
    git clone https://github.com/22-lab-th/plane.git
    cd plane
-   git checkout preview
+   git checkout main
    chmod +x setup.sh
    ```
 
@@ -229,6 +288,8 @@ Never store a customer OIDC secret in this repository, documentation, screenshot
 
 If instance registration reports a CSRF error, confirm cookies are enabled, use the same hostname on every URL, refresh God Mode, and submit the form again.
 
+The URLs above are the default ports. If starting Web/Admin/Space on alternate ports such as `3010`/`3011`/`3012`, update the corresponding base URLs and `CORS_ALLOWED_ORIGINS` before starting the apps. God Mode is served at `<ADMIN_BASE_URL>/god-mode/`.
+
 ### Useful commands
 
 ```bash
@@ -263,6 +324,9 @@ Complete this checklist after a fresh installation and before handing a deployme
 - [ ] Create a workspace and project, upload/change a project cover, and confirm the browser can read and write MinIO/S3 objects.
 - [ ] Create nested Page folders; move, archive, restore, and open an existing Page; import a Markdown file and a bundle containing images.
 - [ ] Move a Page between projects and confirm its content and assets remain intact.
+- [ ] Upload a Project File and open its preview/download from the browser.
+- [ ] If Confluence is configured, search for an accessible space by name and key, import pages with images/videos, check Project Files and progress counts, then exercise sync and retry after a recoverable failure.
+- [ ] If Jira is configured, import a project with comments, attachments, and sprints; verify work items, user mappings, Cycles, progress, sync, and retry.
 - [ ] Create bookmark groups and bookmarks; verify URL metadata, filtering, search, edit, open, and delete behavior.
 - [ ] If OIDC is required, complete Optional-mode login against the customer's real tenant and verify allowed/denied policy cases, logout, audit events, secret rotation, IdP outage, disable, and break-glass recovery.
 - [ ] Back up the database/object store and verify the documented application rollback before enabling OIDC enforcement.
