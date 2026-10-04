@@ -62,6 +62,9 @@ def should_import(mode, *, imported_version, remote_version, failed=False, selec
 
 
 class ConfluenceClient:
+    # Accept header for attachment downloads; Jira rejects application/octet-stream with HTTP 406.
+    download_accept = "application/octet-stream"
+
     def __init__(self, config, *, product="confluence"):
         self.site = validate_site_url(config["site_url"])
         self.email = config["email"]
@@ -92,7 +95,7 @@ class ConfluenceClient:
             parsed = urlsplit(url)
             if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in (None, 443):
                 raise ConfluenceError("unsafe_download", "Confluence returned an unsafe download redirect.")
-            headers = {"Accept": "application/octet-stream" if download else "application/json"}
+            headers = {"Accept": self.download_accept if download else "application/json"}
             if parsed.hostname == initial_host:
                 headers["Authorization"] = self.authorization
             for attempt in range(3):

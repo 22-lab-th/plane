@@ -82,6 +82,8 @@ def test_attachment_redirect_does_not_forward_credentials(monkeypatch):
         stream.close()
     assert "/rest/api/3/attachment/content/123" in fetch.call_args_list[0].args[1]
     assert "Authorization" not in fetch.call_args_list[1].kwargs["headers"]
+    # Jira answers HTTP 406 to Accept: application/octet-stream on attachment content.
+    assert all(call.kwargs["headers"]["Accept"] == "*/*" for call in fetch.call_args_list)
 
 
 def test_content_escapes_text_and_never_emits_script_links():

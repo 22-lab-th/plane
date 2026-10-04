@@ -6,6 +6,8 @@ from plane.utils.confluence.client import ConfluenceClient, ConfluenceError
 
 
 class JiraClient(ConfluenceClient):
+    download_accept = "*/*"
+
     def __init__(self, config):
         super().__init__(config, product="jira")
 
