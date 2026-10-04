@@ -64,6 +64,15 @@ def adf_html(node, site_url, issue_key):
             f"Jira did not render embedded media for {issue_key}. Check source permissions and retry.",
         )
     content = "".join(adf_html(child, site_url, issue_key) for child in node.get("content", []))
+    if kind == "taskList":
+        return f'<ul data-type="taskList">{content}</ul>'
+    if kind == "taskItem":
+        done = str(attrs.get("state", "")).upper() == "DONE"
+        box = '<input type="checkbox" checked>' if done else '<input type="checkbox">'
+        return (
+            f'<li data-checked="{"true" if done else "false"}" data-type="taskItem">'
+            f"<label>{box}</label><div><p>{content}</p></div></li>"
+        )
     tag = {
         "paragraph": "p",
         "bulletList": "ul",
@@ -82,11 +91,26 @@ def adf_html(node, site_url, issue_key):
     return f"<{tag}>{content}</{tag}>" if tag else content
 
 
+def has_task_list(node):
+    """True if an ADF document contains a checklist (taskList/taskItem)."""
+    if isinstance(node, dict):
+        return node.get("type") in ("taskList", "taskItem") or any(has_task_list(c) for c in node.get("content", []))
+    return False
+
+
 def rendered_html(remote, source, attachments, *, comment=False):
     key = remote.get("key", source.project_key)
     rendered = remote.get("renderedBody") if comment else (remote.get("renderedFields") or {}).get("description")
     body = remote.get("body") if comment else remote.get("fields", {}).get("description")
     value = rendered if isinstance(rendered, str) else adf_html(body, source.site_url, key)
+    if has_task_list(body):
+        # Jira's rendered HTML flattens checklists into plain bullets and drops the done/not-done state
+        # (every Definition of Done box would import identically). Build this body from the ADF instead.
+        # Embedded media needs the rendered HTML, so such a body keeps it and loses only the checkbox state.
+        try:
+            value = adf_html(body, source.site_url, key)
+        except ConfluenceError:
+            pass
     soup = BeautifulSoup(value, "html.parser")
     host = urlsplit(source.site_url).hostname
     for node in soup.find_all(["img", "a", "video", "object"]):

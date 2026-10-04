@@ -108,6 +108,75 @@ def test_unresolved_adf_media_reports_a_failure_instead_of_guessing():
         adf_html({"type": "media", "attrs": {"id": "media-uuid"}}, CONFIG["site_url"], "ENG-1")
 
 
+def task_list(*items):
+    return {
+        "type": "taskList",
+        "attrs": {"localId": "dod"},
+        "content": [
+            {"type": "taskItem", "attrs": {"state": state, "localId": str(i)}, "content": [{"type": "text", "text": text}]}
+            for i, (state, text) in enumerate(items)
+        ],
+    }
+
+
+def test_adf_task_list_keeps_each_items_done_state():
+    doc = {"type": "doc", "content": [task_list(("DONE", "ship it"), ("TODO", "verify <live>"))]}
+    html = adf_html(doc, CONFIG["site_url"], "ENG-1")
+    assert html.startswith('<ul data-type="taskList">') and html.endswith("</ul>")
+    assert html.count('data-type="taskItem"') == 2
+    assert html.count('data-checked="true"') == 1 and html.count('data-checked="false"') == 1
+    assert 'data-checked="true" data-type="taskItem"><label><input type="checkbox" checked></label><div><p>ship it</p>' in html
+    assert "verify &lt;live&gt;" in html and "<live>" not in html
+
+
+def source():
+    return SimpleNamespace(
+        site_url=CONFIG["site_url"], project_key="ENG", project_id="p1",
+        project=SimpleNamespace(workspace=SimpleNamespace(slug="bedrock")),
+    )
+
+
+# Jira renders a checklist as a plain bullet list: the done/not-done state is gone.
+FLAT_RENDERED = "<ul><li>ship it</li><li>verify</li></ul>"
+
+
+def test_rendered_html_rebuilds_a_checklist_from_adf_so_tick_state_survives():
+    from plane.utils.jira.content import rendered_html
+
+    body = {"type": "doc", "version": 1, "content": [task_list(("DONE", "ship it"), ("TODO", "verify"))]}
+    remote = {"key": "ENG-1", "fields": {"description": body}, "renderedFields": {"description": FLAT_RENDERED}}
+    out = rendered_html(remote, source(), [])
+    assert out.count('data-checked="true"') == 1 and out.count('data-checked="false"') == 1
+    assert "data-type=\"taskItem\"" in out
+
+
+def test_rendered_html_is_unchanged_when_there_is_no_checklist():
+    from plane.utils.jira.content import rendered_html
+
+    body = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]}
+    remote = {"key": "ENG-1", "fields": {"description": body}, "renderedFields": {"description": "<p>from jira</p>"}}
+    assert "from jira" in rendered_html(remote, source(), [])
+    assert "taskItem" not in rendered_html(remote, source(), [])
+
+
+def test_checklist_with_unresolved_media_falls_back_to_rendered_html_instead_of_failing():
+    from plane.utils.jira.content import rendered_html
+
+    body = {"type": "doc", "version": 1, "content": [task_list(("DONE", "a")), {"type": "media", "attrs": {"id": "m"}}]}
+    remote = {"key": "ENG-1", "fields": {"description": body}, "renderedFields": {"description": FLAT_RENDERED}}
+    out = rendered_html(remote, source(), [])
+    assert "ship it" in out and "taskItem" not in out
+
+
+def test_comment_checklists_are_rebuilt_too():
+    from plane.utils.jira.content import rendered_html
+
+    body = {"type": "doc", "version": 1, "content": [task_list(("DONE", "ship it"))]}
+    remote = {"key": "ENG-1", "body": body, "renderedBody": FLAT_RENDERED}
+    out = rendered_html(remote, source(), [], comment=True)
+    assert out.count('data-checked="true"') == 1
+
+
 def test_current_sprint_prefers_active_over_future_and_history():
     values = [{"id": 20, "state": "closed"}, {"id": 10, "state": "active"}, {"id": 30, "state": "future"}]
     assert choose_sprint(values)["id"] == 10
