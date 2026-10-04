@@ -24,6 +24,18 @@ describe("internal document replacement", () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+  it("keeps task item checked state and heading level through replacement", () => {
+    const html =
+      '<h2>Definition of Done</h2><ul data-type="taskList"><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked></label><div><p>done</p></div></li><li data-checked="false" data-type="taskItem"><label><input type="checkbox"></label><div><p>todo</p></div></li></ul>';
+    const walk = (node: any, out: any[] = []) => {
+      if (node?.type === "taskItem") out.push(node.attrs.checked);
+      if (node?.type === "heading") out.push(`h${node.attrs.level}`);
+      (node?.content ?? []).forEach((child: any) => walk(child, out));
+      return out;
+    };
+    const result = replaceDocument("", html);
+    expect(walk(result.contentJSON)).toEqual(["h2", true, false]);
+  });
   it("retains replacement tables/images and deletion tombstones when stale state merges", () => {
     const original = replaceDocument("", "<p>obsolete pipe text | A | B |</p>");
     const replaced = replaceDocument(

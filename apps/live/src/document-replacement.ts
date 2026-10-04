@@ -13,6 +13,24 @@ import * as Y from "yjs";
 
 export const MAX_REPLACEMENT_BODY_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Y.XmlElement#clone copies only string attributes, which silently drops booleans and numbers such as a task
+ * item's `checked` or a heading's `level`. Copy every attribute so replaced content keeps its state.
+ */
+function cloneNode(node: Y.XmlElement | Y.XmlText): Y.XmlElement | Y.XmlText {
+  if (node instanceof Y.XmlText) return node.clone();
+  const copy = new Y.XmlElement(node.nodeName);
+  for (const [key, value] of Object.entries(node.getAttributes())) copy.setAttribute(key, value as string);
+  copy.insert(
+    0,
+    node.toArray().map((child) => {
+      if (child instanceof Y.XmlElement || child instanceof Y.XmlText) return cloneNode(child);
+      throw new Error("Unsupported document node");
+    })
+  );
+  return copy;
+}
+
 /** Preserve deletion tombstones so a stale editor cannot resurrect replaced text. */
 export function replaceDocument(baseBinary: string, html: string) {
   const document = new Y.Doc();
@@ -27,7 +45,7 @@ export function replaceDocument(baseBinary: string, html: string) {
       target.insert(
         0,
         source.toArray().map((node) => {
-          if (node instanceof Y.XmlElement || node instanceof Y.XmlText) return node.clone();
+          if (node instanceof Y.XmlElement || node instanceof Y.XmlText) return cloneNode(node);
           throw new Error("Unsupported document node");
         })
       );
