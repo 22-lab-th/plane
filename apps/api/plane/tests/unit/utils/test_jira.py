@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 from plane.utils.confluence.client import ConfluenceError
 from plane.utils.jira.client import JiraClient
-from plane.utils.jira.content import adf_html, choose_sprint, revision
+from plane.utils.jira.content import adf_html, choose_sprint, revision, strip_ui_icons
 
 pytestmark = pytest.mark.unit
 CONFIG = {"site_url": "https://team.atlassian.net", "email": "member@example.com", "api_token": "jira-secret"}
@@ -106,6 +106,22 @@ def test_content_escapes_text_and_never_emits_script_links():
 def test_unresolved_adf_media_reports_a_failure_instead_of_guessing():
     with pytest.raises(ConfluenceError, match="did not render embedded media"):
         adf_html({"type": "media", "attrs": {"id": "media-uuid"}}, CONFIG["site_url"], "ENG-1")
+
+
+def test_ui_icons_are_dropped_but_content_images_and_foreign_images_are_kept():
+    from bs4 import BeautifulSoup
+
+    html = (
+        '<p>See <img src="https://team.atlassian.net/rest/api/2/universal_avatar/view/type/issuetype/avatar/1"> DV-1 '
+        '<img src="/images/icons/emoticons/check.png" alt="(/)"> done '
+        '<img src="https://team.atlassian.net/secure/attachment/55/shot.png"> '
+        '<img src="https://evil.example/images/icons/x.png"></p>'
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    strip_ui_icons(soup, "team.atlassian.net")
+    out = str(soup)
+    assert "universal_avatar" not in out and "emoticons" not in out and "(/) done" in out
+    assert "secure/attachment/55/shot.png" in out and "evil.example/images/icons/x.png" in out
 
 
 def test_current_sprint_prefers_active_over_future_and_history():

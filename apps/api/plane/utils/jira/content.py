@@ -82,6 +82,22 @@ def adf_html(node, site_url, issue_key):
     return f"<{tag}>{content}</{tag}>" if tag else content
 
 
+# Jira chrome that rendered HTML embeds next to links and mentions: issue-type/user avatars, epic icons,
+# emoticons. They are not attachments and carry no content, so they are not imported as Plane files.
+UI_ICON_PATH = re.compile(
+    r"^/(?:rest/api/[23]/universal_avatar/|images/icons/|secure/(?:viewavatar|useravatar|projectavatar))"
+)
+
+
+def strip_ui_icons(soup, site_host):
+    """Replace Jira UI icon images with their alt text; any other unmatched image still fails the item."""
+    for node in soup.find_all("img"):
+        parsed = urlsplit(node.get("src", ""))
+        if parsed.hostname in (None, site_host) and UI_ICON_PATH.match(parsed.path):
+            alt = node.get("alt", "")
+            node.replace_with(alt) if alt else node.decompose()
+
+
 def rendered_html(remote, source, attachments, *, comment=False):
     key = remote.get("key", source.project_key)
     rendered = remote.get("renderedBody") if comment else (remote.get("renderedFields") or {}).get("description")
@@ -89,6 +105,7 @@ def rendered_html(remote, source, attachments, *, comment=False):
     value = rendered if isinstance(rendered, str) else adf_html(body, source.site_url, key)
     soup = BeautifulSoup(value, "html.parser")
     host = urlsplit(source.site_url).hostname
+    strip_ui_icons(soup, host)
     for node in soup.find_all(["img", "a", "video", "object"]):
         link = node.get("href" if node.name == "a" else "data" if node.name == "object" else "src", "")
         parsed = urlsplit(link)
