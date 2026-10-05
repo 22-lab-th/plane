@@ -34,6 +34,7 @@ from plane.authentication.services import (
 )
 from plane.authentication.utils.host import base_host
 from plane.utils.cache import invalidate_cache
+from plane.utils.exception_logger import log_exception
 
 from .base import BaseAPIView
 
@@ -44,11 +45,34 @@ def _interactive_test_callback_uri(request):
     return request.build_absolute_uri("/api/instances/sso/providers/test-callback/")
 
 
+def _safe_claim_evidence(provider, claims):
+    """Evidence is best effort: an unexpected claim shape must not fail a test the provider already passed."""
+    try:
+        return _claim_evidence(provider, claims)
+    except Exception as exc:
+        log_exception(exc)
+        return {"claim_evidence": "unavailable"}
+
+
 def _interactive_test_redirect(request, outcome, code=None):
     params = {"oidc_test": outcome}
     if code:
         params["code"] = code
     return HttpResponseRedirect(f"{base_host(request=request, is_admin=True)}authentication/sso?{urlencode(params)}")
+
+
+def _bounded_json(values, limit=500):
+    """Serialise a list to JSON that is still valid after the audit writer cuts values at `limit` characters.
+
+    Non-ASCII text is kept readable (no \\uXXXX expansion) and whole trailing items are dropped instead of
+    cutting through one, so the stored value always parses.
+    """
+    values = list(values)
+    text = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    while len(text) > limit and values:
+        values = values[:-1]
+        text = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return text
 
 
 def _claim_evidence(provider, claims):
@@ -80,10 +104,10 @@ def _claim_evidence(provider, claims):
 
     return {
         "issuer": issuer[:500],
-        "audience": json.dumps(audiences, separators=(",", ":")),
+        "audience": _bounded_json(audiences),
         "tenant_id": tenant_id[:100],
         "object_id": object_id[:100],
-        "roles": json.dumps(roles, separators=(",", ":")),
+        "roles": _bounded_json(roles),
         "issuer_matches": str(issuer_matches).lower(),
         "audience_matches": str(audience_matches).lower(),
         "claim_evidence_complete": str(
@@ -323,7 +347,7 @@ class SSOProviderInteractiveTestCallbackEndpoint(BaseAPIView):
             "success",
             provider=provider,
             actor=request.user,
-            metadata=_claim_evidence(provider, claims),
+            metadata=_safe_claim_evidence(provider, claims),
         )
         return _interactive_test_redirect(request, "success")
 

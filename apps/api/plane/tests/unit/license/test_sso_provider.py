@@ -473,3 +473,37 @@ def test_enabled_or_linked_provider_cannot_be_deleted(api_client, create_user, i
     SSOIdentity.objects.create(provider=provider, user=create_user, subject="admin-subject")
     linked_response = api_client.delete(f"/api/instances/sso/providers/{provider.id}/")
     assert linked_response.status_code == 409
+
+
+def test_claim_evidence_is_valid_json_within_the_stored_limit_for_long_non_ascii_values():
+    import json
+    from types import SimpleNamespace
+
+    from plane.license.api.views.sso import _claim_evidence
+
+    provider = SimpleNamespace(client_id="client-id", issuer_url="https://issuer.example/")
+    claims = {
+        "iss": provider.issuer_url,
+        "aud": ["client-id", "ก" * 100, "ข" * 100, "ค" * 100, "ง" * 100],
+        "tid": "tenant",
+        "oid": "object",
+        "roles": ["ก" * 100, "ข" * 100, 'ค"\\' * 33, "ง" * 100, "จ" * 100],
+    }
+
+    evidence = _claim_evidence(provider, claims)
+
+    for key in ("audience", "roles"):
+        assert len(evidence[key]) <= 500
+        assert isinstance(json.loads(evidence[key]), list)
+    assert json.loads(evidence["audience"])[0] == "client-id"
+    assert evidence["claim_evidence_complete"] == "true"
+
+
+def test_unexpected_claim_shape_does_not_break_the_interactive_test():
+    from types import SimpleNamespace
+
+    from plane.license.api.views.sso import _safe_claim_evidence
+
+    provider = SimpleNamespace(client_id="client-id", issuer_url="https://issuer.example/")
+
+    assert _safe_claim_evidence(provider, None) == {"claim_evidence": "unavailable"}
