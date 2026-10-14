@@ -49,6 +49,8 @@ Private backup, recovery key, release manifest and detailed receipts:
 
 The directory is private. Credentials, database dumps, storage keys and real content are not committed to Git.
 
+The existing MinIO image is also preserved off-host in `minio-runtime-image.tar.enc`, using the same recovery key. Encrypted readback, the original image manifest digest and every archived blob hash were verified. Its encrypted archive SHA-256 is `aa87fcc4c193b42f72071095be51c827cc3e7028926fff4e25a3d5ed72fc4985`. This protects recovery because the former public image could no longer be pulled during the new CI rehearsal. Production continues using its original image.
+
 ## Functional verification
 
 - Backend: **149 tests passed**, covering extension-token authorization, Jira/Confluence import handling, upload verification, bookmarks, folders and Page history. The tests used isolated storage and a test database.
@@ -66,6 +68,8 @@ The integration run found that API-token Page content updates did not enqueue ve
 The local checkout at `/Users/teeppiphat/Projects/22lab/plane-mcp-server` was upgraded to **0.4.1**. Its full suite passed **1,630 tests**, with 36 skipped; Ruff lint and format checks passed. A fresh stdio connection verified 36 tools, 284 actions, extension readiness, new action schemas, fractional Page ordering and correct error flags. `doctor --require-extensions` passes against production.
 
 The connection now explicitly uses the `22lab` backend profile, logs no tool payloads and permits imports from the existing `life` directory plus the two explicit Plane/MCP repository directories. The existing API credential was preserved.
+
+Existing clients may cache tool schemas until reconnecting. The installed package and a fresh stdio connection have been verified; unrelated running Codex sessions were not terminated.
 
 After reopening, read-only MCP checks also passed for **WILDFIRE**, project `3f29f9c7-6542-4b35-bda6-43a8df7457cd`. It has six work items, zero Pages and zero Project Files. Project retrieval, Page listing/summary, Files listing and storage usage returned successfully. No WILDFIRE data was changed.
 
