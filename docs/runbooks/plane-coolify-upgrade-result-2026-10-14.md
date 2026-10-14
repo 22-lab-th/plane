@@ -60,6 +60,7 @@ The existing MinIO image is also preserved off-host in `minio-runtime-image.tar.
 - Verified file folders, reserve/PUT/complete/abort, byte-for-byte downloads of two revisions, version activation, entity links, copy/move across projects, activity, trash/restore/purge and stable Files links.
 - Verified bookmark/group CRUD, Markdown file/ZIP import with images and Confluence HTML ZIP import with attachments.
 - Core/extension read checks passed again after public traffic reopened.
+- [Cross-repository CI](https://github.com/22-lab-th/plane-mcp-server/actions/runs/38545920316) passed the full MCP regressions and all 66 actions on a fresh disposable database, building the selected backend, Live and pinned official MinIO source. The CI deployment uses `API_KEY_RATE_LIMIT=600/minute` because an import makes several API requests inside one tool call. This setting is confined to CI; production limits were preserved.
 
 The integration run found that API-token Page content updates did not enqueue version history. The deployed fix dispatches history only after the database transaction commits; project/workspace content writes and metadata-only writes have regression coverage.
 
