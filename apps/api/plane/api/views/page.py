@@ -3,6 +3,7 @@
 
 import base64
 import binascii
+import json
 import os
 
 import requests
@@ -21,6 +22,7 @@ from plane.app.views.page.base import (
     validate_sibling_folder_name,
 )
 from plane.bgtasks.page_transaction_task import page_transaction
+from plane.bgtasks.page_version_task import track_page_version
 from plane.db.models import Page, Project, ProjectMember, ProjectPage, Workspace
 from plane.utils.task_dispatch import best_effort_delay
 
@@ -202,6 +204,18 @@ class PageQuerysetMixin:
                 new_description_html=page.description_html,
                 old_description_html=old_description_html,
                 page_id=page.id,
+            )
+            # A worker must observe the committed HTML, JSON and Yjs binary together.
+            page_id = str(page.id)
+            user_id = str(request.user.id)
+            previous = json.dumps({"description_html": old_description_html})
+            transaction.on_commit(
+                lambda: best_effort_delay(
+                    track_page_version,
+                    page_id=page_id,
+                    existing_instance=previous,
+                    user_id=user_id,
+                )
             )
         return Response(PublicPageSerializer(page).data, status=status.HTTP_200_OK)
 
